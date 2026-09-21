@@ -1,0 +1,5 @@
+pythonnet>=3.0.0
+fastmcp>=0.1.0
+matplotlib>=3.8.0
+numpy>=1.24.0
+pydantic>=2.0.0

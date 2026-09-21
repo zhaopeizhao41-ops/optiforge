@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Proprietary Optical Design Outputs & Lens Files
+output/
+*.zmx
+*.zos
+*.ZDA
+*.ZDU
+*.ZDF
+*.zst
+*.tmp
+*.json
+
+# Specific project design/optimization scripts (kept local only)
+optimize_*.py
+analyze_*.py
+full_audit.py
+generate_*.py
+eval_*.py
+
+# System & IDE
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

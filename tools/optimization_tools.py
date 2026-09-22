@@ -14,7 +14,7 @@ def zemax_setup_merit_function(
     rings: int = 4,
     arms: int = 6,
     min_air_center: float = 0.5,
-    max_air_center: float = 100.0,
+    max_air_center: float = 12.0,
     min_air_edge: float = 0.5,
     min_glass_center: float = 2.0,
     max_glass_center: float = 25.0,
@@ -23,18 +23,24 @@ def zemax_setup_merit_function(
     efl_weight: float = 10.0,
     max_totr: Optional[float] = None,
     totr_weight: float = 1.0,
+    max_internal_air: float = 12.0,
+    max_barrel_length: Optional[float] = None,
+    barrel_weight: float = 20.0,
 ) -> Dict[str, Any]:
     """
     Build standard Merit Function in accordance with Zemax OpticStudio User Manual guidelines.
     Automatically configures:
     - RMS Spot or Wavefront criterion with Gaussian Quadrature pupil integration
     - Mechanical fabrication boundary constraints (MNCA/MXCA/MNEA for air, MNCG/MXCG/MNEG for glass)
+    - Strict internal element-to-element air gap control (MXCA <= 12.0 mm) to prevent runaway spacing
+    - Optional lens barrel core stack length constraint (TTHI) to enforce compact packaging
     - Optional first-order focal length (EFFL) and total track (TOTR) targets.
     """
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
     mfe = sys.MFE
+    lde = sys.LDE
 
     wiz = mfe.SEQOptimizationWizard
     wiz.Initialize()
@@ -57,15 +63,12 @@ def zemax_setup_merit_function(
         wiz.Reference = 0  # Centroid
 
     # Rings & Arms
-    # Rings mapping: index 0 -> 1 ring, 1 -> 2 rings, 2 -> 3 rings, 3 -> 4 rings, etc.
     ring_idx = max(0, min(19, rings - 1))
     wiz.Ring = ring_idx
-
-    # Arms: 0 -> 6, 1 -> 8, 2 -> 10, 3 -> 12
     arms_map = {6: 0, 8: 1, 10: 2, 12: 3}
     wiz.Arm = arms_map.get(arms, 0)
 
-    # Air Boundaries
+    # Air Boundaries (Default to safe 12.0 mm to avoid optimizer cheating)
     wiz.IsAirUsed = True
     wiz.AirMin = float(min_air_center)
     wiz.AirMax = float(max_air_center)
@@ -80,8 +83,44 @@ def zemax_setup_merit_function(
     # Apply Wizard
     wiz.Apply()
 
-    # Prepend or append specific first-order targets if requested
     added_operands = []
+
+    # Detect glass surface indices to classify internal vs external spaces
+    glass_surfs = []
+    for s_idx in range(1, lde.NumberOfSurfaces - 1):
+        mat = lde.GetSurfaceAt(s_idx).Material.strip()
+        if mat and mat.upper() not in ["AIR", ""]:
+            glass_surfs.append(s_idx)
+
+    # 1. Enforce strict MXCA on all internal air spaces (between first glass and last glass)
+    if glass_surfs and len(glass_surfs) >= 2:
+        first_g = glass_surfs[0]
+        last_g = glass_surfs[-1]
+
+        for s_idx in range(first_g, last_g):
+            surf = lde.GetSurfaceAt(s_idx)
+            mat = surf.Material.strip()
+            # If this surface is an air space inside the lens group
+            if not mat or mat.upper() == "AIR":
+                op_air = mfe.InsertNewOperandAt(1)
+                op_air.ChangeType(zos.Editors.MFE.MeritOperandType.MXCA)
+                op_air.GetCellAt(2).IntegerValue = s_idx
+                op_air.GetCellAt(3).IntegerValue = s_idx
+                op_air.Target = float(max_internal_air)
+                op_air.Weight = 25.0
+                added_operands.append(f"MXCA (Surface {s_idx}) target={max_internal_air}mm, weight=25.0")
+
+        # 2. Enforce Lens Barrel Core Stack Length constraint (TTHI)
+        if max_barrel_length is not None:
+            op_barrel = mfe.InsertNewOperandAt(1)
+            op_barrel.ChangeType(zos.Editors.MFE.MeritOperandType.TTHI)
+            op_barrel.GetCellAt(2).IntegerValue = first_g
+            op_barrel.GetCellAt(3).IntegerValue = last_g
+            op_barrel.Target = float(max_barrel_length)
+            op_barrel.Weight = float(barrel_weight)
+            added_operands.append(f"TTHI (Surfaces {first_g}..{last_g}) target={max_barrel_length}mm, weight={barrel_weight}")
+
+    # 3. First-order targets (EFFL, TOTR)
     if target_efl is not None:
         op_efl = mfe.InsertNewOperandAt(1)
         op_efl.ChangeType(zos.Editors.MFE.MeritOperandType.EFFL)
@@ -99,9 +138,11 @@ def zemax_setup_merit_function(
 
     return {
         "status": "success",
-        "message": "Default Merit Function successfully created based on Zemax manual standards.",
+        "message": "Merit Function created with strict internal air spacing and compactness controls.",
         "criterion": criterion,
         "reference": reference,
+        "max_internal_air_mm": max_internal_air,
+        "max_barrel_length_mm": max_barrel_length,
         "total_operands": mfe.NumberOfOperands,
         "added_constraints": added_operands,
     }

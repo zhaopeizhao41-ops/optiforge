@@ -25,6 +25,10 @@ analyze_*.py
 full_audit.py
 generate_*.py
 eval_*.py
+design_*.py
+assemble_*.py
+verify_*.py
+sweep_*.py
 
 # System & IDE
 .vscode/

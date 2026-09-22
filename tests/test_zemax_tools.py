@@ -26,6 +26,8 @@ from tools import (
     zemax_run_wavefront_map,
     zemax_validate_design_rules,
     zemax_lookup_manual,
+    zemax_register_design_proposal,
+    zemax_audit_requirements,
 )
 
 
@@ -114,8 +116,70 @@ def run_tests():
     assert os.path.exists(save_res["saved_to"])
     assert save_res["saved_to"].endswith(".zmx")
 
+    print("\n=== 13. Testing zemax_register_design_proposal (SOP 4-Stage Protocol Gate) ===")
+    proposal_res = zemax_register_design_proposal(
+        project_name="Test Doublet Lens",
+        target_specs={"efl_mm": 100.0, "f_number": 5.0, "fov_deg": 10.0, "wavelength_um": 0.587},
+        initial_structure_source="Fraunhofer achromatic doublet archetype (Smith Modern Lens Design p. 250)",
+        optical_theory_analysis="Total power Phi = 0.01 mm^-1. Crown element Phi_1 = 0.024 mm^-1, Flint Phi_2 = -0.014 mm^-1 for achromatization.",
+        glass_selection_rationale="N-BK7 (Vd=64.17) paired with N-SF11 (Vd=25.76) satisfying delta_V > 35.",
+        merit_function_strategy="Stage 1: RMS Spot Size Centroid with MNCA/MNCG thickness bounds; Stage 2: RMS Wavefront.",
+        mechanical_constraints="CT >= 2.0mm, ET >= 1.0mm, max outer diameter = 25.0mm.",
+        user_confirmed_to_simulate=False,
+    )
+    print("Proposal registration (unconfirmed):", proposal_res["status"], "| simulation_authorized:", proposal_res["simulation_authorized"])
+    assert proposal_res["status"] == "success"
+    assert proposal_res["simulation_authorized"] is False
+    assert "门禁拦截" in proposal_res["next_action"]
+
+    # Test confirmation release
+    confirm_res = zemax_register_design_proposal(
+        project_name="Test Doublet Lens",
+        target_specs={"efl_mm": 100.0, "f_number": 5.0},
+        initial_structure_source="Fraunhofer archetype",
+        optical_theory_analysis="Achromatization verified",
+        glass_selection_rationale="N-BK7/N-SF11",
+        merit_function_strategy="RMS Spot",
+        user_confirmed_to_simulate=True,
+    )
+    print("Proposal registration (confirmed):", confirm_res["status"], "| simulation_authorized:", confirm_res["simulation_authorized"])
+    assert confirm_res["status"] == "success"
+    assert confirm_res["simulation_authorized"] is True
+    assert "门禁放行" in confirm_res["next_action"]
+
+    # === 14. Testing zemax_audit_requirements (SOP Step 0 Specification Audit Gate) ===
+    print("\n=== 14. Testing zemax_audit_requirements (Step 0 Audit) ===")
+    # 14.1 Incomplete requirements test
+    audit_incomplete = zemax_audit_requirements(
+        system_type="imaging_lens",
+        specs={"efl_mm": 50.0},
+    )
+    print("Audit (incomplete specs):", audit_incomplete["status"], "| is_complete:", audit_incomplete["is_complete"])
+    assert audit_incomplete["status"] == "NEEDS_CLARIFICATION"
+    assert audit_incomplete["is_complete"] is False
+    assert len(audit_incomplete["missing_mandatory"]) >= 3 # F/#, FOV, wavelength missing
+    assert len(audit_incomplete["interactive_questions"]) >= 3
+    assert "前置门禁拦截" in audit_incomplete["next_action"]
+
+    # 14.2 Complete requirements test
+    audit_complete = zemax_audit_requirements(
+        system_type="imaging_lens",
+        specs={
+            "efl_mm": 50.0,
+            "f_number": 2.8,
+            "fov": 25.0,
+            "wavelength": "400-700nm",
+            "pixel_pitch_um": 3.45,
+        },
+    )
+    print("Audit (complete specs):", audit_complete["status"], "| is_complete:", audit_complete["is_complete"])
+    assert audit_complete["status"] == "READY_FOR_DESIGN"
+    assert audit_complete["is_complete"] is True
+    assert len(audit_complete["missing_mandatory"]) == 0
+    assert "参数齐备放行" in audit_complete["next_action"]
+
     print("\n==============================================")
-    print(">>> ALL 12 ZEMAX INTEGRATION TESTS PASSED! <<<")
+    print(">>> ALL 14 ZEMAX INTEGRATION TESTS PASSED! <<<")
     print("==============================================")
 
 

@@ -14,6 +14,9 @@ class OpticalRuleCheck:
         self.MIN_GLASS_EDGE_THICKNESS = 1.0  # mm
         self.MIN_AIR_CENTER_SPACE = 0.1  # mm
         self.MIN_AIR_EDGE_SPACE = 0.5  # mm
+        self.MAX_INTERNAL_AIR_SPACE = 15.0  # mm (Internal element-to-element air gap limit)
+        self.RECOMMENDED_AIR_SPACE = 12.0  # mm
+        self.MAX_BARREL_ASPECT_RATIO = 2.5  # L_barrel / Max_Diameter
         self.MIN_ASPECT_RATIO = 0.08  # CT / Clear Diameter
         self.RAY_AIMING_FIELD_THRESHOLD = 20.0  # degrees
 
@@ -72,6 +75,14 @@ class OpticalRuleCheck:
         fields = system_summary.get("fields", [])
         wavelengths = system_summary.get("wavelengths", [])
         
+        # Identify glass surface indices to classify internal vs external spaces
+        glass_indices = [
+            i for i, s in enumerate(surfaces)
+            if (s.get("material") or "").strip().upper() not in ["AIR", ""]
+        ]
+        first_glass = glass_indices[0] if glass_indices else None
+        last_glass = glass_indices[-1] if glass_indices else None
+
         # 1. Glass & Air Thickness Inspection
         for idx in range(1, len(surfaces) - 1):
             surf = surfaces[idx]
@@ -125,8 +136,54 @@ class OpticalRuleCheck:
                         "message": f"Surface {surf.get('index')} aspect ratio CT/Dia = {(thickness/dia):.3f} < {self.MIN_ASPECT_RATIO}. Flexible thin lens warning.",
                         "fix": "Verify element rigidity for optical fabrication."
                     })
+
+                # Test plate steepness ratio check: |R| / Semi-Diameter >= 1.2
+                surf_semi = surf.get("semi_diameter", 0.0)
+                if abs(r1) > 1e-4 and surf_semi > 0:
+                    steepness = abs(r1) / surf_semi
+                    if steepness < 1.0:
+                        findings.append({
+                            "level": "CRITICAL",
+                            "rule": "Hyper-Hemispherical Surface (Untestable Deep Bowl)",
+                            "surface": surf.get("index"),
+                            "message": f"Surface {surf.get('index')} radius |R| = {abs(r1):.2f} mm < Semi-Diameter ({surf_semi:.2f} mm), steepness ratio {steepness:.2f} < 1.0! Surface is an untestable hyper-hemisphere.",
+                            "fix": "Increase radius of curvature |R| >= 1.2 * Semi-Diameter or split lens into two elements."
+                        })
+                    elif steepness < 1.2:
+                        findings.append({
+                            "level": "WARNING",
+                            "rule": "Steep Surface Curvature",
+                            "surface": surf.get("index"),
+                            "message": f"Surface {surf.get('index')} radius |R| = {abs(r1):.2f} mm, steepness ratio |R|/y = {steepness:.2f} < 1.2. High tooling cost and coating non-uniformity risk.",
+                            "fix": "Aim for |R| >= 1.2 ~ 1.5 * Semi-Diameter using test plate fitting or power splitting."
+                        })
             else:
                 # Air space checks
+                # Check if this air space is an INTERNAL space between lens elements
+                is_internal_air = (
+                    first_glass is not None
+                    and last_glass is not None
+                    and first_glass <= idx < last_glass
+                )
+
+                if is_internal_air:
+                    if thickness > 20.0:
+                        findings.append({
+                            "level": "CRITICAL",
+                            "rule": "Excessive Internal Air Space (Runaway Optimizer)",
+                            "surface": surf.get("index"),
+                            "message": f"Surface {surf.get('index')} internal air gap {thickness:.2f} mm > 20.0 mm! Runaway optimizer detected (excessive element separation cheating Petzval/lever arm). Severe decenter sensitivity and unmountable barrel.",
+                            "fix": "Add CTLT or MXCA operand on this surface with target <= 8.0 ~ 12.0 mm, and constrain total barrel length using TTHI."
+                        })
+                    elif thickness > self.MAX_INTERNAL_AIR_SPACE:
+                        findings.append({
+                            "level": "WARNING",
+                            "rule": "High Internal Air Spacing",
+                            "surface": surf.get("index"),
+                            "message": f"Surface {surf.get('index')} internal air gap {thickness:.2f} mm > recommended {self.MAX_INTERNAL_AIR_SPACE} mm. Element separation is too large for compact optomechanical assembly.",
+                            "fix": f"Add MXCA or CTLT operand with target <= {self.RECOMMENDED_AIR_SPACE} mm."
+                        })
+
                 if thickness < self.MIN_AIR_CENTER_SPACE:
                     findings.append({
                         "level": "WARNING",
@@ -142,6 +199,26 @@ class OpticalRuleCheck:
                         "surface": surf.get("index"),
                         "message": f"Air space after surface {surf.get('index')} edge clearance {approx_et:.3f} mm < {self.MIN_AIR_EDGE_SPACE} mm.",
                         "fix": f"Add MNEA operand with target >= {self.MIN_AIR_EDGE_SPACE} mm."
+                    })
+
+        # 1.1 Lens Barrel Core Stack Aspect Ratio Check
+        if first_glass is not None and last_glass is not None:
+            core_stack_length = sum(
+                surfaces[i].get("thickness", 0.0) for i in range(first_glass, last_glass + 1)
+            )
+            max_dia = max(
+                (2.0 * s.get("semi_diameter", 0.0) for s in surfaces[first_glass:last_glass + 2]),
+                default=0.0,
+            )
+            if max_dia > 0:
+                barrel_ratio = core_stack_length / max_dia
+                if barrel_ratio > self.MAX_BARREL_ASPECT_RATIO:
+                    findings.append({
+                        "level": "WARNING",
+                        "rule": "Barrel Aspect Ratio (L/D)",
+                        "surface": "System",
+                        "message": f"Lens barrel core stack length ({core_stack_length:.2f} mm) vs diameter ({max_dia:.2f} mm) aspect ratio L/D = {barrel_ratio:.2f} > {self.MAX_BARREL_ASPECT_RATIO}. Long slender barrel is prone to boring tool chatter and decenter errors.",
+                        "fix": "Constrain barrel stack length using TTHI operand in Merit Function."
                     })
 
         # 2. Ray Aiming Check

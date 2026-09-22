@@ -9,6 +9,9 @@ from tools.system_tools import (
     zemax_save_file,
     zemax_get_system_data,
     zemax_load_template,
+    zemax_register_design_proposal,
+    get_current_design_proposal,
+    zemax_audit_requirements,
 )
 from tools.optical_setup_tools import (
     zemax_set_aperture,
@@ -48,6 +51,9 @@ __all__ = [
     "zemax_save_file",
     "zemax_get_system_data",
     "zemax_load_template",
+    "zemax_register_design_proposal",
+    "get_current_design_proposal",
+    "zemax_audit_requirements",
     "zemax_set_aperture",
     "zemax_set_fields",
     "zemax_set_wavelengths",

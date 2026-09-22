@@ -27,14 +27,20 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
 ### Key Capabilities
 
 1. **Autonomous Optical Design & Optimization**:
-   - Exposes **26 modular optical tools** and **3 system resources**.
+   - Exposes **28 modular optical tools**, **5 system/workflow resources**, and dedicated design prompts.
    - Supports complex progressive optimization pipelines: radii tuning, air/glass thickness solves, DLS/Hammer solvers, and multi-stage merit function configuration.
-2. **Embedded Engineering & Manufacturing Rules**:
+2. **Mandatory 5-Stage Closed-Loop Optical Design Protocol (SOP)**:
+   - **Stage 0 (Specification Completeness Audit & Interactive Refinement)**: Proactively inspects user requirements with `zemax_audit_requirements` against industry Optical Requirements Specifications (ORS). If core parameters (EFL, F/#, FOV, Wavelength, Pixel Pitch, WD) are missing, interactively prompts the user with recommended standard defaults before designing.
+   - **Stage 1 (Web Search Initial Structure)**: Strictly forbids arbitrary trial-and-error; mandates web & patent searching for proven baseline lens topologies.
+   - **Stage 2 (Deep Optical Thinking & Engineering Principles)**: Analytical deduction of Gaussian first-order power distribution, Seidel aberration budgeting, crown-flint chromatic pairing ($\sum \phi/V = 0$), internal air gap limits ($\le 12.0\,\text{mm}$), and DFM test plate steepness.
+   - **Stage 3 (Design Proposal Review)**: Auto-formats and registers a structured optical design proposal report (`zemax_register_design_proposal`) for engineering review.
+   - **Stage 4 (User Confirmation Gate)**: Enforces an explicit confirmation gate—AI must halt and obtain direct user approval before triggering any OpticStudio simulation or optimization.
+3. **Embedded Engineering & Manufacturing Rules**:
    - **Center & Edge Thickness Rules**: Enforces $CT \ge 1.0\,\text{mm}$ and $ET \ge 0.8 - 1.0\,\text{mm}$ to prevent polishing warping and knife-edge chipping.
    - **Air Space Protection**: Guarantees mechanical clearance ($MNCA \ge 0.2\,\text{mm}, MNEA \ge 0.2\,\text{mm}$) to prevent physical lens collision under thermal expansion.
    - **Aberration Metric Transition**: Automatically calculates the Airy disk radius ($r_{\text{Airy}} = 0.61 \lambda / NA$) and transitions the merit function from spot size to RMS wavefront when entering the diffraction-limited regime.
    - **Narcissus / Ghost Back-Reflection Audit**: Identifies normal-incidence retroreflections ($i \approx 0^\circ$) in reflectance confocal systems, preventing pinhole flare saturation.
-3. **Dual Operation Modes**:
+4. **Dual Operation Modes**:
    - **Standalone Mode** (Default): Headless execution in the background for high-speed automated batch tasks.
    - **Interactive Mode**: Attaches directly to a live, open OpticStudio GUI session for real-time visualization.
 
@@ -84,9 +90,9 @@ All 15 surfaces avoid normal incidence retroreflection ($|i| \ge 4.58^\circ$), c
 
 ---
 
-### Tool Catalog (26 Tools)
+### Tool Catalog (27 Tools)
 
-- **System Tools**: `zemax_system_info`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`.
+- **System Tools**: `zemax_system_info`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`.
 - **Optical Setup Tools**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`.
 - **Surface & Solve Tools**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`.
 - **Optimization Tools**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`.
@@ -144,14 +150,19 @@ pip install -r requirements.txt
 ### 核心特性
 
 1. **AI 闭环光学自主设计**：
-   - 暴露 **26 个高抽象度、原子化的光学工具** 与 **3 项全局资源**。
+   - 暴露 **27 个高抽象度、原子化的光学工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
    - 智能体通过自然语言指令即可完成：从初始结构载入、视场与波长配置、曲率与厚度变量分配、评价函数构建、多阶段 DLS 阻尼最小二乘优化到全套像差图表生成的全流程。
-2. **内嵌 Zemax 工程制造性规则**：
+2. **强制执行四步闭环光学设计工作流 (SOP)**：
+   - **阶段一（联网检索初始结构）**：杜绝凭空盲设与臆造参数；强制利用搜索工具在专利库（USPTO, Google Patents）与经典光学手册（Smith, Kingslake）中检索最匹配的初始拓扑构型。
+   - **阶段二（深度光学推演思考）**：严格进行高斯一阶光焦度分配（$EPD = EFL / F\#, H = nuy$）、初级赛德尔像差预算（球差/彗差/像散/场曲/畸变）、阿贝数消色差玻璃配对（$\sum \phi/V = 0$）与加工间隙物理边界推演。
+   - **阶段三（方案标准化呈报审阅）**：调用 `zemax_register_design_proposal` 登记并生成完整结构化的《光学设计提案报告》，向用户清晰展示指标、选型依据、理论分析与优化规划。
+   - **阶段四（用户决策门禁 HALT & ASK）**：方案呈现后必须强制停下，显式征询用户意见。在获得用户明确确认指令前，严禁调用任何 Zemax 建模或仿真优化工具。
+3. **内嵌 Zemax 工程制造性规则**：
    - **透镜厚度边界约束**：严格监控玻璃中心厚度（$CT \ge 1.0\,\text{mm}$，防止研磨形变）与边缘厚度（$ET \ge 0.8 \sim 1.0\,\text{mm}$，杜绝刀口边缘 Edge Knife 与装配崩边）。
    - **气隙碰撞保护**：自动设立中心空气间隔（$MNCA \ge 0.2\,\text{mm}$）与边缘空间（$MNEA \ge 0.2\,\text{mm}$），规避元件碰撞。
    - **像差分析准则自适应**：根据工作 F 数与主波长实时计算艾里斑半径（$r_{\text{Airy}} = 0.61 \lambda / NA$）。当弥散斑进入 Airy 斑内时，自动驱动优化器由几何点列图准则平滑升级为波前差（RMS Wavefront）准则。
    - **水仙花效应（Narcissus 鬼像背向反射）追迹审计**：针对反射式共聚焦（RCM）等高灵敏弱信号系统，提供全表面自准直逆反射筛查与针孔空间衰减计算。
-3. **双重运行模式**：
+4. **双重运行模式**：
    - **Standalone 模式**（默认）：后台静默启动独立无头 OpticStudio 进程，支持高并发多核批处理。
    - **Interactive 模式**：无缝连接正在前台运行的 OpticStudio GUI 界面，实现图形窗口与 AI 脚本双向实时同步。
 
@@ -201,9 +212,9 @@ pip install -r requirements.txt
 
 ---
 
-### 工具目录 (26 个核心工具)
+### 工具目录 (28 个核心工具)
 
-- **系统与文件管理**: `zemax_system_info`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`
+- **系统与需求管理**: `zemax_system_info`, `zemax_audit_requirements`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`
 - **光学参数配置**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`
 - **表面与求解器管理**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`
 - **优化与评价函数**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`

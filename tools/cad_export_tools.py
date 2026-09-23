@@ -657,6 +657,15 @@ def zemax_export_prescription_for_cad(
         output_filepath: JSON export path (default 'output/solidworks_prescription.json').
         barrel_radial_clearance_mm: Radial tolerance clearance between lens OD and barrel bore (default 0.05 mm).
     """
+    if isinstance(margin_mm, str) and output_filepath is None:
+        output_filepath = margin_mm
+        margin_mm = 2.0
+    else:
+        try:
+            margin_mm = float(margin_mm)
+        except Exception:
+            margin_mm = 2.0
+
     session = ZOSSession.get_instance()
     sys = session.system
 

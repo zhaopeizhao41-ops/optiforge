@@ -245,55 +245,117 @@ def zemax_run_optimization(
     algorithm: str = "DLS",
     cycles: str = "Automatic",
     cores: int = 8,
+    stagnation_threshold: float = 0.005,
+    max_rounds: int = 6,
 ) -> Dict[str, Any]:
     """
-    Run Local Optimization on the current optical system.
+    Run Local Optimization on the current optical system with pre-flight ray feasibility
+    check and automatic stagnation guard (early-stopping) to prevent invalid optimization.
     algorithm: 'DLS' (Damped Least Squares) or 'OD' (Orthogonal Descent).
     cycles: 'Automatic', '1', '5', '10', '50'.
+    stagnation_threshold: Minimum relative improvement required to continue (default: 0.005 = 0.5%).
+    max_rounds: Maximum number of stepped cycle rounds when running Automatic (default: 6).
     """
+    import math
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
+    mfe = sys.MFE
 
+    # 1. Pre-flight Feasibility Check on MFE Operands
+    mfe.CalculateMeritFunction()
+    ray_failures = []
+    for i in range(1, mfe.NumberOfOperands + 1):
+        op = mfe.GetOperandAt(i)
+        t_name = str(op.Type).split('.')[-1]
+        if t_name in ['BLNK', 'DMFS', 'CONF']:
+            continue
+        try:
+            val = float(op.Value)
+            wt = float(op.Weight)
+            if wt > 0 and (math.isnan(val) or math.isinf(val) or val > 1e6):
+                ray_failures.append({"row": i, "type": t_name, "value": val, "weight": wt})
+        except Exception:
+            pass
+
+    if ray_failures:
+        return {
+            "status": "error",
+            "message": f"Pre-flight feasibility check failed! {len(ray_failures)} operands hit ray tracing failures (value >= 1e6). Optimization aborted to avoid invalid computation.",
+            "ray_failures": ray_failures[:5],
+        }
+
+    # 2. Check variables
     opt = sys.Tools.OpenLocalOptimization()
-
-    # Algorithm
     if "od" in algorithm.lower() or "orthogonal" in algorithm.lower():
         opt.Algorithm = zos.Tools.Optimization.OptimizationAlgorithm.OrthogonalDescent
     else:
         opt.Algorithm = zos.Tools.Optimization.OptimizationAlgorithm.DampedLeastSquares
 
-    # Cycles
-    cycles_clean = cycles.lower().strip()
-    if cycles_clean == "1":
-        opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle
-    elif cycles_clean == "5":
-        opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
-    elif cycles_clean == "10":
-        opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
-    elif cycles_clean == "50":
-        opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles
-    else:
-        opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Automatic
-
     opt.NumberOfCores = int(cores)
-    init_mf = float(opt.InitialMeritFunction)
     num_vars = int(opt.Variables)
     num_targets = int(opt.Targets)
+    init_mf = float(opt.InitialMeritFunction)
+    algo_name = str(opt.Algorithm)
+    opt.Close()
 
     if num_vars == 0:
-        opt.Close()
         return {
             "status": "warning",
             "message": "No variable parameters configured in LDE/MFE! Use zemax_set_solve to mark surface thickness/radii as variable before optimizing.",
             "variables": 0,
         }
 
-    algo_name = str(opt.Algorithm)
-    opt.RunAndWaitForCompletion()
-    final_mf = float(opt.CurrentMeritFunction)
-    succeeded = bool(opt.Succeeded)
-    opt.Close()
+    cycles_clean = cycles.lower().strip()
+    history = []
+    early_stopped = False
+
+    # 3. Stepped Execution with Stagnation Guard
+    if cycles_clean in ["automatic", "auto"]:
+        best_mf = init_mf
+        for r in range(1, max_rounds + 1):
+            sub_opt = sys.Tools.OpenLocalOptimization()
+            sub_opt.Algorithm = opt.Algorithm
+            sub_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
+            sub_opt.NumberOfCores = int(cores)
+            sub_opt.RunAndWaitForCompletion()
+            new_mf = float(sub_opt.CurrentMeritFunction)
+            sub_opt.Close()
+
+            rel_imp = (best_mf - new_mf) / best_mf if best_mf > 0 else 0.0
+            history.append({
+                "round": r,
+                "cycles": 10,
+                "mf_before": round(best_mf, 6),
+                "mf_after": round(new_mf, 6),
+                "improvement_pct": round(rel_imp * 100.0, 2),
+            })
+
+            if rel_imp < stagnation_threshold:
+                early_stopped = True
+                best_mf = new_mf
+                break
+            best_mf = new_mf
+
+        final_mf = best_mf
+    else:
+        fixed_opt = sys.Tools.OpenLocalOptimization()
+        fixed_opt.Algorithm = opt.Algorithm
+        fixed_opt.NumberOfCores = int(cores)
+        if cycles_clean == "1":
+            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle
+        elif cycles_clean == "5":
+            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
+        elif cycles_clean == "10":
+            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
+        elif cycles_clean == "50":
+            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles
+        else:
+            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
+
+        fixed_opt.RunAndWaitForCompletion()
+        final_mf = float(fixed_opt.CurrentMeritFunction)
+        fixed_opt.Close()
 
     improvement_pct = 0.0
     if init_mf > 0:
@@ -307,7 +369,9 @@ def zemax_run_optimization(
         "initial_merit_function": round(init_mf, 6),
         "final_merit_function": round(final_mf, 6),
         "improvement_percentage": round(improvement_pct, 2),
-        "succeeded": succeeded,
+        "early_stop_triggered": early_stopped,
+        "stagnation_guard_threshold_pct": stagnation_threshold * 100.0,
+        "history": history,
     }
 
 

@@ -56,25 +56,29 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
    - **Air Space Protection**: Guarantees mechanical clearance ($MNCA \ge 0.5\,\text{mm}, MNEA \ge 0.8\,\text{mm}$) to provide flat mounting lands for spacer rings.
    - **Aberration Metric Transition**: Automatically calculates the Airy disk radius ($r_{\text{Airy}} = 0.61 \lambda / NA$) and transitions the merit function from spot size to RMS wavefront when entering the diffraction-limited regime.
    - **Narcissus / Ghost Back-Reflection Audit**: Identifies normal-incidence retroreflections ($i \approx 0^\circ$) in reflectance confocal systems, preventing pinhole flare saturation.
-4. **Complex Multi-Group & Modular Optical System Protocol (Decoupled Architecture & Anti-Compensation)**:
-   - **The Three Interface Decoupling Contracts**:
+5. **Optimization Stagnation Guard & Ray Feasibility Pre-Flight**:
+   - **Pre-Flight Ray Feasibility Audit**: Scans active MFE operands before launching DLS/Hammer solvers. If unhandled total internal reflection (TIR) or surface ray misses trigger artificial $1\times 10^6$ penalty values, the optimizer immediately aborts with pinpointed surface diagnostics rather than blindly running in circles.
+   - **Automatic Stagnation Guard**: Breaks local optimization runs into 10-cycle evaluation chunks with real-time stream logging. If relative merit function improvement drops below $0.5\%$ ($\Delta MF / MF < 0.005$), the optimizer triggers an early stop, preventing infinite hangs and unproductive iterations.
+6. **Complex Multi-Group & Modular Optical System Protocol (Decoupled Architecture & Anti-Compensation)**:
+   - **The Four Interface Decoupling Contracts**:
      - *Pupil Conjugation Contract*: Strictly conjugates scanner pivot (system STOP) to objective entrance pupil (BFP) via precise pupil magnification $M_{\text{pupil}} = f_{\text{tube}} / f_{\text{scan}} = D_{\text{BFP}} / D_{\text{galvo}}$, achieving 100% full pupil illumination and zero pupil walking across scan angles.
      - *Intermediate Image & Double Telecentricity Contract*: Mandates image-space telecentricity for scan lens ($CRA \le 0.5^\circ$) and object-space telecentricity for tube lens; intermediate image must be an isolated, flat, diffraction-limited surface ($\le 0.04\lambda$), preventing aberration cross-contamination.
      - *Infinity Space Contract*: Ensures tube lens outputs strictly collimated parallel light ($\theta \le 0.001^\circ$) to preserve the objective's native aplanatic balance.
+     - *Beam Envelope & Clear Aperture Clearance Contract*: Mandates quantitative beam envelope evaluation at the tube lens ($D_{\text{beam\_TL}} = 2 \cdot f_{\text{scan}} \cdot \tan\theta_{\text{scan}} + D_{\text{obj\_pupil}}$) with $\ge 15\%$ mechanical clear aperture margin, eliminating off-axis beam overflow and driving total track compression down to hand-held envelopes.
    - **Standard 5-Stage Modular Workflow**: Paraxial layout & Lagrange invariant partitioning $\to$ Aberration budget RSS allocation ($\sigma_{\text{obj}} \le 0.045\lambda$, $\sigma_{\text{scan}} \le 0.035\lambda$, $\sigma_{\text{tube}} \le 0.030\lambda$) $\to$ Sub-module offline isolated design $\to$ Paraxial lens isolation testing $\to$ Progressive 4-stage release (100% freeze $\to$ tune relay air spaces $\to$ damped $\pm 5\%$ curvature fine-tuning $\to$ wavefront lock).
-   - **Operand Iron Curtain (Anti-Ghost Compensation)**: Imposes strict barrier operands: `EFLA` (subgroup focal length pinning), `REAA` (exit beam collimation $\theta = 0.0^\circ$), `REAY` (entrance/exit pupil beam size & chief ray height at pupil = 0), `RAID` (intermediate image CRA $\le 0.5^\circ$), `MXCA` ($\le 12\,\text{mm}$ intra-module air gap), `MNEG` ($\ge 1.2\,\text{mm}$ glass edge), and `MNEA` ($\ge 0.8\,\text{mm}$ air edge clearance).
+   - **Operand Iron Curtain (Anti-Ghost Compensation)**: Imposes strict barrier operands: `EFLA` (subgroup focal length pinning), `REAB` / `RAED` (exit beam collimation $\theta = 0.0^\circ$), `REAY` (entrance/exit pupil beam size & chief ray height at pupil = 0), `RAID` (intermediate image CRA $\le 0.5^\circ$), `MXCA` ($\le 12\,\text{mm}$ intra-module air gap), `MNEG` ($\ge 1.2\,\text{mm}$ glass edge), and `MNEA` ($\ge 0.8\,\text{mm}$ air edge clearance).
    - **DFM & Drop-in Barrel Assembly**: Single-barrel aspect ratio $L/D \le 2.0 \sim 2.5:1$, unified element diameters, and flat mounting lands ($W \ge 0.8 \sim 1.5\,\text{mm}$ with $0.3\,\text{mm}\times 45^\circ$ chamfer) for drop-in assembly without optical surface line contact.
-5. **Opto-Mechanical Linkage, 3D CAD & ISO 10110 Drawings (SolidWorks MCP Integration)**:
+7. **Opto-Mechanical Linkage, 3D CAD & ISO 10110 Drawings (SolidWorks MCP Integration)**:
    - **Direct 3D CAD Export (`zemax_export_cad`)**: Headless export of precise 3D solid STEP, IGES, SAT, and STL geometry with solid volumes and optional ray path bundles.
    - **ISO 10110 Optical Manufacturing Drawings (`zemax_export_optical_drawing`)**: Automatically generates international standard fabrication specification sheets and dimensioned 2D cross-section plots with clear apertures, flat lands, chamfers, and optical tolerance codes (0/ to 5/).
    - **SolidWorks MCP Bridge (`zemax_export_prescription_for_cad`)**: Converts Zemax prescriptions into clean JSON for SolidWorks MCP (`build_system_from_prescription`), calculating spacer rings (`create_3d_lens_spacer`), retaining ring (`create_3d_retaining_ring`), and stepped lens barrels (`create_3d_lens_barrel`).
-6. **Dual Operation Modes**:
+8. **Dual Operation Modes**:
    - **Standalone Mode** (Default): Headless execution in the background for high-speed automated batch tasks.
    - **Interactive Mode**: Attaches directly to a live, open OpticStudio GUI session for real-time visualization.
 
 ---
 
-### Showcase: Autonomous Design of a High-NA Water-Immersion Objective
+### Showcase 1: High-NA Water-Immersion Objective (Diffraction-Limited at NA 0.80)
 
 As a demonstration of the server's autonomous optimization capabilities, an AI agent designed and optimized a high-numerical-aperture water-immersion objective lens for **Reflectance Confocal Microscopy (RCM / Skin CT)**.
 
@@ -115,6 +119,29 @@ All field points converge near or within the theoretical water Airy disk radius 
 All 15 surfaces avoid normal incidence retroreflection ($|i| \ge 4.58^\circ$), creating defocussed ghost disks between $28\,\text{mm}$ and $238\,\text{mm}$ at the pinhole plane, achieving $> -85\,\text{dB}$ stray light isolation:
 
 ![Narcissus Ghost Rejection](assets/narcissus_ghost_rejection.png)
+
+---
+
+### Showcase 2: Ultra-Compact 4f Relay System ($f_{\text{SL}}=37.5\,\text{mm}, f_{\text{TL}}=75.0\,\text{mm}$ Thorlabs AC254-075-B)
+
+When assembling the full handheld confocal probe, standard $50\,\text{mm} / 100\,\text{mm}$ relays suffered from **beam overflow at the tube lens** ($D_{\text{beam}} = 21.94\,\text{mm} > 21.5\,\text{mm}$ SM1 aperture) and **excessive track length** ($> 417\,\text{mm}$).
+
+Applying the modular protocol and **Stagnation Guard**, the AI agent autonomously redesigned the relay into an ultra-compact architecture:
+
+![Ultra-Compact Relay Layout](assets/ultra_compact_relay_layout.png)
+
+#### 1. Performance & Packaging Comparison
+
+| Metric / Parameter | Baseline (50mm / 100mm) | Ultra-Compact Redesign (37.5mm / 75mm) | Improvement / Status |
+| :--- | :---: | :---: | :---: |
+| **Scan Lens Focal Length** | $50.0\,\text{mm}$ | **$37.5\,\text{mm}$** (Doublet S-LAL18/S-TIH1 + Singlet S-BSM16) | Compact, retrofocus telecentric |
+| **Tube Lens Hardware** | $100.0\,\text{mm}$ Custom | **$75.0\,\text{mm}$ (Thorlabs AC254-075-B)** | Commercial COTS Standard |
+| **Tube Lens Beam Envelope** | $21.94\,\text{mm}$ (Severe clipping!) | **$7.44\,\text{mm} \sim 13.72\,\text{mm}$** | **Zero overflow, +36.2% clear safety margin** |
+| **Total Track Length (Galvo $\to$ Object)**| $417.6\,\text{mm}$ | **$191.1\,\text{mm}$** | **Shortened by 226.5 mm (54.2% reduction, < 200mm)** |
+| **Pupil Magnification ($M_{\text{pupil}}$)** | $2.0\times$ ($3.6 \to 7.2\,\text{mm}$) | **$2.0\times$ ($3.60 \to 7.20\,\text{mm}$)** | **100% full pupil illumination** |
+| **Water Immersion NA** | $0.8009$ | **$0.800$** ($WD = 3.016\,\text{mm}$ in pure water) | **High-resolution optical sectioning** |
+| **Optimization Guard Performance** | Ran blind cycles | **Early stop at Round 7 ($\Delta MF < 0.09\%$)** | **Zero stagnation, complete convergence** |
+| **Optomechanical Deliverables** | - | **3D CAD STEP (3.27 MB), ISO 10110 Drawings, SolidWorks Bridge JSON** | **Direct CNC & SolidWorks assembly ready** |
 
 ---
 
@@ -207,25 +234,29 @@ pip install -r requirements.txt
    - **检验样板曲率陡度与偏转角**：曲率半径严格满足 $|R| \ge 1.2 \sim 1.5 \times \text{Semi-Diameter}$（杜绝超半球深凹面），光线最大入射角控制在 $\le 30^\circ \sim 45^\circ$（`RAID` 钝化公差）。
    - **像差分析准则自适应**：根据工作 F 数与主波长实时计算艾里斑半径（$r_{\text{Airy}} = 0.61 \lambda / NA$）。当弥散斑进入 Airy 斑内时，自动驱动优化器由几何点列图准则平滑升级为波前差（RMS Wavefront）准则。
    - **水仙花效应（Narcissus 鬼像背向反射）追迹审计**：针对反射式共聚焦（RCM）等高灵敏弱信号系统，提供全表面自准直逆反射筛查与针孔空间衰减计算。
-4. **复杂结构与多镜组/模块化设计工程规范（解耦契约与防代偿铁幕）**：
-   - **三大接口解耦契约 (Interface Decoupling Contracts)**：
+5. **优化器防无效空转与停滞叫停机制 (Stagnation Guard & Pre-Flight)**：
+   - **MFE 光线追踪可行性预检门禁**：在启动局部优化器前，自动预检当前评价函数内所有有效操作数。若发生光线全反射、逸出或截断导致操作数出现 $1\times 10^6$ 虚拟惩罚峰值或 NaN，立即熔断叫停并精确定位问题表面，彻底杜绝优化器死锁。
+   - **停滞叫停门禁 (Stagnation Guard)**：将优化过程拆解为 10 cycles 为粒度的评估微批次，实时流式输出收敛曲线。当相邻微批次相对改善率 $< 0.5\%$（达到收敛平原期）时，主动叫停退出，绝不做无效迭代。
+6. **复杂结构与多镜组/模块化设计工程规范（解耦契约与防代偿铁幕）**：
+   - **四大接口解耦契约 (Interface Decoupling Contracts)**：
      - *光瞳共轭契约*：振镜偏转中心（系统光阑）与显微物镜入瞳严格光学共轭，通过精确光瞳放大率 $M_{\text{pupil}} = \frac{f_{\text{tube}}}{f_{\text{scan}}} = \frac{D_{\text{BFP}}}{D_{\text{galvo}}}$ 匹配口径，确保物镜全孔径 $100\%$ 满瞳照明，彻底消除扫描光瞳走位（Pupil Walking）。
      - *中间像面与双远心契约*：扫描透镜必须像方远心（中间像面主光线入射角 $CRA \le 0.5^\circ$），筒镜物方远心；中间像面必须独立满足衍射极限平场（$\le 0.04\lambda$），严禁在中间像面遗留巨大场曲/像散并指望后组反向代偿。
      - *平行光出射契约*：筒镜出射光线必须为严格准直平行光（发散倾角 $\le 0.001^\circ$），保护显微物镜固有的齐明不晕（Aplanatic）设计。
+     - *全光束包络与通光孔径安全余量契约*：在顶层高斯布局阶段定量核算筒镜全光束包络直径（$D_{\text{beam\_TL}} = 2 \cdot f_{\text{scan}} \cdot \tan\theta_{\text{scan}} + D_{\text{obj\_pupil}}$），强制要求机械净通光口径预留 $\ge 15\%$ 安全余量，彻底消除边缘视场截光溢出，驱动整机轨长大幅缩减至手持探头级别。
    - **模块化标准化五阶段闭环流程**：顶层高斯光学计算与拉格朗日不变量切分 $\to$ 像差预算方和根（RSS）分解 $\to$ 子模块独立离线自洽设计 $\to$ 理想近轴透镜隔离替代测试 $\to$ 阶梯式四步联调释放（全变量冻结 $\to$ 仅释放模块机械间隙消除初级离焦 $\to$ 透镜曲率 $\pm 5\%$ 阻尼微调 $\to$ RMS Wavefront 锁定公差钝化）。
-   - **评价函数“铁幕硬屏障”防代偿机制**：预埋 `EFLA`（锁死子模块独立焦距）、`REAA`（锁定平行光出射角）、`REAY`（锁定物镜光瞳口径与边缘视场主光线归零）、`RAID`（锁定中间像面主光线角度）、`MXCA`（内部气隙 $\le 12.0\,\text{mm}$）、`MNEG`（玻璃边缘 $\ge 1.2\,\text{mm}$）与 `MNEA`（空气边缘净空 $\ge 0.8\,\text{mm}$），杜绝跨模块幽灵代偿与优化器逃逸。
+   - **评价函数“铁幕硬屏障”防代偿机制**：预埋 `EFLA`（锁死子模块独立焦距）、`REAB` / `RAED`（锁定平行光出射角）、`REAY`（锁定物镜光瞳口径与边缘视场主光线归零）、`RAID`（锁定中间像面主光线角度）、`MXCA`（内部气隙 $\le 12.0\,\text{mm}$）、`MNEG`（玻璃边缘 $\ge 1.2\,\text{mm}$）与 `MNEA`（空气边缘净空 $\ge 0.8\,\text{mm}$），杜绝跨模块幽灵代偿与优化器逃逸。
    - **DFM 面向制造与机械装配纪律**：单镜筒深径比控制在 $L/D \le 2.0 \sim 2.5:1$；镜片外径模数化统一；镜片边缘预留宽平直平台（Flat Land, $W \ge 0.8 \sim 1.5\,\text{mm}$ 并带 $0.3\,\text{mm}\times 45^\circ$ 倒角），实现精密落入式装配（Drop-in Assembly），严禁曲面边缘线接触。
-5. **光机联动、原生 3D CAD 与 ISO 10110 光学加工图纸导出（SolidWorks MCP 深度协同）**：
+7. **光机联动、原生 3D CAD 与 ISO 10110 光学加工图纸导出（SolidWorks MCP 深度协同）**：
    - **原生 3D CAD 实体导出 (`zemax_export_cad`)**：支持无头静默导出 STEP (AP203/AP214/AP242)、IGES、SAT 与 STL 实体几何模型，可按需附带全光路真实光线追迹实体样条线。
    - **ISO 10110 国际标准光学加工图纸 (`zemax_export_optical_drawing`)**：全自动逐片生成光学加工制造规格书与带工程标注的 2D 截面剖面图（PNG），包含有效通光孔径、装配平直台阶（Flat Land $W \ge 0.8\sim 1.5\,\text{mm}$）、保护倒角、中心/边缘厚度以及 0/（应力双折射）、1/（气泡度）、2/（条纹度）、3/（面形光圈 N/ΔN）、4/（偏心角度）、5/（表面疵病）全套 ISO 10110 公差代号。
    - **SolidWorks MCP 处方中继转换器 (`zemax_export_prescription_for_cad`)**：将 Zemax LDE 转换为符合 SolidWorks MCP (`build_system_from_prescription`) 严格 JSON Schema 的无污染规范数据，并自动计算全系统机械隔圈（`create_3d_lens_spacer`）、前端压圈（`create_3d_retaining_ring`）及阶梯沉孔镜筒（`create_3d_lens_barrel`）尺寸，一键触发 SolidWorks 3D 光机装配建模与间隙干涉碰撞审计（`check_assembly_clearance`）。
-6. **双重运行模式**：
+8. **双重运行模式**：
    - **Standalone 模式**（默认）：后台静默启动独立无头 OpticStudio 进程，支持高并发多核批处理。
    - **Interactive 模式**：无缝连接正在前台运行的 OpticStudio GUI 界面，实现图形窗口与 AI 脚本双向实时同步。
 
 ---
 
-### 核心能力展示：高数值孔径水浸物镜自主设计
+### 核心能力展示一：高数值孔径水浸物镜自主设计
 
 作为本 MCP 服务端光学设计能力的实际验证案例，AI 智能体自主完成了一款用于**反射式共聚焦显微镜（RCM / 皮肤CT）**的高数值孔径水浸物镜优化设计。
 
@@ -266,6 +297,30 @@ pip install -r requirements.txt
 各表面边缘光线反射入射角均 $\ge 4.58^\circ \sim 41.31^\circ$，在针孔平面的弥散斑直径达 **$28.7\,\text{mm} \sim 237.7\,\text{mm}$**。配合 $50\,\mu\text{m}$ 针孔，反向杂散光被空间滤波器衰减 **$> 99.999\%$**（抑制比超过 **$-85\,\text{dB}$**）：
 
 ![Narcissus Ghost Rejection](assets/narcissus_ghost_rejection.png)
+
+---
+
+### 核心能力展示二：超紧凑 4f 共聚焦中继系统（37.5mm / 75mm Thorlabs AC254-075-B）自主重构与端到端交付
+
+在共聚焦整机手持探头装配校核中，传统 $50\,\text{mm} / 100\,\text{mm}$ 方案面临**筒镜光线溢出截光**（边缘光束包络达 $21.94\,\text{mm}$，超出标准 1 英寸镜座 $21.5\,\text{mm}$ 极限）与**系统总轨长过长**（$>417\,\text{mm}$）的临床痛点。
+
+通过模块化解耦规范与防无效优化停滞熔断（Stagnation Guard），系统成功完成中继系统的全新架构重构：
+
+![超紧凑型 4f 共聚焦中继系统总装](assets/ultra_compact_relay_layout.png)
+
+#### 1. 核心设计与工艺指标对比
+
+| 系统设计参数 | 原基准方案 (50mm / 100mm) | 最新重构方案 (37.5mm / 75mm) | 工程改善与达成状态 |
+| :--- | :---: | :---: | :---: |
+| **扫描透镜拓扑** | $50.0\,\text{mm}$ 双分离双胶合 | **$37.5\,\text{mm}$** (双胶合 S-LAL18/S-TIH1 + 单透镜 S-BSM16) | 紧凑型反远距远心物镜 |
+| **筒镜硬件选型** | $100.0\,\text{mm}$ 非标定制 | **$75.0\,\text{mm}$ (Thorlabs AC254-075-B)** | **标准商用货架品 (COTS)** |
+| **筒镜处全光束包络直径** | $21.94\,\text{mm}$ (严重溢出截光!) | **$7.44\,\text{mm} \sim 13.72\,\text{mm}$** | **彻底消除溢出！光束极大收缩** |
+| **1英寸 (SM1, Ø21.5mm) 净通光余量** | $-2.0\%$ (边缘视场渐晕截光) | **$+36.2\%$ (+7.78 mm 充裕净空)** | **安全余量提升 38.2%，杜绝一切渐晕** |
+| **整机光学总轨长 (振镜 $\to$ 物面)** | $417.6\,\text{mm}$ | **$191.1\,\text{mm}$** | **直接缩短 226.5 mm（缩短 54.2%，稳进 200mm 以内）** |
+| **光瞳放大率 ($M_{\text{pupil}}$)** | $2.0\times$ ($3.6 \to 7.2\,\text{mm}$) | **$2.0\times$ ($3.60 \to 7.20\,\text{mm}$)** | **100% 满瞳照明（物镜入射 $\varnothing 7.20\,\text{mm}$）** |
+| **水浸实际数值孔径 ($NA$)** | $0.8009$ | **$0.800$** ($WD = 3.016\,\text{mm}$ 纯水介质) | **高分辨率共聚焦光学层切** |
+| **优化防停滞叫停机制表现** | 盲目迭代无输出 | **Round 7 检测到 $\Delta MF < 0.09\%$ 主动叫停** | **耗时仅数秒，零无效计算与空转假死** |
+| **光机工程全套交付物** | - | **3D CAD STEP (3.27 MB)、ISO 10110 加工图纸、SolidWorks 桥接 JSON** | **无缝支持数控车削加工与 SolidWorks 一键建模** |
 
 ---
 

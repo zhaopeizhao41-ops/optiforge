@@ -15,6 +15,14 @@ OPERAND_DATABASE: Dict[str, Dict[str, Any]] = {
         "unit": "Lens units (mm)",
         "typical_target": "System required focal length (e.g. 50.0, 100.0)",
     },
+    "EFLA": {
+        "name": "Effective Focal Length in Air",
+        "category": "First Order / Modular Subsystems",
+        "description": "Calculates the effective focal length in air between surface Surf1 and surface Surf2. Crucial for modular multi-group designs to lock individual subsystem focal lengths without cross-module drift.",
+        "params": ["Surf1 (Int)", "Surf2 (Int)", "0", "0"],
+        "unit": "Lens units (mm)",
+        "typical_target": "Subsystem target focal length (e.g. 50.0 for scan lens, 100.0 for tube lens)",
+    },
     "TOTR": {
         "name": "Total Track",
         "category": "First Order / Boundary",

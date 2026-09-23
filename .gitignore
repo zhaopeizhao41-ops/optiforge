@@ -29,6 +29,16 @@ design_*.py
 assemble_*.py
 verify_*.py
 sweep_*.py
+build_*.py
+explore_*.py
+finalize_*.py
+find_*.py
+fine_tune_*.py
+implement_*.py
+plot_*.py
+redesign_*.py
+run_*.py
+test_*.py
 
 # System & IDE
 .vscode/

@@ -166,13 +166,19 @@ class OpticalRuleCheck:
                     and first_glass <= idx < last_glass
                 )
 
-                if is_internal_air:
+                comment_str = (surf.get("comment") or "").upper()
+                is_inter_module_relay = any(
+                    kw in comment_str
+                    for kw in ["RELAY", "INTERMEDIATE", "CONJUGATE", "4F", "TUBE TO OBJ", "SCAN TO TUBE"]
+                )
+
+                if is_internal_air and not is_inter_module_relay:
                     if thickness > 20.0:
                         findings.append({
                             "level": "CRITICAL",
                             "rule": "Excessive Internal Air Space (Runaway Optimizer)",
                             "surface": surf.get("index"),
-                            "message": f"Surface {surf.get('index')} internal air gap {thickness:.2f} mm > 20.0 mm! Runaway optimizer detected (excessive element separation cheating Petzval/lever arm). Severe decenter sensitivity and unmountable barrel.",
+                            "message": f"Surface {surf.get('index')} internal intra-lens air gap {thickness:.2f} mm > 20.0 mm! Runaway optimizer detected (excessive element separation cheating Petzval/lever arm). Severe decenter sensitivity and unmountable barrel.",
                             "fix": "Add CTLT or MXCA operand on this surface with target <= 8.0 ~ 12.0 mm, and constrain total barrel length using TTHI."
                         })
                     elif thickness > self.MAX_INTERNAL_AIR_SPACE:

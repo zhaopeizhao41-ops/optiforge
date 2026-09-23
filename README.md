@@ -70,7 +70,7 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
 
 ---
 
-### Showcase 1: Autonomous Design of a High-NA Water-Immersion Objective (Phase 1)
+### Showcase: Autonomous Design of a High-NA Water-Immersion Objective
 
 As a demonstration of the server's autonomous optimization capabilities, an AI agent designed and optimized a high-numerical-aperture water-immersion objective lens for **Reflectance Confocal Microscopy (RCM / Skin CT)**.
 
@@ -111,36 +111,6 @@ All field points converge near or within the theoretical water Airy disk radius 
 All 15 surfaces avoid normal incidence retroreflection ($|i| \ge 4.58^\circ$), creating defocussed ghost disks between $28\,\text{mm}$ and $238\,\text{mm}$ at the pinhole plane, achieving $> -85\,\text{dB}$ stray light isolation:
 
 ![Narcissus Ghost Rejection](assets/narcissus_ghost_rejection.png)
-
----
-
-### Showcase 2: End-to-End Autonomous Design of a 4f Relay Confocal Optical System (Phase 2)
-
-Extending beyond isolated lens design, the MCP server autonomously executed the complete end-to-end design, modular interface matching, and co-optimization of a **4f Telecentric Relay Reflectance Confocal Microscope (RCM / Skin CT)** system.
-
-#### 1. Full 4f Optical Relay Cross-Section & Ray Trace
-
-The complete system integrates a **$\varnothing 3.6\,\text{mm}$ Galvo/Resonant Scanner**, a custom compact **Scan Lens** ($f = 50\,\text{mm}$), an off-the-shelf commercial **Thorlabs NIR Achromatic Tube Lens** (AC254/508-100-B, $f = 100\,\text{mm}$), and the high-NA water-immersion **Confocal Objective** ($f = 4.5\,\text{mm}, NA = 0.80$):
-
-![4f Relay Optical System Layout](assets/rcm_relay_system_layout.png)
-
-#### 2. Key Interface & Performance Metrics
-
-| Optical Subsystem / Metric | Design Target | Verified System Performance | Compliance |
-| :--- | :--- | :--- | :---: |
-| **Entrance Pupil (Scanner STOP)** | $\varnothing 3.60\,\text{mm}$ | **$\varnothing 3.60\,\text{mm}$ at Galvo Pivot (S1)** | **Achieved** |
-| **Pupil Magnification ($M$)** | $2.0\times$ ($3.6\,\text{mm} \to 7.2\,\text{mm}$) | **$7.219\,\text{mm}$ Beam Diameter at Obj Entrance ($100\%$ Full Illumination)** | **Achieved** |
-| **Scan Lens Architecture** | Compact, $f = 50\,\text{mm}$, $\varnothing \le 16.0\,\text{mm}$ | **2-Element Compact Group ($t_{\text{air}} = 1.5\,\text{mm}$, Outer $\varnothing 16.0\,\text{mm}$)** | **Achieved** |
-| **Tube Lens Architecture** | Industrial COTS component | **Thorlabs AC254/508-100-B Doublet ($\varnothing 25.4\,\text{mm}$, Flat Land DFM)** | **Achieved** |
-| **Collimation Error ($S_9 \to \text{Obj}$)** | $\theta = 0.000^\circ$ | **$0.000465^\circ$ (True Infinity Space)** | **Achieved** |
-| **Numerical Aperture ($NA$)** | $0.800$ in pure water | **$NA = 0.8009$** | **Achieved** |
-| **Water Working Distance ($WD$)** | $3.00\,\text{mm}$ | **$2.9980\,\text{mm}$ in pure water ($n=1.3288$)** | **Achieved** |
-| **On-Axis Strehl Ratio** | Diffraction-limited ($S \ge 0.80$) | **$S = 0.979$** | **Surpassed** |
-| **RMS Spot: Center (Field 1, $0^\circ$)** | $< 0.84\,\mu\text{m}$ (Airy Disk) | **$0.707\,\mu\text{m}$ (Diffraction Limited)** | **Achieved** |
-| **RMS Spot: Zone (Field 2, $4.20^\circ$)** | $< 0.84\,\mu\text{m}$ (Airy Disk) | **$0.414\,\mu\text{m}$ (Diffraction Limited)** | **Achieved** |
-| **RMS Spot: Edge (Field 3, $5.94^\circ$)** | $< 1.50\,\mu\text{m}$ | **$0.697\,\mu\text{m}$ (Diffraction Limited)** | **Achieved** |
-| **RMS Spot: Corner (Field 4, $8.38^\circ$)**| $< 2.50\,\mu\text{m}$ | **$2.197\,\mu\text{m}$ (Near Diffraction Limited)** | **Achieved** |
-| **Skin Imaging Field ($FOV$)** | $\ge 500\,\mu\text{m} \times 500\,\mu\text{m}$ | **$879.6\,\mu\text{m}$ Diagonal FOV (Covers $620\,\mu\text{m} \times 620\,\mu\text{m}$)** | **Achieved** |
 
 ---
 
@@ -246,7 +216,7 @@ pip install -r requirements.txt
 
 ---
 
-### 核心能力展示一：高数值孔径水浸物镜自主设计（Phase 1）
+### 核心能力展示：高数值孔径水浸物镜自主设计
 
 作为本 MCP 服务端光学设计能力的实际验证案例，AI 智能体自主完成了一款用于**反射式共聚焦显微镜（RCM / 皮肤CT）**的高数值孔径水浸物镜优化设计。
 
@@ -287,36 +257,6 @@ pip install -r requirements.txt
 各表面边缘光线反射入射角均 $\ge 4.58^\circ \sim 41.31^\circ$，在针孔平面的弥散斑直径达 **$28.7\,\text{mm} \sim 237.7\,\text{mm}$**。配合 $50\,\mu\text{m}$ 针孔，反向杂散光被空间滤波器衰减 **$> 99.999\%$**（抑制比超过 **$-85\,\text{dB}$**）：
 
 ![Narcissus Ghost Rejection](assets/narcissus_ghost_rejection.png)
-
----
-
-### 核心能力展示二：4f 望远中继共聚焦全系统自主设计（Phase 2）
-
-超越单一镜头设计，本服务端完成了包含**振镜扫描器 + 紧凑型扫描透镜 + 工业商用筒镜 + 高数值孔径水浸物镜**的完整 **4f 远心共聚焦扫描显微全系统（RCM / 皮肤CT）**的自主建模、接口解耦与级联协同优化。
-
-#### 1. 2D 4f 望远中继系统光路全景剖面图
-
-全系统将 **$\varnothing 3.6\,\text{mm}$ 快慢轴振镜**、定制开发的 **$f = 50\,\text{mm}$ 紧凑型扫描透镜组**、**Thorlabs 工业标准 NIR 消色差双胶合筒镜**（AC254/508-100-B, $f = 100\,\text{mm}$）以及 **$NA = 0.80$ 水浸物镜**完美级联：
-
-![4f Relay Optical System Layout](assets/rcm_relay_system_layout.png)
-
-#### 2. 全系统核心指标达成表
-
-| 光学子系统 / 关键指标 | 规格设计要求 | 实际达成测试值 | 工程合规状态 |
-| :--- | :--- | :--- | :---: |
-| **系统入瞳（振镜偏转面）** | $\varnothing 3.60\,\text{mm}$ | **$\varnothing 3.60\,\text{mm}$（STOP 位于 S1 振镜面）** | **严格达标** |
-| **光瞳放大率 ($M$)** | $2.0\times$ ($3.6\,\text{mm} \to 7.2\,\text{mm}$) | **物镜入瞳处光斑直径 $7.219\,\text{mm}$（$100\%$ 满瞳照明）** | **严格达标** |
-| **扫描透镜架构** | 紧凑型 $f = 50\,\text{mm}$, 外径 $\le 16.0\,\text{mm}$ | **双片式紧凑组（片间气隙 $1.5\,\text{mm}$，机械外径 $\varnothing 16.0\,\text{mm}$）** | **严格达标** |
-| **筒镜选型与架构** | 成熟工业标准品（COTS） | **Thorlabs AC254/508-100-B 胶合镜（外径 $\varnothing 25.4\,\text{mm}$，自带 Flat Land）**| **工业首选** |
-| **筒镜出射准直误差** | 倾角 $\theta = 0.000^\circ$ | **$0.000465^\circ$（近乎绝对平行光）** | **严格达标** |
-| **终端物方水浸数值孔径 ($NA$)**| $0.800$ (纯水介质) | **$NA = 0.8009$** | **严格达标** |
-| **物镜水浸工作距离 ($WD$)** | $3.00\,\text{mm}$ | **$2.9980\,\text{mm}$（纯水介质 $n=1.3288$）** | **严格达标** |
-| **轴上 Strehl 比** | 严格衍射极限 ($S \ge 0.80$) | **$S = 0.979$（极佳像质）** | **超额达成** |
-| **弥散斑：中心视场 (F1, $0^\circ$)** | $< 0.84\,\mu\text{m}$ (艾里斑) | **$0.707\,\mu\text{m}$（优于艾里斑，衍射极限）** | **严格达标** |
-| **弥散斑：中带视场 (F2, $4.20^\circ$)**| $< 0.84\,\mu\text{m}$ (艾里斑) | **$0.414\,\mu\text{m}$（优于艾里斑，衍射极限）** | **严格达标** |
-| **弥散斑：边缘视场 (F3, $5.94^\circ$)**| $< 1.50\,\mu\text{m}$ | **$0.697\,\mu\text{m}$（优于艾里斑，衍射极限）** | **严格达标** |
-| **弥散斑：角部视场 (F4, $8.38^\circ$)**| $< 2.50\,\mu\text{m}$ | **$2.197\,\mu\text{m}$（接近衍射极限）** | **严格达标** |
-| **活体皮肤组织成像视场** | $\ge 500\,\mu\text{m} \times 500\,\mu\text{m}$ | **对角线视野 $879.6\,\mu\text{m}$（覆盖 $620 \times 620\,\mu\text{m}$ 区域）** | **超额达成** |
 
 ---
 

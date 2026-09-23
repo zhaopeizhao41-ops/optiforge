@@ -43,6 +43,9 @@ from tools import (
     zemax_run_field_curvature_distortion as _run_field_curvature_distortion,
     zemax_validate_design_rules as _validate_design_rules,
     zemax_lookup_manual as _lookup_manual,
+    zemax_export_cad as _export_cad,
+    zemax_export_optical_drawing as _export_optical_drawing,
+    zemax_export_prescription_for_cad as _export_prescription_for_cad,
 )
 from domain.operand_kb import OPERAND_DATABASE
 from domain.zemax_rules import OpticalRuleCheck
@@ -588,6 +591,118 @@ def zemax_lookup_manual(query: str) -> str:
     query: Keyword, operand code (e.g. 'EFFL', 'MNCA', 'SPHA', 'MTFT', 'Air', 'Glass').
     """
     res = _lookup_manual(query)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# CAD Export & Optomechanical Integration Tools
+# ==============================================================================
+
+@app.tool()
+def zemax_export_cad(
+    filepath: Optional[str] = None,
+    file_type: str = "STEP",
+    surfaces_as_solids: bool = True,
+    first_surface: Optional[int] = None,
+    last_surface: Optional[int] = None,
+    export_dummy_surfaces: bool = False,
+    dummy_thickness: float = 0.0,
+    export_rays: bool = False,
+    num_rays: int = 1,
+    wavelength_index: int = 0,
+    field_index: int = 0,
+    spline_segments: int = 32,
+    tolerance: float = 0.001,
+) -> str:
+    """
+    Export the current Zemax optical design to a standard 3D CAD file (STEP, IGES, SAT, STL).
+    Specially optimized for SolidWorks MCP linkage: exports solid bodies (surfaces_as_solids=True)
+    that can be directly opened, measured, and assembled into lens barrels in SolidWorks.
+
+    Args:
+        filepath: Destination file path. If omitted, saves to 'output/optical_assembly.step'.
+        file_type: CAD format ('STEP', 'IGES', 'SAT', 'STL'). Default is 'STEP' (ISO 10303).
+        surfaces_as_solids: If True, exports closed volumes as solid bodies for SolidWorks.
+        first_surface: First surface to export (1-based).
+        last_surface: Last surface to export.
+        export_dummy_surfaces: Whether to export zero-thickness dummy surfaces / stops.
+        dummy_thickness: Virtual thickness assigned to dummy surfaces if exported.
+        export_rays: If True, traces and exports ray geometry into the CAD model.
+        num_rays: Number of rays across pupil when export_rays is True.
+        wavelength_index: Wavelength to trace (0 = all).
+        field_index: Field to trace (0 = all).
+        spline_segments: Spline curve interpolation segments (16, 32, 64, 128, 256, 512).
+        tolerance: Chordal tolerance for NURBS tessellation (mm).
+    """
+    res = _export_cad(
+        filepath=filepath,
+        file_type=file_type,
+        surfaces_as_solids=surfaces_as_solids,
+        first_surface=first_surface,
+        last_surface=last_surface,
+        export_dummy_surfaces=export_dummy_surfaces,
+        dummy_thickness=dummy_thickness,
+        export_rays=export_rays,
+        num_rays=num_rays,
+        wavelength_index=wavelength_index,
+        field_index=field_index,
+        spline_segments=spline_segments,
+        tolerance=tolerance,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_export_optical_drawing(
+    element_index: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    iso_tolerance_grade: str = "Precision",
+    generate_2d_plot: bool = True,
+) -> str:
+    """
+    Generate an ISO 10110 compliant optical manufacturing drawing (specification report & 2D engineering drawing).
+    Extracts radii, thicknesses, clear apertures, mechanical rims with flat mounting lands,
+    chamfers, glass materials, and standard ISO 10110 tolerance indications.
+
+    Args:
+        element_index: Specific element index (1-based). If omitted, exports drawings for all lens elements.
+        output_dir: Folder to save generated reports and .png drawings (default 'output/drawings').
+        iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
+        generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
+    """
+    res = _export_optical_drawing(
+        element_index=element_index,
+        output_dir=output_dir,
+        iso_tolerance_grade=iso_tolerance_grade,
+        generate_2d_plot=generate_2d_plot,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_export_prescription_for_cad(
+    margin_mm: float = 2.0,
+    output_filepath: Optional[str] = None,
+    barrel_radial_clearance_mm: float = 0.05,
+) -> str:
+    """
+    Opto-Mechanical Bridge Tool: Extracts the complete optical prescription and translates it
+    into structured payloads directly compatible with SolidWorks MCP tools:
+    - 'build_system_from_prescription': Surfaces array ready to construct all 3D solid lens parts.
+    - 'create_3d_lens_spacer': Pre-calculated spacing rings for every air gap.
+    - 'create_3d_retaining_ring': Lock ring threads and diameters.
+    - 'create_3d_lens_barrel': Stepped bore barrel dimensions.
+
+    Args:
+        margin_mm: Mechanical rim margin added to 2 * SemiDiameter (default 2.0 mm).
+        output_filepath: JSON export path (default 'output/solidworks_prescription.json').
+        barrel_radial_clearance_mm: Radial tolerance clearance between lens OD and barrel bore (default 0.05 mm).
+    """
+    res = _export_prescription_for_cad(
+        margin_mm=margin_mm,
+        output_filepath=output_filepath,
+        barrel_radial_clearance_mm=barrel_radial_clearance_mm,
+    )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

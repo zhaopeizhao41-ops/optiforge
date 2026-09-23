@@ -27,7 +27,7 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
 ### Key Capabilities
 
 1. **Autonomous Optical Design & Optimization**:
-   - Exposes **28 modular optical tools**, **5 system/workflow resources**, and dedicated design prompts.
+   - Exposes **31 modular optical and CAD tools**, **5 system/workflow resources**, and dedicated design prompts.
    - Supports complex progressive optimization pipelines: radii tuning, air/glass thickness solves, DLS/Hammer solvers, and multi-stage merit function configuration.
 2. **Mandatory 5-Stage Closed-Loop Optical Design Protocol (SOP)**:
    ```mermaid
@@ -64,7 +64,11 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
    - **Standard 5-Stage Modular Workflow**: Paraxial layout & Lagrange invariant partitioning $\to$ Aberration budget RSS allocation ($\sigma_{\text{obj}} \le 0.045\lambda$, $\sigma_{\text{scan}} \le 0.035\lambda$, $\sigma_{\text{tube}} \le 0.030\lambda$) $\to$ Sub-module offline isolated design $\to$ Paraxial lens isolation testing $\to$ Progressive 4-stage release (100% freeze $\to$ tune relay air spaces $\to$ damped $\pm 5\%$ curvature fine-tuning $\to$ wavefront lock).
    - **Operand Iron Curtain (Anti-Ghost Compensation)**: Imposes strict barrier operands: `EFLA` (subgroup focal length pinning), `REAA` (exit beam collimation $\theta = 0.0^\circ$), `REAY` (entrance/exit pupil beam size & chief ray height at pupil = 0), `RAID` (intermediate image CRA $\le 0.5^\circ$), `MXCA` ($\le 12\,\text{mm}$ intra-module air gap), `MNEG` ($\ge 1.2\,\text{mm}$ glass edge), and `MNEA` ($\ge 0.8\,\text{mm}$ air edge clearance).
    - **DFM & Drop-in Barrel Assembly**: Single-barrel aspect ratio $L/D \le 2.0 \sim 2.5:1$, unified element diameters, and flat mounting lands ($W \ge 0.8 \sim 1.5\,\text{mm}$ with $0.3\,\text{mm}\times 45^\circ$ chamfer) for drop-in assembly without optical surface line contact.
-5. **Dual Operation Modes**:
+5. **Opto-Mechanical Linkage, 3D CAD & ISO 10110 Drawings (SolidWorks MCP Integration)**:
+   - **Direct 3D CAD Export (`zemax_export_cad`)**: Headless export of precise 3D solid STEP, IGES, SAT, and STL geometry with solid volumes and optional ray path bundles.
+   - **ISO 10110 Optical Manufacturing Drawings (`zemax_export_optical_drawing`)**: Automatically generates international standard fabrication specification sheets and dimensioned 2D cross-section plots with clear apertures, flat lands, chamfers, and optical tolerance codes (0/ to 5/).
+   - **SolidWorks MCP Bridge (`zemax_export_prescription_for_cad`)**: Converts Zemax prescriptions into clean JSON for SolidWorks MCP (`build_system_from_prescription`), calculating spacer rings (`create_3d_lens_spacer`), retaining ring (`create_3d_retaining_ring`), and stepped lens barrels (`create_3d_lens_barrel`).
+6. **Dual Operation Modes**:
    - **Standalone Mode** (Default): Headless execution in the background for high-speed automated batch tasks.
    - **Interactive Mode**: Attaches directly to a live, open OpticStudio GUI session for real-time visualization.
 
@@ -114,7 +118,7 @@ All 15 surfaces avoid normal incidence retroreflection ($|i| \ge 4.58^\circ$), c
 
 ---
 
-### Tool Catalog (28 Tools)
+### Tool Catalog (31 Tools)
 
 - **System & ORS Management**: `zemax_audit_requirements`, `zemax_system_info`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`.
 - **Optical Setup Tools**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`.
@@ -122,6 +126,7 @@ All 15 surfaces avoid normal incidence retroreflection ($|i| \ge 4.58^\circ$), c
 - **Optimization Tools**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`.
 - **Analysis Tools**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`.
 - **Validation & Manual Knowledge**: `zemax_validate_design_rules`, `zemax_lookup_manual`.
+- **Optomechanical & CAD Linkage**: `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad`.
 
 ---
 
@@ -174,7 +179,7 @@ pip install -r requirements.txt
 ### 核心特性
 
 1. **AI 闭环光学自主设计**：
-   - 暴露 **28 个高抽象度、原子化的光学工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
+   - 暴露 **31 个高抽象度、原子化的光学与 CAD 导出工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
    - 智能体通过自然语言指令即可完成：从需求完备性审查、初始结构载入、视场与波长配置、曲率与厚度变量分配、评价函数构建、多阶段 DLS 阻尼最小二乘优化到全套像差图表生成的全流程。
 2. **强制执行五步闭环光学设计工作流 (SOP)**：
    ```mermaid
@@ -210,7 +215,11 @@ pip install -r requirements.txt
    - **模块化标准化五阶段闭环流程**：顶层高斯光学计算与拉格朗日不变量切分 $\to$ 像差预算方和根（RSS）分解 $\to$ 子模块独立离线自洽设计 $\to$ 理想近轴透镜隔离替代测试 $\to$ 阶梯式四步联调释放（全变量冻结 $\to$ 仅释放模块机械间隙消除初级离焦 $\to$ 透镜曲率 $\pm 5\%$ 阻尼微调 $\to$ RMS Wavefront 锁定公差钝化）。
    - **评价函数“铁幕硬屏障”防代偿机制**：预埋 `EFLA`（锁死子模块独立焦距）、`REAA`（锁定平行光出射角）、`REAY`（锁定物镜光瞳口径与边缘视场主光线归零）、`RAID`（锁定中间像面主光线角度）、`MXCA`（内部气隙 $\le 12.0\,\text{mm}$）、`MNEG`（玻璃边缘 $\ge 1.2\,\text{mm}$）与 `MNEA`（空气边缘净空 $\ge 0.8\,\text{mm}$），杜绝跨模块幽灵代偿与优化器逃逸。
    - **DFM 面向制造与机械装配纪律**：单镜筒深径比控制在 $L/D \le 2.0 \sim 2.5:1$；镜片外径模数化统一；镜片边缘预留宽平直平台（Flat Land, $W \ge 0.8 \sim 1.5\,\text{mm}$ 并带 $0.3\,\text{mm}\times 45^\circ$ 倒角），实现精密落入式装配（Drop-in Assembly），严禁曲面边缘线接触。
-5. **双重运行模式**：
+5. **光机联动、原生 3D CAD 与 ISO 10110 光学加工图纸导出（SolidWorks MCP 深度协同）**：
+   - **原生 3D CAD 实体导出 (`zemax_export_cad`)**：支持无头静默导出 STEP (AP203/AP214/AP242)、IGES、SAT 与 STL 实体几何模型，可按需附带全光路真实光线追迹实体样条线。
+   - **ISO 10110 国际标准光学加工图纸 (`zemax_export_optical_drawing`)**：全自动逐片生成光学加工制造规格书与带工程标注的 2D 截面剖面图（PNG），包含有效通光孔径、装配平直台阶（Flat Land $W \ge 0.8\sim 1.5\,\text{mm}$）、保护倒角、中心/边缘厚度以及 0/（应力双折射）、1/（气泡度）、2/（条纹度）、3/（面形光圈 N/ΔN）、4/（偏心角度）、5/（表面疵病）全套 ISO 10110 公差代号。
+   - **SolidWorks MCP 处方中继转换器 (`zemax_export_prescription_for_cad`)**：将 Zemax LDE 转换为符合 SolidWorks MCP (`build_system_from_prescription`) 严格 JSON Schema 的无污染规范数据，并自动计算全系统机械隔圈（`create_3d_lens_spacer`）、前端压圈（`create_3d_retaining_ring`）及阶梯沉孔镜筒（`create_3d_lens_barrel`）尺寸，一键触发 SolidWorks 3D 光机装配建模与间隙干涉碰撞审计（`check_assembly_clearance`）。
+6. **双重运行模式**：
    - **Standalone 模式**（默认）：后台静默启动独立无头 OpticStudio 进程，支持高并发多核批处理。
    - **Interactive 模式**：无缝连接正在前台运行的 OpticStudio GUI 界面，实现图形窗口与 AI 脚本双向实时同步。
 
@@ -260,7 +269,7 @@ pip install -r requirements.txt
 
 ---
 
-### 工具目录 (28 个核心工具)
+### 工具目录 (31 个核心工具)
 
 - **系统与需求管理**: `zemax_system_info`, `zemax_audit_requirements`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`
 - **光学参数配置**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`
@@ -268,6 +277,7 @@ pip install -r requirements.txt
 - **优化与评价函数**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`
 - **光学性能分析**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`
 - **手册规则审计与知识**: `zemax_validate_design_rules`, `zemax_lookup_manual`
+- **光机工程与 CAD 联动**: `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad`
 
 ---
 

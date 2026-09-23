@@ -43,6 +43,11 @@ from tools.validation_tools import (
     zemax_validate_design_rules,
     zemax_lookup_manual,
 )
+from tools.cad_export_tools import (
+    zemax_export_cad,
+    zemax_export_optical_drawing,
+    zemax_export_prescription_for_cad,
+)
 
 __all__ = [
     "zemax_system_info",
@@ -74,4 +79,7 @@ __all__ = [
     "zemax_run_field_curvature_distortion",
     "zemax_validate_design_rules",
     "zemax_lookup_manual",
+    "zemax_export_cad",
+    "zemax_export_optical_drawing",
+    "zemax_export_prescription_for_cad",
 ]

@@ -80,7 +80,7 @@
 
 当设计任务涉及多镜组、中继系统（如激光扫描显微镜：振镜 + 扫描镜 + 筒镜 + 物镜，内窥镜中继系统，投影光机等）时，智能体**必须严格执行模块化解耦工作流，严禁进行“跨模块一锅端盲目优化”**：
 
-### 1. 三大接口解耦契约 (The 3 Interface Decoupling Contracts)
+### 1. 四大接口解耦契约 (The 4 Interface Decoupling Contracts)
 - **契约一：光瞳共轭契约 (Pupil Conjugation Contract)**：
   - 振镜偏转中心（Galvo Pivot / 系统光阑）必须与显微物镜后焦面（BFP / 入瞳）**严格光学共轭**；
   - 必须通过光瞳放大率 $M_{\text{pupil}} = \frac{f_{\text{tube}}}{f_{\text{scan}}} = \frac{D_{\text{BFP}}}{D_{\text{galvo}}}$ 精准匹配口径，确保物镜后焦面达到 100% 满瞳照明（Overfill 1.0~1.1x）；
@@ -91,6 +91,11 @@
   - **中间像面自洽性**：中间像面必须是一个**独立的平场、低像差像面（RMS 波前像差 $\le 0.04\lambda$）**，严禁在中间像面遗留巨大场曲/像散并指望后组反向抵消！
 - **契约三：无限远准直光束契约 (Infinity Space Contract)**：
   - 筒镜出射光束必须是**绝对平行准直光（倾角 $\theta \le 0.001^\circ$）**，杜绝汇聚/发散光破坏物镜固有的球差平衡。
+- **契约四：全光束包络与通光孔径安全余量契约 (Beam Envelope & Clear Aperture Clearance Contract)**：
+  - 在顶层高斯与近轴布局阶段，必须定量核算筒镜处全光束包络直径：$D_{\text{beam\_TL}} = 2 \cdot (f_{\text{scan}} \cdot \tan\theta_{\text{scan}} + \frac{D_{\text{obj\_pupil}}}{2}) = 2 \cdot f_{\text{scan}} \cdot \tan\theta_{\text{scan}} + D_{\text{obj\_pupil}}$；
+  - 强制要求筒镜及各中继元件机械通光口径预留 $\ge 15\%$ 安全余量：$CA_{\text{TL\_mech}} \ge \frac{D_{\text{beam\_TL}}}{0.85}$；
+  - 若采用工业标准 1 英寸（$\Phi 25.4\,\text{mm}$，镜框机械净通光 $CA_{\text{mech}} \le 21.5\,\text{mm}$）筒镜，针对 $\pm 8.4^\circ$ 扫描角与 $7.2\,\text{mm}$ 物镜光瞳，扫描透镜焦距必须严格控制在 $f_{\text{scan}} \le 35 \sim 37.5\,\text{mm}$，彻底杜绝光束边缘切光溢出；若 $f_{\text{scan}} \ge 40\,\text{mm}$，必须强制升级筒镜口径至 $\Phi 30\,\text{mm}$ 或 2 英寸（$\Phi 50.8\,\text{mm}$）；
+  - **手持/便携总长压缩预算**：针对紧凑手持探头，杜绝长焦组合（$f_{\text{SL}} \ge 50\,\text{mm}, f_{\text{TL}} \ge 100\,\text{mm}$），优选短焦组合（$f_{\text{SL}} \approx 35 \sim 37.5\,\text{mm}, f_{\text{TL}} \approx 70 \sim 75\,\text{mm}$），将全系统总轨长严格控制在 $260 \sim 280\,\text{mm}$ 以内。
 
 ### 2. 标准化五阶段闭环工作流 (Standard 5-Stage Modular Workflow)
 1. **Stage 1: 顶层高斯光学计算与拉格朗日不变量切分 (Paraxial Layout)**：
@@ -123,6 +128,23 @@
 - **单镜筒深径比**：单段镜筒深径比严格控制在 $L/D \le 2.0 \sim 2.5 : 1$。总长超标时必须分段独立制造，采用精密定位止口法兰（配合间隙 $< 5\,\mu\text{m}$）螺栓对接。
 - **边缘平直台阶 (Flat Land)**：透镜机械外径必须满足 $D_{\text{mech}} \ge \text{CA} + 2.0 \sim 3.0\,\text{mm}$，预留平直圆柱支撑面（宽度 $W \ge 0.8 \sim 1.5\,\text{mm}$）与 $0.3\text{mm}\times 45^\circ$ 倒角，**严禁曲面边缘与金属隔圈产生线接触**。
 - **模数化外径与单向直通装配**：同一镜筒内透镜统一采用标准系列外径（如 $\Phi 16.0\text{mm}, \Phi 25.4\text{mm}, \Phi 30.0\text{mm}$），采用单向直通精密落入式装配（Drop-in Assembly），保证装配同轴度 $< 1.5\,\mu\text{m}$。
+
+---
+
+## 🛠️ 光机协同设计与 SolidWorks MCP 联动规程 (Optomechanical Integration with SolidWorks MCP)
+
+当光学设计通过 Step 4 用户门禁并完成最终仿真验证后，智能体可根据用户指示无缝切入光机工程协同，提供三大交付能力：
+
+1. **3D CAD (STEP) 实体模型导出 (`zemax_export_cad`)**：
+   - 默认启用 `surfaces_as_solids=True`，导出封闭实体模型（Solid Body），供 SolidWorks MCP 直接调用 `open_solidworks_document` 打开；
+   - 针对需要空间干涉与遮挡检查的场景，启用 `export_rays=True`，将真实追迹的光线包络导出到 CAD 中，方便在 SolidWorks 中配合 `check_assembly_clearance` 检查切光。
+2. **ISO 10110 标准光学零件图纸输出 (`zemax_export_optical_drawing`)**：
+   - 为每个镜片生成标准加工图纸说明书（含通光口径、机械外径、平直安装台阶 Flat Land、倒角、公差等级 0/ 到 5/）及带尺寸标注的 2D 截面工程图（PNG）。
+3. **SolidWorks MCP 一键建模数据桥接 (`zemax_export_prescription_for_cad`)**：
+   - 自动生成完全兼容 SolidWorks MCP `build_system_from_prescription` 的参数；
+   - 自动计算隔圈内外径与长度（直接对接 `create_3d_lens_spacer`）；
+   - 自动计算压圈螺纹规格（直接对接 `create_3d_retaining_ring`）；
+   - 自动生成镜筒阶梯沉孔尺寸（直接对接 `create_3d_lens_barrel`），实现光机一体化端到端落地。
 
 ---
 

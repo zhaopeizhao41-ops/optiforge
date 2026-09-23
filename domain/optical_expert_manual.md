@@ -360,11 +360,37 @@ graph TD
 2. **边缘平直台阶 (Flat Land)**：透镜机械外径必须满足 $D_{\text{mech}} \ge \text{CA} + 2.0 \sim 3.0\,\text{mm}$，预留平直圆柱支撑面（宽度 $W \ge 0.8 \sim 1.5\,\text{mm}$）与 $0.3\text{mm}\times 45^\circ$ 倒角，**严禁曲面边缘与金属隔圈产生线接触**。
 3. **模数化外径与单向直通装配**：同一镜筒内透镜统一采用标准系列外径（如 $\Phi 16.0\text{mm}, \Phi 25.4\text{mm}, \Phi 30.0\text{mm}$），采用单向直通精密落入式装配（Drop-in Assembly），保证装配同轴度 $< 1.5\,\mu\text{m}$。
 
+### 8.5 多镜组全光束包络孔径核算与无渐晕装配准则 (Beam Envelope & Vignetting Clearance)
+
+在 4f 扫描显微中继系统（振镜 + 扫描透镜 + 筒镜 + 显微物镜）中，最致命的机械与口径设计缺陷是**筒镜处光线溢出（Spillover / Vignetting）**。
+
+#### 1. 筒镜处全视场光束包络解析公式
+当扫描透镜满足像方远心（$CRA \approx 0^\circ$）时，全视场在筒镜入口处的光束最大半口径由两部分合成：
+- **主光线高度**（由扫描角和扫描镜焦距决定）：$y_{\text{chief}} = f_{\text{scan}} \cdot \tan\theta_{\text{scan}}$
+- **边缘光线发散半径**（由中间像面 NA 和筒镜焦距决定）：$\Delta y = f_{\text{tube}} \cdot NA_{\text{inter}} = \frac{D_{\text{obj\_pupil}}}{2}$
+
+因此，筒镜入口处全视场光束包络总直径为：
+$$D_{\text{beam\_TL}} = 2 \cdot (y_{\text{chief}} + \Delta y) = 2 \cdot f_{\text{scan}} \cdot \tan\theta_{\text{scan}} + D_{\text{obj\_pupil}}$$
+
+#### 2. 机械通光口径安全裕量红线
+为保证边缘视场 $100\%$ 无渐晕，且避开镜片倒角、漆边和螺纹压圈遮挡，必须严格满足 $\ge 15\%$ 的机械安全余量：
+$$CA_{\text{TL\_mech}} \ge \frac{D_{\text{beam\_TL}}}{0.85}$$
+
+#### 3. 典型选型准则与焦距约束
+- 若选用**工业标准 1 英寸（$\Phi 25.4\,\text{mm}$）**商用消色差透镜，机械压圈后的净通光口径通常为 $CA_{\text{mech}} \approx 21.0 \sim 21.5\,\text{mm}$；
+- 当物镜入瞳 $D_{\text{obj\_pupil}} = 7.2\,\text{mm}$、扫描角 $\pm 8.4^\circ$（$\tan\theta = 0.1473$）时，允许的最大光束包络为 $0.85 \times 21.5 = 18.27\,\text{mm}$；
+- 由此推导扫描透镜焦距红线：
+  $$f_{\text{scan}} \le \frac{18.27 - 7.20}{2 \times 0.1473} \approx 37.5\,\text{mm}$$
+- **工程结论**：
+  - 若采用 1 英寸筒镜，扫描透镜焦距必须控制在 $f_{\text{scan}} \le 35 \sim 37.5\,\text{mm}$（对应筒镜 $f_{\text{tube}} = 70 \sim 75\,\text{mm}$）；
+  - 若 $f_{\text{scan}} \ge 40\,\text{mm}$，筒镜处光束将逼近或超过 $19 \sim 22\,\text{mm}$，必须强制升级筒镜为 $\Phi 30\,\text{mm}$ 或 2 英寸（$\Phi 50.8\,\text{mm}$）大口径镜片；
+  - **总长压缩红利**：将焦距由 $50/100\,\text{mm}$ 压缩至 $37.5/75\,\text{mm}$，4f 中继总长直接由 $418\,\text{mm}$ 降至 $\approx 275\,\text{mm}$，单举即可同时解决“光线溢出”与“总长过长”两大瓶颈！
+
 ---
 
 ## 9. 上机仿真前专家级红线自检清单 (Pre-Simulation Check Matrix)
 
-在生成任何 Zemax 设计或点击优化之前，AI 与设计师必须逐项核对以下 15 条工程红线：
+在生成任何 Zemax 设计或点击优化之前，AI 与设计师必须逐项核对以下 17 条工程红线：
 
 1. **[ ] 初始结构来源核查**：是否来自已验证的专利或经典教科书拓扑？（严禁盲目凭空生成曲率）。
 2. **[ ] 模块化接口解耦契约**：多镜组系统是否明确定义了光瞳共轭位置、数值孔径充满度与中间像面远心度？
@@ -381,4 +407,58 @@ graph TD
 13. **[ ] 严禁跨组像差代偿**：系统是否存在后组拿巨额负球差抵消前组正球差的危险倾向？
 14. **[ ] 近轴透镜隔离验证**：多镜组联调前是否已通过理想近轴透镜验证了单模块自洽性？
 15. **[ ] 评价函数硬屏障完备性**：Merit Function 中是否已显式包含 `EFLA`, `REAA`, `REAY`, `RAID`, `MNCG`, `MNEG`, `MNCA`, `MXCA`, `MNEA` 操作数，彻底锁死优化器逃跑路径？
+16. **[ ] 筒镜全光束包络口径核算**：筒镜入口全光束直径是否严格满足 $D_{\text{beam\_TL}} \le 0.85 \times CA_{\text{TL\_mech}}$（杜绝光束边缘切光溢出）？
+17. **[ ] 便携探头总轨长包络合规**：手持/便携共聚焦探头全系统总长是否严格满足整机外壳包络预算（$\le 280\text{ mm}$）？
+
+---
+
+## 10. 光机协同设计、ISO 10110 加工图纸与 3D CAD (STEP) 输出规范 (Optomechanics & SolidWorks MCP Linkage)
+
+光学设计绝不仅停留在数学曲率与光线追迹，最终的交付物必须是**可制造的光学加工工程图纸 (ISO 10110 Element Drawings)** 与 **可装配的 3D CAD 实体模型 (STEP / IGES)**，以实现与机械设计软件（如 SolidWorks）的无缝闭环联动。
+
+### 10.1 3D CAD (STEP) 实体导出规范
+- **必须导出实体 (Solid Body)**：
+  - 调用 `zemax_export_cad(surfaces_as_solids=True)`。
+  - 在机械 CAD（如 SolidWorks）中，只有实体模型才能进行布尔剖切、自动质量属性（重心/转动惯量）核算，以及镜座与镜筒止口（Step Bore）的求交开槽；
+  - 严禁导出单张曲面片（Surface Sheets），这会导致机械工程师无法在 SolidWorks 中对其赋予材料属性或建立装配配合（Mates）。
+- **光线实体化与机械干涉诊断**：
+  - 开启 `export_rays=True` 时，Zemax 会将边缘光线（Marginal Rays）和主光线（Chief Rays）作为 3D 几何线实体写入 CAD 模型；
+  - 机械工程师导入 SolidWorks 后，可直接运行 `check_assembly_clearance`，直观检查光束包络是否与金属隔圈内孔或镜筒内壁发生切光碰撞。
+
+### 10.2 ISO 10110 标准光学加工图纸规范
+调用 `zemax_export_optical_drawing` 时，系统将为每一个透镜元件输出两项资产：
+1. **尺寸公差与技术条件说明书 (`iso10110_drawing_element_X.md`)**：
+   - **几何公称与装配台阶**：曲率半径 $R$、机械外径 $\varnothing_{\text{OD}}$（按 H7/g6 单向落入装配公差标注）、中心厚度 $CT$、边缘厚度 $ET$（杜绝刀口尖角）、平直安装面（Flat Land）宽度、全周保护倒角（$0.3 \sim 0.5\,\text{mm} \times 45^\circ$）。
+   - **ISO 10110 标准技术公差框**：
+     - `0/` **应力双折射 (Stress Birefringence)**：精密级 $\le 5\,\text{nm/cm}$；激光级 $\le 2\,\text{nm/cm}$；
+     - `1/` **气泡与杂质 (Bubbles & Inclusions)**：精密级 `1/ 3x0.16`；
+     - `2/` **材料条纹与光学均匀性 (Inhomogeneity & Striae)**：精密级 `2/ 1; 2`；
+     - `3/` **面形公差 (Surface Form)**：光圈数与矢差 $N / \Delta N$（如 `3/ 3/1(0.5)`，RMS 波前差 $\le 0.05\,\mu\text{m}$）；
+     - `4/` **偏心与倾斜偏角 (Centering & Wedge Angle)**：精密级 $\le 1'$（一弧分以内）；
+     - `5/` **表面瑕疵与疵病 (Surface Imperfection)**：Scratch-Dig 40-20（`5/ 3x0.16; L 1x0.01`）；
+     - **镀膜要求**：增透宽带膜 BBAR（$400 \sim 700\,\text{nm}, R_{\text{avg}} < 0.5\%$）。
+2. **2D 截面工程标注图 (`drawing_element_X.png`)**：
+   - 绘制剖面玻璃填充、中心光轴、有效通光孔径（CA）、机械安装台阶与曲率标注。
+
+### 10.3 SolidWorks MCP 深度联动桥接流
+通过调用 `zemax_export_prescription_for_cad`，系统将 Zemax 当前光学系统直接翻译为 SolidWorks MCP 专属的一键建模 Payload：
+
+```mermaid
+flowchart LR
+    Zemax["Zemax OpticStudio MCP"] -- "zemax_export_cad" --> STEP["output/optical_assembly.step"]
+    Zemax -- "zemax_export_prescription_for_cad" --> JSON["output/solidworks_prescription.json"]
+    Zemax -- "zemax_export_optical_drawing" --> Drawings["output/drawings/ (ISO 10110)"]
+    
+    STEP --> SW_Open["SolidWorks MCP: open_solidworks_document"]
+    JSON --> SW_Build["SolidWorks MCP: build_system_from_prescription"]
+    JSON --> SW_Spacer["SolidWorks MCP: create_3d_lens_spacer"]
+    JSON --> SW_Ring["SolidWorks MCP: create_3d_retaining_ring"]
+    JSON --> SW_Barrel["SolidWorks MCP: create_3d_lens_barrel"]
+```
+
+1. **透镜 3D 实体生成**：将 `surfaces` 数组传入 SolidWorks MCP 的 `build_system_from_prescription`，自动拉伸回转生成每个单镜片的 `.sldprt` 文件；
+2. **机械隔圈生成**：直接根据 `spacing_rings` 列表的 `inner_diameter_mm`、`outer_diameter_mm`、`length_mm` 调用 SolidWorks MCP 的 `create_3d_lens_spacer`；
+3. **前端锁紧压圈生成**：根据 `retaining_ring` 数据调用 SolidWorks MCP 的 `create_3d_retaining_ring`；
+4. **阶梯镜筒建模**：根据 `barrel_specification` 的阶梯内孔直径与深度列表，调用 SolidWorks MCP 的 `create_3d_lens_barrel`，实现一键光机模型自动装配！
+
 

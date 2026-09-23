@@ -28,6 +28,9 @@ from tools import (
     zemax_lookup_manual,
     zemax_register_design_proposal,
     zemax_audit_requirements,
+    zemax_export_cad,
+    zemax_export_optical_drawing,
+    zemax_export_prescription_for_cad,
 )
 
 
@@ -178,8 +181,33 @@ def run_tests():
     assert len(audit_complete["missing_mandatory"]) == 0
     assert "参数齐备放行" in audit_complete["next_action"]
 
+    print("\n=== 15. Testing zemax_export_cad (STEP CAD Solid Export) ===")
+    cad_res = zemax_export_cad(filepath="output/test_export.step", surfaces_as_solids=True)
+    print("STEP export:", cad_res["status"], "| File:", cad_res["file_path"], "| Size (bytes):", cad_res["file_size_bytes"])
+    assert cad_res["status"] == "success"
+    assert os.path.exists(cad_res["file_path"])
+    assert cad_res["file_size_bytes"] > 1000
+    assert "open_solidworks_document" in cad_res["solidworks_mcp_linkage"]["recommended_tool"]
+
+    print("\n=== 16. Testing zemax_export_optical_drawing (ISO 10110 Drawings) ===")
+    draw_res = zemax_export_optical_drawing(element_index=1, generate_2d_plot=True)
+    print("ISO 10110 drawing export:", draw_res["status"], "| Drawings:", draw_res["drawings_count"])
+    assert draw_res["status"] == "success"
+    assert draw_res["drawings_count"] >= 1
+    d0 = draw_res["drawings"][0]
+    assert os.path.exists(d0["spec_markdown_file"])
+    assert os.path.exists(d0["drawing_image_file"])
+
+    print("\n=== 17. Testing zemax_export_prescription_for_cad (SolidWorks MCP Bridge) ===")
+    presc_res = zemax_export_prescription_for_cad()
+    print("Prescription export:", presc_res["status"], "| Elements:", presc_res["elements_count"], "| Spacers:", presc_res["spacers_count"])
+    assert presc_res["status"] == "success"
+    assert "solidworks_build_system_payload" in presc_res
+    assert len(presc_res["solidworks_build_system_payload"]["surfaces"]) > 0
+    assert os.path.exists(presc_res["saved_json_filepath"])
+
     print("\n==============================================")
-    print(">>> ALL 14 ZEMAX INTEGRATION TESTS PASSED! <<<")
+    print(">>> ALL 17 ZEMAX INTEGRATION TESTS PASSED! <<<")
     print("==============================================")
 
 

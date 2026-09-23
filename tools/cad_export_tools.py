@@ -184,6 +184,12 @@ def zemax_export_cad(
     }
 
 
+NON_GLASS_MEDIA = {
+    "", "air", "water", "h2o", "pure_water", "oil", "immersion_oil",
+    "glycerol", "glycerin", "vacuum", "none"
+}
+
+
 def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
     """Helper to parse sequential LDE surfaces into discrete optical elements."""
     num_surfs = sys.LDE.NumberOfSurfaces
@@ -196,7 +202,7 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
         mat = str(surf.Material).strip()
 
         # If current surface has glass material, it is the front of an optical element
-        if mat and mat.lower() not in ["", "air"]:
+        if mat and mat.lower() not in NON_GLASS_MEDIA:
             s_start = i
             # Look ahead for cemented interfaces or rear surface
             components = []
@@ -238,7 +244,7 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
                 })
 
                 # If next surface has another glass, it's a cemented doublet/triplet
-                if m_next and m_next.lower() not in ["", "air"] and next_s < num_surfs:
+                if m_next and m_next.lower() not in NON_GLASS_MEDIA and next_s < num_surfs:
                     cur_s = next_s
                 else:
                     s_end = next_s
@@ -523,7 +529,7 @@ def _render_2d_lens_drawing(
     filepath: str,
 ):
     """Render a dimensioned 2D engineering cross-section of the lens element."""
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
+    fig, ax = plt.subplots(figsize=(10.5, 7.0), dpi=150)
     ax.set_aspect("equal")
 
     y_half_od = od / 2.0
@@ -558,15 +564,21 @@ def _render_2d_lens_drawing(
     ax.fill_betweenx(y_pts, z1_arr, z2_arr, color="#D0E1F9", edgecolor="#1E3F66", linewidth=1.8, label="Optical Glass")
 
     # Centerline (Optical Axis)
-    z_min = min(np.min(z1_arr), 0) - 5
-    z_max = max(np.max(z2_arr), ct) + 5
-    ax.plot([z_min, z_max], [0, 0], color="red", linestyle="-.", linewidth=1.0, label="Optical Axis")
+    z_min = min(np.min(z1_arr), 0)
+    z_max = max(np.max(z2_arr), ct)
+    z_center = (z_min + z_max) / 2.0
+    z_span = max(z_max - z_min, 1.0)
+
+    # Balance x-span with y-span so the aspect-equal frame is never squeezed into a narrow strip
+    half_x_span = max(y_half_od * 1.35, z_span * 0.9, 10.0)
+
+    ax.plot([z_center - half_x_span, z_center + half_x_span], [0, 0], color="red", linestyle="-.", linewidth=1.0, label="Optical Axis")
 
     # Clear Aperture lines
     ax.plot([z1_arr[np.argmin(np.abs(y_pts - y_half_ca1))], z1_arr[np.argmin(np.abs(y_pts - y_half_ca1))]],
-            [y_half_ca1, y_half_ca1 + 1], color="gray", linestyle=":")
+            [y_half_ca1, y_half_ca1 + 0.8], color="gray", linestyle=":")
     ax.plot([z1_arr[np.argmin(np.abs(y_pts + y_half_ca1))], z1_arr[np.argmin(np.abs(y_pts + y_half_ca1))]],
-            [-y_half_ca1, -y_half_ca1 - 1], color="gray", linestyle=":")
+            [-y_half_ca1, -y_half_ca1 - 0.8], color="gray", linestyle=":")
 
     # Title & Dimension Labels
     e_idx = spec["element_index"]
@@ -577,16 +589,46 @@ def _render_2d_lens_drawing(
 
     ax.set_title(f"ISO 10110 Optical Element Drawing: Element {e_idx} ({mat} {elem_type.upper()})\n"
                  f"OD = Ø{od:.2f} mm | CT = {ct:.3f} mm | CA1 = Ø{ca1:.2f} mm | CA2 = Ø{ca2:.2f} mm",
-                 fontsize=12, fontweight="bold", pad=15)
+                 fontsize=11.5, fontweight="bold", pad=15)
 
-    ax.text(z_min + 1, y_half_od * 0.75, f"Surface 1:\n{r1_str}\nCA = Ø{ca1:.2f}\n{spec['surface_1']['surface_form_iso3']}",
-            fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="#f0f0f0", ec="black", lw=0.8))
+    s1_form = spec["surface_1"]["surface_form_iso3"].split(" (")[0]
+    s2_form = spec["surface_2"]["surface_form_iso3"].split(" (")[0]
+    c_wedge = spec["surface_1"]["centering_iso4"].split(" (")[0]
+    s_dig = spec["surface_1"]["scratch_dig_iso5"].split(" (")[0]
+    flat_w = spec.get("flat_land_width_mm", 1.0)
 
-    ax.text(z_max - 8, y_half_od * 0.75, f"Surface 2:\n{r2_str}\nCA = Ø{ca2:.2f}\n{spec['surface_2']['surface_form_iso3']}",
-            fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="#f0f0f0", ec="black", lw=0.8))
+    ax.text(
+        0.02, 0.95,
+        f"Surface 1 (Front):\n{r1_str}\nCA = Ø{ca1:.2f} mm\n{s1_form}",
+        transform=ax.transAxes,
+        fontsize=8.0,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=0.35", fc="#f7f9fa", ec="#b0bec5", lw=0.8),
+    )
 
-    ax.text(ct / 2.0, -y_half_od * 0.85, f"Material: {mat}\nISO 4/: {spec['surface_1']['centering_iso4']}\nChamfer: {spec['protective_chamfer_mm']}",
-            fontsize=9, ha="center", bbox=dict(boxstyle="round,pad=0.3", fc="#fff9e6", ec="#d4a017", lw=0.8))
+    ax.text(
+        0.98, 0.95,
+        f"Surface 2 (Rear):\n{r2_str}\nCA = Ø{ca2:.2f} mm\n{s2_form}",
+        transform=ax.transAxes,
+        fontsize=8.0,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round,pad=0.35", fc="#f7f9fa", ec="#b0bec5", lw=0.8),
+    )
+
+    ax.text(
+        0.5, 0.05,
+        f"Glass: {mat}  |  Centering: {c_wedge}  |  Defects: {s_dig}\n"
+        f"Chamfer: {spec['protective_chamfer_mm']}  |  Flat Land: {flat_w:.2f} mm",
+        transform=ax.transAxes,
+        fontsize=8.0,
+        ha="center",
+        va="bottom",
+        bbox=dict(boxstyle="round,pad=0.35", fc="#fffde7", ec="#fbc02d", lw=0.8),
+    )
+
+    ax.set_ylim(-y_half_od * 1.5, y_half_od * 1.5)
+    ax.set_xlim(z_center - half_x_span, z_center + half_x_span)
 
     ax.set_xlabel("Z (Optical Axis / Thickness mm)", fontsize=10)
     ax.set_ylabel("Y (Aperture / Height mm)", fontsize=10)

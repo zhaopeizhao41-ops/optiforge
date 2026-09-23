@@ -15,10 +15,17 @@ import matplotlib.patches as patches
 import numpy as np
 
 from core.zos_session import ZOSSession
+from tools.project_manager import (
+    get_project_dir,
+    resolve_project_file_path,
+    get_active_project_name,
+    set_active_project,
+)
 
 
 def zemax_export_cad(
     filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
     file_type: str = "STEP",
     surfaces_as_solids: bool = True,
     first_surface: Optional[int] = None,
@@ -38,7 +45,8 @@ def zemax_export_cad(
     opened and assembled in SolidWorks.
 
     Args:
-        filepath: Destination file path. If None, saves to 'output/<system_name>.<ext>'.
+        filepath: Destination file path. If None, saves to 'output/<project_name>/cad/<system_name>.<ext>'.
+        project_name: Optional target project name to associate with this export.
         file_type: CAD format ('STEP', 'IGES', 'SAT', 'STL'). Default is 'STEP' (ISO 10303).
         surfaces_as_solids: If True, exports closed volumes as solid bodies (required for SolidWorks assembly).
         first_surface: First surface to export (1-based). Default is 1.
@@ -55,6 +63,10 @@ def zemax_export_cad(
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
+
+    if project_name:
+        set_active_project(project_name)
+    active_proj = get_active_project_name()
 
     num_surfs = sys.LDE.NumberOfSurfaces
     f_surf = int(first_surface) if first_surface is not None else 1
@@ -84,16 +96,15 @@ def zemax_export_cad(
     }
     cad_enum = ft_enum_map.get(ft_lower, zos.Tools.General.CADFileType.STEP)
 
-    if not filepath:
-        default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
-        os.makedirs(default_dir, exist_ok=True)
-        base_name = "optical_assembly"
-        if session.current_filepath:
-            base_name = os.path.splitext(os.path.basename(session.current_filepath))[0]
-        target_path = os.path.join(default_dir, f"{base_name}{target_ext}")
-    else:
-        target_path = os.path.abspath(filepath)
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    base_name = active_proj
+    if session.current_filepath:
+        base_name = os.path.splitext(os.path.basename(session.current_filepath))[0]
+    target_path = resolve_project_file_path(
+        filepath,
+        default_filename=f"{base_name}{target_ext}",
+        subfolder="cad",
+        project_name=active_proj,
+    )
 
     cad_tool = sys.Tools.OpenExportCAD()
     try:
@@ -295,6 +306,7 @@ def _calculate_sag(radius: float, conic: float, y: float) -> float:
 def zemax_export_optical_drawing(
     element_index: Optional[int] = None,
     output_dir: Optional[str] = None,
+    project_name: Optional[str] = None,
     iso_tolerance_grade: str = "Precision",
     generate_2d_plot: bool = True,
 ) -> Dict[str, Any]:
@@ -305,15 +317,20 @@ def zemax_export_optical_drawing(
 
     Args:
         element_index: Specific element index (1-based). If None, exports drawings for all elements.
-        output_dir: Folder to save generated reports and .png drawings (default 'output/drawings').
+        output_dir: Folder to save generated reports and .png drawings (default 'output/<project_name>/drawings').
+        project_name: Optional target project name.
         iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
         generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
     """
     session = ZOSSession.get_instance()
     sys = session.system
 
+    if project_name:
+        set_active_project(project_name)
+    active_proj = get_active_project_name()
+
     if not output_dir:
-        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "drawings")
+        output_dir = get_project_dir(project_name=active_proj, subfolder="drawings")
     os.makedirs(output_dir, exist_ok=True)
 
     elements = _extract_lens_elements(sys)
@@ -642,6 +659,7 @@ def _render_2d_lens_drawing(
 def zemax_export_prescription_for_cad(
     margin_mm: float = 2.0,
     output_filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
     barrel_radial_clearance_mm: float = 0.05,
 ) -> Dict[str, Any]:
     """
@@ -654,7 +672,8 @@ def zemax_export_prescription_for_cad(
 
     Args:
         margin_mm: Mechanical rim margin added to 2 * SemiDiameter (default 2.0 mm).
-        output_filepath: JSON export path (default 'output/solidworks_prescription.json').
+        output_filepath: JSON export path (default 'output/<project_name>/optomech/<system_name>_prescription.json').
+        project_name: Optional target project name.
         barrel_radial_clearance_mm: Radial tolerance clearance between lens OD and barrel bore (default 0.05 mm).
     """
     if isinstance(margin_mm, str) and output_filepath is None:
@@ -668,6 +687,10 @@ def zemax_export_prescription_for_cad(
 
     session = ZOSSession.get_instance()
     sys = session.system
+
+    if project_name:
+        set_active_project(project_name)
+    active_proj = get_active_project_name()
 
     num_surfs = sys.LDE.NumberOfSurfaces
     surfaces_data = []
@@ -812,13 +835,19 @@ def zemax_export_prescription_for_cad(
         },
     }
 
-    if not output_filepath:
-        default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
-        os.makedirs(default_dir, exist_ok=True)
-        output_filepath = os.path.join(default_dir, "solidworks_prescription.json")
+    base_name = active_proj
+    if session.current_filepath:
+        base_name = os.path.splitext(os.path.basename(session.current_filepath))[0]
 
-    with open(output_filepath, "w", encoding="utf-8") as f:
+    target_path = resolve_project_file_path(
+        output_filepath,
+        default_filename=f"{base_name}_prescription.json",
+        subfolder="optomech",
+        project_name=active_proj,
+    )
+
+    with open(target_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    payload["saved_json_filepath"] = output_filepath
+    payload["saved_json_filepath"] = target_path
     return payload

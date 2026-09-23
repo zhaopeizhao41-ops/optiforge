@@ -7,6 +7,16 @@ import os
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 from domain.design_templates import get_template, list_templates
+from tools.project_manager import (
+    get_output_base_dir,
+    get_active_project_name,
+    get_active_project_info,
+    set_active_project,
+    get_project_dir,
+    resolve_project_file_path,
+    list_projects,
+    sanitize_project_name,
+)
 
 
 def zemax_system_info() -> Dict[str, Any]:
@@ -96,6 +106,38 @@ def zemax_new_file(catalogs: Optional[List[str]] = None) -> Dict[str, Any]:
     }
 
 
+def zemax_set_project(
+    project_name: str,
+    description: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create or switch to a dedicated project workspace directory under 'output/<project_name>/'.
+    All subsequent design saves, CAD models, ISO 10110 drawings, and optomechanical exports
+    will be neatly isolated inside this project folder.
+    """
+    return set_active_project(project_name, description=description)
+
+
+def zemax_get_project() -> Dict[str, Any]:
+    """
+    Get the currently active project workspace information, root path, and subdirectories.
+    """
+    return get_active_project_info()
+
+
+def zemax_list_projects() -> Dict[str, Any]:
+    """
+    List all optical design projects currently stored under the 'output/' directory.
+    """
+    projs = list_projects()
+    return {
+        "status": "success",
+        "total_projects": len(projs),
+        "active_project": get_active_project_name(),
+        "projects": projs,
+    }
+
+
 def zemax_load_file(filepath: str) -> Dict[str, Any]:
     """Load a Zemax .zos or .zmx optical design file."""
     session = ZOSSession.get_instance()
@@ -103,29 +145,62 @@ def zemax_load_file(filepath: str) -> Dict[str, Any]:
     if not os.path.exists(abs_path):
         return {"status": "error", "message": f"File does not exist: {abs_path}"}
     session.load_file(abs_path, save_changes=False)
+
+    # Automatically synchronize active project context
+    norm_path = os.path.normpath(abs_path)
+    output_dir = os.path.normpath(get_output_base_dir())
+    if norm_path.startswith(output_dir):
+        rel = os.path.relpath(norm_path, output_dir)
+        parts = rel.split(os.sep)
+        if len(parts) >= 2 and not parts[0].startswith("."):
+            set_active_project(parts[0])
+        else:
+            stem = os.path.splitext(os.path.basename(abs_path))[0]
+            set_active_project(stem)
+    else:
+        stem = os.path.splitext(os.path.basename(abs_path))[0]
+        set_active_project(stem)
+
     return {
         "status": "success",
         "message": f"Successfully loaded design: {abs_path}",
         "surfaces_count": session.system.LDE.NumberOfSurfaces,
+        "active_project": get_active_project_name(),
     }
 
 
-def zemax_save_file(filepath: Optional[str] = None) -> Dict[str, Any]:
+def zemax_save_file(
+    filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Save the active optical design to disk.
-    If filepath is omitted, automatically saves as .zmx in 'd:/mcp gemini zemax/output/optical_design.zmx'.
+    If project_name is provided, ensures the project directory is initialized and active.
+    If filepath is omitted, automatically saves as .zmx in 'output/<project_name>/<project_name>.zmx'.
     Supports both .zmx (classic ASCII format) and .zos (OpticStudio modern format).
     """
     session = ZOSSession.get_instance()
     try:
+        if project_name:
+            set_active_project(project_name)
+        active_proj = get_active_project_name()
+
         target_path = filepath
         if not target_path:
-            if session.current_filepath:
+            if (
+                session.current_filepath
+                and os.path.isabs(session.current_filepath)
+                and active_proj in session.current_filepath
+            ):
                 target_path = session.current_filepath
             else:
-                default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
-                os.makedirs(default_dir, exist_ok=True)
-                target_path = os.path.join(default_dir, "optical_design.zmx")
+                target_path = resolve_project_file_path(
+                    None, default_filename=f"{active_proj}.zmx", project_name=active_proj
+                )
+        elif not os.path.isabs(target_path):
+            target_path = resolve_project_file_path(
+                target_path, default_filename=f"{active_proj}.zmx", project_name=active_proj
+            )
 
         # If extension omitted, default to .zmx
         _, ext = os.path.splitext(target_path)
@@ -135,6 +210,8 @@ def zemax_save_file(filepath: Optional[str] = None) -> Dict[str, Any]:
         session.save_file(target_path)
         return {
             "status": "success",
+            "project_name": active_proj,
+            "project_directory": get_project_dir(active_proj),
             "saved_to": session.current_filepath,
             "format": os.path.splitext(session.current_filepath)[1].lower(),
         }
@@ -359,9 +436,25 @@ def zemax_register_design_proposal(
 {mechanical_constraints}
 """
 
+    # Automatically initialize dedicated project workspace
+    proj_info = set_active_project(
+        project_name,
+        description=f"Optical design proposal for {project_name}",
+        target_specs=target_specs,
+    )
+    p_dir = proj_info.get("project_directory", get_project_dir(project_name))
+    proposal_report_path = os.path.join(p_dir, "reports", "design_proposal.md")
+    try:
+        with open(proposal_report_path, "w", encoding="utf-8") as f:
+            f.write(proposal_doc)
+    except Exception:
+        pass
+
     CURRENT_DESIGN_PROPOSAL = {
         "project_name": project_name,
         "timestamp": now_str,
+        "project_directory": p_dir,
+        "proposal_report_file": proposal_report_path,
         "target_specs": target_specs,
         "initial_structure_source": initial_structure_source,
         "optical_theory_analysis": optical_theory_analysis,
@@ -388,6 +481,8 @@ def zemax_register_design_proposal(
     return {
         "status": "success",
         "project_name": project_name,
+        "project_directory": p_dir,
+        "proposal_report_file": proposal_report_path,
         "simulation_authorized": user_confirmed_to_simulate,
         "next_action": next_step,
         "formatted_proposal": proposal_doc,

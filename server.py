@@ -23,6 +23,9 @@ from tools import (
     zemax_register_design_proposal as _register_design_proposal,
     get_current_design_proposal as _get_current_design_proposal,
     zemax_audit_requirements as _audit_requirements,
+    zemax_set_project as _set_project,
+    zemax_get_project as _get_project,
+    zemax_list_projects as _list_projects,
     zemax_set_aperture as _set_aperture,
     zemax_set_fields as _set_fields,
     zemax_set_wavelengths as _set_wavelengths,
@@ -208,13 +211,54 @@ def zemax_load_file(filepath: str) -> str:
 
 
 @app.tool()
-def zemax_save_file(filepath: Optional[str] = None) -> str:
+def zemax_set_project(project_name: str, description: Optional[str] = None) -> str:
+    """
+    Set or create the active optical design project workspace.
+    Initializes a dedicated isolated project directory structure under 'output/<project_name>/':
+      output/<project_name>/
+        ├── <project_name>.zmx / .zos  (Sequential optical model)
+        ├── cad/                       (STEP, IGES, STL 3D models)
+        ├── drawings/                  (ISO 10110 specs & 2D cross-section plots)
+        ├── optomech/                  (SolidWorks bridge JSON payloads)
+        └── reports/                   (Proposal, MTF, spot, analysis charts)
+
+    All subsequent design saves, CAD models, ISO 10110 drawings, and optomechanical exports
+    will be neatly isolated inside this project folder.
+    """
+    res = _set_project(project_name, description=description)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_get_project() -> str:
+    """
+    Get the currently active project workspace information, root path, and subdirectories.
+    """
+    res = _get_project()
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_list_projects() -> str:
+    """
+    List all optical design projects currently stored under the 'output/' directory.
+    """
+    res = _list_projects()
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_save_file(
+    filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
+) -> str:
     """
     Save the active optical design to disk in .zmx (classic ASCII) or .zos format.
-    filepath: Destination path (e.g. 'd:/mcp gemini zemax/output/my_lens.zmx').
-    If omitted, automatically saves as .zmx in 'd:/mcp gemini zemax/output/optical_design.zmx'.
+    filepath: Destination path (e.g. 'output/<project_name>/<project_name>.zmx').
+    project_name: Optional target project name to activate.
+    If omitted, automatically saves into the active project folder 'output/<project_name>/<project_name>.zmx'.
     """
-    res = _save_file(filepath)
+    res = _save_file(filepath, project_name=project_name)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
@@ -601,6 +645,7 @@ def zemax_lookup_manual(query: str) -> str:
 @app.tool()
 def zemax_export_cad(
     filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
     file_type: str = "STEP",
     surfaces_as_solids: bool = True,
     first_surface: Optional[int] = None,
@@ -620,7 +665,8 @@ def zemax_export_cad(
     that can be directly opened, measured, and assembled into lens barrels in SolidWorks.
 
     Args:
-        filepath: Destination file path. If omitted, saves to 'output/optical_assembly.step'.
+        filepath: Destination file path. If omitted, saves to 'output/<project_name>/cad/<system_name>.<ext>'.
+        project_name: Optional target project name to associate with this export.
         file_type: CAD format ('STEP', 'IGES', 'SAT', 'STL'). Default is 'STEP' (ISO 10303).
         surfaces_as_solids: If True, exports closed volumes as solid bodies for SolidWorks.
         first_surface: First surface to export (1-based).
@@ -636,6 +682,7 @@ def zemax_export_cad(
     """
     res = _export_cad(
         filepath=filepath,
+        project_name=project_name,
         file_type=file_type,
         surfaces_as_solids=surfaces_as_solids,
         first_surface=first_surface,
@@ -656,6 +703,7 @@ def zemax_export_cad(
 def zemax_export_optical_drawing(
     element_index: Optional[int] = None,
     output_dir: Optional[str] = None,
+    project_name: Optional[str] = None,
     iso_tolerance_grade: str = "Precision",
     generate_2d_plot: bool = True,
 ) -> str:
@@ -666,13 +714,15 @@ def zemax_export_optical_drawing(
 
     Args:
         element_index: Specific element index (1-based). If omitted, exports drawings for all lens elements.
-        output_dir: Folder to save generated reports and .png drawings (default 'output/drawings').
+        output_dir: Folder to save generated reports and .png drawings (default 'output/<project_name>/drawings').
+        project_name: Optional target project name.
         iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
         generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
     """
     res = _export_optical_drawing(
         element_index=element_index,
         output_dir=output_dir,
+        project_name=project_name,
         iso_tolerance_grade=iso_tolerance_grade,
         generate_2d_plot=generate_2d_plot,
     )
@@ -683,6 +733,7 @@ def zemax_export_optical_drawing(
 def zemax_export_prescription_for_cad(
     margin_mm: float = 2.0,
     output_filepath: Optional[str] = None,
+    project_name: Optional[str] = None,
     barrel_radial_clearance_mm: float = 0.05,
 ) -> str:
     """
@@ -695,12 +746,14 @@ def zemax_export_prescription_for_cad(
 
     Args:
         margin_mm: Mechanical rim margin added to 2 * SemiDiameter (default 2.0 mm).
-        output_filepath: JSON export path (default 'output/solidworks_prescription.json').
+        output_filepath: JSON export path (default 'output/<project_name>/optomech/<system_name>_prescription.json').
+        project_name: Optional target project name.
         barrel_radial_clearance_mm: Radial tolerance clearance between lens OD and barrel bore (default 0.05 mm).
     """
     res = _export_prescription_for_cad(
         margin_mm=margin_mm,
         output_filepath=output_filepath,
+        project_name=project_name,
         barrel_radial_clearance_mm=barrel_radial_clearance_mm,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)

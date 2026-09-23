@@ -27,7 +27,7 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
 ### Key Capabilities
 
 1. **Autonomous Optical Design & Optimization**:
-   - Exposes **31 modular optical and CAD tools**, **5 system/workflow resources**, and dedicated design prompts.
+   - Exposes **34 modular optical, project management, and CAD tools**, **5 system/workflow resources**, and dedicated design prompts.
    - Supports complex progressive optimization pipelines: radii tuning, air/glass thickness solves, DLS/Hammer solvers, and multi-stage merit function configuration.
 2. **Mandatory 5-Stage Closed-Loop Optical Design Protocol (SOP)**:
    ```mermaid
@@ -72,7 +72,11 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
    - **Direct 3D CAD Export (`zemax_export_cad`)**: Headless export of precise 3D solid STEP, IGES, SAT, and STL geometry with solid volumes and optional ray path bundles.
    - **ISO 10110 Optical Manufacturing Drawings (`zemax_export_optical_drawing`)**: Automatically generates international standard fabrication specification sheets and dimensioned 2D cross-section plots with clear apertures, flat lands, chamfers, and optical tolerance codes (0/ to 5/).
    - **SolidWorks MCP Bridge (`zemax_export_prescription_for_cad`)**: Converts Zemax prescriptions into clean JSON for SolidWorks MCP (`build_system_from_prescription`), calculating spacer rings (`create_3d_lens_spacer`), retaining ring (`create_3d_retaining_ring`), and stepped lens barrels (`create_3d_lens_barrel`).
-8. **Dual Operation Modes**:
+8. **Project Workspace Directory Isolation**:
+   - Eliminates cluttered root dumps by isolating each design project into dedicated folders (`output/<project_name>/`).
+   - Standard subdirectories: `cad/` (3D STEP/IGES/STL bodies), `drawings/` (ISO 10110 specifications & 2D cross-section PNGs), `optomech/` (SolidWorks bridge JSON payloads), and `reports/` (proposals, MTF, spot charts).
+   - Seamlessly managed via `zemax_set_project` (create/switch project workspace), `zemax_get_project` (query active workspace), and `zemax_list_projects` (inspect all projects and assets).
+9. **Dual Operation Modes**:
    - **Standalone Mode** (Default): Headless execution in the background for high-speed automated batch tasks.
    - **Interactive Mode**: Attaches directly to a live, open OpticStudio GUI session for real-time visualization.
 
@@ -145,9 +149,10 @@ Applying the modular protocol and **Stagnation Guard**, the AI agent autonomousl
 
 ---
 
-### Tool Catalog (31 Tools)
+### Tool Catalog (34 Tools)
 
 - **System & ORS Management**: `zemax_audit_requirements`, `zemax_system_info`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`.
+- **Project Workspace Management**: `zemax_set_project`, `zemax_get_project`, `zemax_list_projects`.
 - **Optical Setup Tools**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`.
 - **Surface & Solve Tools**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`.
 - **Optimization Tools**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`.
@@ -206,7 +211,7 @@ pip install -r requirements.txt
 ### 核心特性
 
 1. **AI 闭环光学自主设计**：
-   - 暴露 **31 个高抽象度、原子化的光学与 CAD 导出工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
+   - 暴露 **34 个高抽象度、原子化的光学与 CAD 导出工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
    - 智能体通过自然语言指令即可完成：从需求完备性审查、初始结构载入、视场与波长配置、曲率与厚度变量分配、评价函数构建、多阶段 DLS 阻尼最小二乘优化到全套像差图表生成的全流程。
 2. **强制执行五步闭环光学设计工作流 (SOP)**：
    ```mermaid
@@ -250,7 +255,11 @@ pip install -r requirements.txt
    - **原生 3D CAD 实体导出 (`zemax_export_cad`)**：支持无头静默导出 STEP (AP203/AP214/AP242)、IGES、SAT 与 STL 实体几何模型，可按需附带全光路真实光线追迹实体样条线。
    - **ISO 10110 国际标准光学加工图纸 (`zemax_export_optical_drawing`)**：全自动逐片生成光学加工制造规格书与带工程标注的 2D 截面剖面图（PNG），包含有效通光孔径、装配平直台阶（Flat Land $W \ge 0.8\sim 1.5\,\text{mm}$）、保护倒角、中心/边缘厚度以及 0/（应力双折射）、1/（气泡度）、2/（条纹度）、3/（面形光圈 N/ΔN）、4/（偏心角度）、5/（表面疵病）全套 ISO 10110 公差代号。
    - **SolidWorks MCP 处方中继转换器 (`zemax_export_prescription_for_cad`)**：将 Zemax LDE 转换为符合 SolidWorks MCP (`build_system_from_prescription`) 严格 JSON Schema 的无污染规范数据，并自动计算全系统机械隔圈（`create_3d_lens_spacer`）、前端压圈（`create_3d_retaining_ring`）及阶梯沉孔镜筒（`create_3d_lens_barrel`）尺寸，一键触发 SolidWorks 3D 光机装配建模与间隙干涉碰撞审计（`check_assembly_clearance`）。
-8. **双重运行模式**：
+8. **工程项目独立工作区隔离归档 (Project Workspace Isolation)**：
+   - 彻底杜绝所有输出文件散乱混杂堆放于顶层 `output/` 根目录。每个光学设计项目自动拥有专有文件夹 `output/<project_name>/`。
+   - 规范化子目录体系：`cad/`（3D 实体模型 STEP/IGES/SAT/STL）、`drawings/`（ISO 10110 零件制造图纸规格书与 2D 剖面 PNG）、`optomech/`（SolidWorks 机械装配桥接参数与隔圈/压圈 JSON）、`reports/`（设计提案报告与 MTF/点列图等分析图表）。
+   - 提供 `zemax_set_project`（项目切换/创建）、`zemax_get_project`（当前工作区查询）与 `zemax_list_projects`（已有项目与资产概况）。
+9. **双重运行模式**：
    - **Standalone 模式**（默认）：后台静默启动独立无头 OpticStudio 进程，支持高并发多核批处理。
    - **Interactive 模式**：无缝连接正在前台运行的 OpticStudio GUI 界面，实现图形窗口与 AI 脚本双向实时同步。
 
@@ -324,9 +333,10 @@ pip install -r requirements.txt
 
 ---
 
-### 工具目录 (31 个核心工具)
+### 工具目录 (34 个核心工具)
 
 - **系统与需求管理**: `zemax_system_info`, `zemax_audit_requirements`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`
+- **项目工作区管理**: `zemax_set_project`, `zemax_get_project`, `zemax_list_projects`
 - **光学参数配置**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`
 - **表面与求解器管理**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`
 - **优化与评价函数**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`

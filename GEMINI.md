@@ -148,7 +148,32 @@
 
 ---
 
+## 📁 项目工程工作区独立隔离规程 (Project Workspace Directory Isolation)
+
+为了杜绝所有输出文件散乱混杂在顶层 `output/` 目录中，MCP 严格执行**按项目独立文件夹隔离归档**的工程规范：
+
+1. **标准化项目文件组织结构**：
+   每个光学设计项目拥有唯一的项目文件夹 `output/<project_name>/`，并按工程交付物划分子目录：
+   ```text
+   output/<project_name>/
+     ├── <project_name>.zmx / .zos  # 光学系统主模型文件
+     ├── cad/                       # 3D 实体模型导出（STEP / IGES / SAT / STL）
+     ├── drawings/                  # ISO 10110 零件制造图纸规格书与 2D 剖面 PNG
+     ├── optomech/                  # SolidWorks MCP 结构桥接参数与沉孔/隔圈/压圈 JSON
+     ├── reports/                   # 设计提案 (design_proposal.md)、MTF 与 Spot 像质图表
+     └── project.json               # 项目元数据记录
+   ```
+
+2. **工作区工具协同流**：
+   - `zemax_set_project(project_name)`：激活或创建当前项目工作区；
+   - `zemax_get_project()`：查询当前活动项目及其各子目录路径；
+   - `zemax_list_projects()`：查看已有项目工作区概况；
+   - `zemax_register_design_proposal`：自动归档提案至 `output/<project_name>/reports/design_proposal.md` 并自动绑定该项目；
+   - `zemax_save_file`、`zemax_export_cad`、`zemax_export_optical_drawing`、`zemax_export_prescription_for_cad`：默认将文件存入当前活动项目的对应子目录，严禁在 `output/` 根目录无序堆叠文件。
+
+---
+
 ## 例外说明
-查询当前已有设计状态与需求审查的只读工具（`zemax_system_info`, `zemax_get_system_data`, `zemax_lookup_manual`, `zemax_audit_requirements`）不受四步设计门禁限制。
+查询当前已有设计状态、需求审查与项目列表的只读工具（`zemax_system_info`, `zemax_get_system_data`, `zemax_lookup_manual`, `zemax_audit_requirements`, `zemax_get_project`, `zemax_list_projects`）不受四步设计门禁限制。
 详细工程手册可通过 MCP 资源 `zemax://manual/expert_design_guide` 或 `domain/optical_expert_manual.md` 随时查阅。
 

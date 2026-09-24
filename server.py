@@ -706,25 +706,32 @@ def zemax_export_optical_drawing(
     project_name: Optional[str] = None,
     iso_tolerance_grade: str = "Precision",
     generate_2d_plot: bool = True,
+    export_dxf: bool = True,
 ) -> str:
     """
-    Generate an ISO 10110 compliant optical manufacturing drawing (specification report & 2D engineering drawing).
-    Extracts radii, thicknesses, clear apertures, mechanical rims with flat mounting lands,
-    chamfers, glass materials, and standard ISO 10110 tolerance indications.
+    Generate standard optical engineering manufacturing drawings complying with Chinese National Standards
+    (GB/T 13323-2009, GB/T 903-2019, GB/T 2831-2009) and ISO 10110.
+    Directly exports editable .dxf CAD vector drawings (via ezdxf) and PNG/Markdown reports.
+    Completely removes company/unit name block ('去掉单位名称') and removes redundant 'mm' on dimension lines.
 
     Args:
-        element_index: Specific element index (1-based). If omitted, exports drawings for all lens elements.
-        output_dir: Folder to save generated reports and .png drawings (default 'output/<project_name>/drawings').
+        element_index: Specific element index (1-based). If omitted, exports drawings for all lens elements and assembly.
+        output_dir: Folder to save generated drawings (default 'output/<project_name>/drawings').
         project_name: Optional target project name.
         iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
         generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
+        export_dxf: If True, generates standard editable AutoCAD .dxf drawings via ezdxf.
     """
-    res = _export_optical_drawing(
+    import importlib
+    import tools.cad_export_tools
+    importlib.reload(tools.cad_export_tools)
+    res = tools.cad_export_tools.zemax_export_optical_drawing(
         element_index=element_index,
         output_dir=output_dir,
         project_name=project_name,
         iso_tolerance_grade=iso_tolerance_grade,
         generate_2d_plot=generate_2d_plot,
+        export_dxf=export_dxf,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 

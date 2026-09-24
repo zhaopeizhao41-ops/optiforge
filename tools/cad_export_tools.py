@@ -7,7 +7,7 @@ providing direct optomechanical linkage with SolidWorks MCP.
 import json
 import math
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -25,6 +25,43 @@ from tools.project_manager import (
     get_active_project_name,
     set_active_project,
 )
+
+try:
+    import ezdxf
+    from ezdxf import units
+    from ezdxf.enums import TextEntityAlignment
+    from ezdxf.addons.drawing import RenderContext, Frontend
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+    from ezdxf.addons.drawing.config import Configuration, BackgroundPolicy
+    EZDXF_AVAILABLE = True
+except ImportError:
+    EZDXF_AVAILABLE = False
+
+
+def _render_dxf_to_png(dxf_filepath: str, png_filepath: str, dpi: int = 220) -> bool:
+    """
+    Render a 100% pixel-perfect CAD drawing preview from DXF modelspace using ezdxf matplotlib backend.
+    Ensures identical 1:1 fidelity between native DXF CAD drawing and PNG preview.
+    """
+    if not EZDXF_AVAILABLE:
+        return False
+    try:
+        doc = ezdxf.readfile(dxf_filepath)
+        msp = doc.modelspace()
+        fig = plt.figure(figsize=(16.0, 11.31), dpi=dpi)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ctx = RenderContext(doc)
+        cfg = Configuration(background_policy=BackgroundPolicy.WHITE)
+        out = MatplotlibBackend(ax)
+        frontend = Frontend(ctx, out, config=cfg)
+        frontend.draw_layout(msp, finalize=True)
+        fig.savefig(png_filepath, facecolor="white")
+        plt.close(fig)
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to render DXF to PNG ({e}), falling back to native matplotlib renderer.")
+        return False
+
 
 
 def zemax_export_cad(
@@ -729,7 +766,7 @@ def _render_gbt13323_assembly_drawing(
         {"type": "data", "label": "有效焦距 f'", "val": drawing_data.get("efl_str", "4.75")},
         {"type": "data", "label": "物方工作距离 WD", "val": drawing_data.get("wd_str", "0.78")},
         {"type": "data", "label": "扫描视场", "val": drawing_data.get("fov_str", "0.5×0.5mm")},
-        {"type": "data", "label": "出射光瞳直径", "val": drawing_data.get("pupil_str", "Ø 8.55")},
+        {"type": "data", "label": "出射光瞳直径", "val": drawing_data.get("pupil_str", "\u03a6 8.55")},
         {"type": "data", "label": "浸没介质折射率", "val": drawing_data.get("immersion_str", "1.329 (水)")},
         {"type": "data", "label": "盖玻片厚度", "val": drawing_data.get("coverglass_str", "0.17 (N-K5)")},
         {"type": "section", "label": "像质与装配要求", "val": ""},
@@ -1108,6 +1145,881 @@ def _write_element_markdown_drawing(spec: Dict[str, Any], filepath: str):
         f.write(md_content)
 
 
+def _setup_gbt13323_dxf_document() -> Tuple[Any, Any]:
+    """Create an authentic absorbed RCT-9503 / ISO A4 Landscape (297x210mm) DXF document."""
+    doc = ezdxf.new("R2010")
+    doc.units = units.MM
+
+    # Typography: Standard SimHei for Chinese characters across AutoCAD, DWG TrueView, SolidWorks
+    doc.styles.add("HZ_STYLE", font="simhei.ttf")
+
+    # Centerline linetype
+    if "CENTER" not in doc.linetypes:
+        doc.linetypes.add("CENTER", pattern=[1.25, 1.0, -0.125, 0.125, -0.125], description="Center ____ _ ____ _")
+
+    # Standard Mechanical / Optical CAD Layer Architecture
+    doc.layers.add("0_FRAME", color=7)         # Border, frame, centering marks (White/Black)
+    doc.layers.add("1_TABLE", color=7)         # Table grid, title block lines
+    doc.layers.add("2_CONTOUR", color=7)       # Lens boundary and profile contours
+    doc.layers.add("3_AXIS", color=1, linetype="CENTER")  # Optical axis (Red Centerline)
+    doc.layers.add("4_HATCH", color=4)         # Cross-hatching (Cyan ANSI31)
+    doc.layers.add("5_DIMENSION", color=3)     # Dimensions, arrows, leaders (Green)
+    doc.layers.add("6_TEXT", color=7)          # Annotations, tables, notes
+
+    msp = doc.modelspace()
+
+    # 1. Outer Sheet Border (A4: 297mm x 210mm)
+    msp.add_lwpolyline([(0, 0), (297, 0), (297, 210), (0, 210)], close=True, dxfattribs={"layer": "0_FRAME"})
+
+    # 2. Inner Drawing Frame (Left margin 10mm, Top/Right/Bottom 5mm)
+    # Area: X from 10.0 to 292.0 (width 282mm), Y from 5.0 to 205.0 (height 200mm)
+    x_min, y_min = 10.0, 5.0
+    x_max, y_max = 292.0, 205.0
+    msp.add_lwpolyline(
+        [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)],
+        close=True,
+        dxfattribs={"layer": "0_FRAME"}
+    )
+
+    # 3. Four Centering Marks
+    msp.add_line((148.5, 205.0), (148.5, 210.0), dxfattribs={"layer": "0_FRAME"})
+    msp.add_line((148.5, 0.0), (148.5, 5.0), dxfattribs={"layer": "0_FRAME"})
+    msp.add_line((0.0, 105.0), (10.0, 105.0), dxfattribs={"layer": "0_FRAME"})
+    msp.add_line((292.0, 105.0), (297.0, 105.0), dxfattribs={"layer": "0_FRAME"})
+
+    # 4. Top-Right Surface Roughness (其余表面粗糙度 "其 余 1.6 / ▽")
+    rx, ry = 265.0, 196.0
+    txt_qy = msp.add_text("其 余", dxfattribs={"height": 2.8, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    txt_qy.set_placement((rx - 2.0, ry + 2.0), align=TextEntityAlignment.MIDDLE_RIGHT)
+
+    msp.add_line((rx, ry + 2.0), (rx + 2.2, ry), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    msp.add_line((rx + 2.2, ry), (rx + 5.5, ry + 5.0), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    msp.add_line((rx + 5.5, ry + 5.0), (rx + 11.5, ry + 5.0), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    txt_ra = msp.add_text("1.6", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    txt_ra.set_placement((rx + 8.5, ry + 5.6), align=TextEntityAlignment.BOTTOM_CENTER)
+
+    return doc, msp
+
+
+def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = False):
+    """
+    Draw authentic absorbed RCT-9503 Title Block:
+    - Dimensions: X from 182.0 to 292.0 (width 110mm), Y from 5.0 to 49.0 (height 44mm).
+    - 4 equal tiers (11.0mm each).
+    - Left sub-block (46mm width, X: 182 to 228):
+      Tier 1: DRAWING PROJECTION + Third Angle Projection Symbol.
+      Tier 2: NAME / DATE header, DRAWN / Designer / Date.
+      Tier 3: APPROVAL / Approver / Date.
+      Tier 4: VALUES IN PARENTHESIS ARE CALCULATED / AND MAY CONTAIN ROUNDOFF ERRORS.
+    - Right sub-block (64mm width, X: 228 to 292):
+      Tier 1: OPTICAL COMPONENT/ASSEMBLY SPECIFICATION (STRICTLY NO COMPANY NAME).
+      Tier 2: Component/System Title & Description (with \u03a6).
+      Tier 3: MATERIAL | SCALE | REV.
+      Tier 4: ITEM# | APPROX WEIGHT.
+    """
+    tb_x0 = 182.0
+    tb_x1 = 292.0
+    tb_y0 = 5.0
+    tb_y1 = 49.0
+    w_left = 46.0
+    x_mid = tb_x0 + w_left  # 228.0
+
+    # Outer boundary
+    msp.add_lwpolyline(
+        [(tb_x0, tb_y0), (tb_x1, tb_y0), (tb_x1, tb_y1), (tb_x0, tb_y1)],
+        close=True,
+        dxfattribs={"layer": "1_TABLE"}
+    )
+
+    # 3 horizontal tier dividers at y = 16.0, 27.0, 38.0
+    for y in [16.0, 27.0, 38.0]:
+        msp.add_line((tb_x0, y), (tb_x1, y), dxfattribs={"layer": "1_TABLE"})
+
+    # Vertical divider between left and right sub-blocks
+    msp.add_line((x_mid, tb_y0), (x_mid, tb_y1), dxfattribs={"layer": "1_TABLE"})
+
+    # === LEFT SUB-BLOCK (Width 46mm, X: 182.0 to 228.0) ===
+    # Tier 1 (Y: 38.0 to 49.0): DRAWING PROJECTION + Third Angle Symbol
+    msp.add_text("DRAWING", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        (tb_x0 + 2.5, 45.0), align=TextEntityAlignment.MIDDLE_LEFT
+    )
+    msp.add_text("PROJECTION", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        (tb_x0 + 2.5, 41.5), align=TextEntityAlignment.MIDDLE_LEFT
+    )
+
+    # Third Angle Projection Symbol (cone frustum + concentric circles)
+    sym_x, sym_y = tb_x0 + 35.0, 43.5
+    cone_w, cone_h1, cone_h2 = 5.5, 2.6, 5.2
+    c_x1 = sym_x - 12.0
+    c_x2 = c_x1 + cone_w
+    msp.add_line((c_x1, sym_y - cone_h1 / 2.0), (c_x1, sym_y + cone_h1 / 2.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c_x2, sym_y - cone_h2 / 2.0), (c_x2, sym_y + cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c_x1, sym_y + cone_h1 / 2.0), (c_x2, sym_y + cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c_x1, sym_y - cone_h1 / 2.0), (c_x2, sym_y - cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c_x1 - 2.0, sym_y), (sym_x + 4.5, sym_y), dxfattribs={"layer": "3_AXIS", "color": 1})
+    msp.add_circle((sym_x, sym_y), radius=cone_h1 / 2.0, dxfattribs={"layer": "1_TABLE"})
+    msp.add_circle((sym_x, sym_y), radius=cone_h2 / 2.0, dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((sym_x, sym_y - cone_h2 / 2.0 - 1.5), (sym_x, sym_y + cone_h2 / 2.0 + 1.5), dxfattribs={"layer": "3_AXIS", "color": 1})
+
+    # Left Sub-block Tiers 2 & 3: DRAWN & APPROVAL
+    x_d1, x_d2 = tb_x0 + 13.0, tb_x0 + 29.5
+    msp.add_line((x_d1, 16.0), (x_d1, 38.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_d2, 16.0), (x_d2, 38.0), dxfattribs={"layer": "1_TABLE"})
+
+    # Tier 2 (Y: 27.0 to 38.0): divider at Y=32.5
+    msp.add_line((tb_x0, 32.5), (x_mid, 32.5), dxfattribs={"layer": "1_TABLE"})
+    msp.add_text("NAME", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d1 + x_d2) / 2.0, 35.2), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("DATE", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d2 + x_mid) / 2.0, 35.2), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Sub-row DRAWN (Y: 27.0 to 32.5)
+    msp.add_text("DRAWN", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((tb_x0 + x_d1) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("ZEMAX", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d1 + x_d2) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    date_str = data.get("drawing_date", "2026/09/24")
+    msp.add_text(date_str, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d2 + x_mid) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Tier 3 (Y: 16.0 to 27.0): APPROVAL
+    msp.add_text("APPROVAL", dxfattribs={"height": 1.8, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((tb_x0 + x_d1) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("OPT-AI", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d1 + x_d2) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text(date_str, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_d2 + x_mid) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Tier 4 (Y: 5.0 to 16.0): Mandatory disclaimer
+    msp.add_text("VALUES IN PARENTHESIS ARE CALCULATED", dxfattribs={"height": 1.6, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((tb_x0 + x_mid) / 2.0, 11.8), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("AND MAY CONTAIN ROUNDOFF ERRORS", dxfattribs={"height": 1.6, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((tb_x0 + x_mid) / 2.0, 8.2), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # === RIGHT SUB-BLOCK (Width 64mm, X: 228.0 to 292.0) ===
+    # Tier 1 (Y: 38.0 to 49.0): Classification Header (NO COMPANY NAME)
+    hdr_title = "OPTICAL ASSEMBLY SPECIFICATION" if is_assembly else "OPTICAL COMPONENT SPECIFICATION"
+    msp.add_text(hdr_title, dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_mid + tb_x1) / 2.0, 43.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Tier 2 (Y: 27.0 to 38.0): Description / Title
+    od = float(data.get("od", 25.4))
+    if is_assembly:
+        line1 = f"\u03a6 {od:.1f}mm WATER IMMERSION OBJECTIVE"
+        line2 = f"NA={data.get('na_str', '0.90')}, f={data.get('efl_str', '4.75')}mm, -BBAR COAT"
+    else:
+        dwg_raw = data.get("drawing_name", "OPTICAL ELEMENT").replace("\n", " ")
+        line1 = f"\u03a6 {od:.1f}mm {dwg_raw}"
+        mat_clean = data.get('material', 'N-BK7').replace('\n', ' / ')
+        line2 = f"MAT: {mat_clean}, -BBAR COAT"
+
+    h_line1 = 2.4 if len(line1) <= 34 else 2.0
+    h_line2 = 2.1 if len(line2) <= 34 else 1.8
+
+    msp.add_text(line1, dxfattribs={"height": h_line1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_mid + tb_x1) / 2.0, 34.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text(line2, dxfattribs={"height": h_line2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_mid + tb_x1) / 2.0, 29.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Tier 3 (Y: 16.0 to 27.0): MATERIAL | SCALE | REV
+    x_r1, x_r2 = x_mid + 34.0, x_mid + 50.0
+    msp.add_line((x_r1, 16.0), (x_r1, 27.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_r2, 16.0), (x_r2, 27.0), dxfattribs={"layer": "1_TABLE"})
+
+    msp.add_text("MATERIAL", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        (x_mid + 2.0, 24.5), align=TextEntityAlignment.MIDDLE_LEFT
+    )
+    mat_val = data.get("material", "H-K9L").replace("\n", " / ") if not is_assembly else "N/A"
+    mat_h = 2.2
+    if len(mat_val) > 20:
+        mat_h = 1.6
+    elif len(mat_val) > 13:
+        mat_h = 1.8
+    msp.add_text(mat_val, dxfattribs={"height": mat_h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_mid + x_r1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    msp.add_text("SCALE", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r1 + x_r2) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    scale_str = data.get("drawing_scale", "2:1")
+    msp.add_text(scale_str, dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r1 + x_r2) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    msp.add_text("REV", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r2 + tb_x1) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("A", dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r2 + tb_x1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Tier 4 (Y: 5.0 to 16.0): ITEM# | APPROX WEIGHT
+    x_r3 = x_mid + 34.0
+    msp.add_line((x_r3, 5.0), (x_r3, 16.0), dxfattribs={"layer": "1_TABLE"})
+
+    msp.add_text("ITEM#", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        (x_mid + 2.0, 13.5), align=TextEntityAlignment.MIDDLE_LEFT
+    )
+    item_code = data.get("drawing_code", "OPT-WATER-01")
+    msp.add_text(item_code, dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_mid + x_r3) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    msp.add_text("APPROX WEIGHT", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r3 + tb_x1) / 2.0, 13.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    wt_str = data.get("weight_str", "0.02 Kg" if is_assembly else "0.005 Kg")
+    msp.add_text(wt_str, dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_r3 + tb_x1) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+
+def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 15.0, y_top: float = 72.0):
+    """Draw authentic absorbed RCT-9503 Notes/Specifications block in bottom-left."""
+    cur_y = y_top
+    for idx, note in enumerate(notes):
+        if idx == 0:
+            h = 2.3
+            msp.add_text(note, dxfattribs={"height": h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
+            )
+            cur_y -= 4.5
+        elif idx == len(notes) - 1 and "INFORMATION ONLY" in note:
+            cur_y -= 1.5
+            msp.add_text(note, dxfattribs={"height": 1.8, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
+            )
+        else:
+            msp.add_text(note, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
+            )
+            cur_y -= 4.0
+
+
+
+def _draw_dxf_arrow(msp: Any, tip: Tuple[float, float], direction: Tuple[float, float], size: float = 2.5):
+    """Draw solid filled arrowhead at tip."""
+    dx, dy = direction
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return
+    ux, uy = dx / length, dy / length
+    px, py = -uy, ux
+
+    w = size * 0.35
+    p_base = (tip[0] - ux * size, tip[1] - uy * size)
+    p_left = (p_base[0] + px * w, p_base[1] + py * w)
+    p_right = (p_base[0] - px * w, p_base[1] - py * w)
+
+    msp.add_solid([tip, p_left, p_right], dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+
+def _draw_dxf_leader(
+    msp: Any,
+    tip: Tuple[float, float],
+    angle_deg: float,
+    length: float,
+    shoulder_len: float,
+    text_upper: str,
+    text_lower: Optional[str] = None,
+    arrow_size: float = 2.5,
+):
+    """Draw standard optical radius/chamfer leader with solid arrowhead and shoulder text."""
+    rad = math.radians(angle_deg)
+    p2 = (tip[0] + length * math.cos(rad), tip[1] + length * math.sin(rad))
+    shoulder_sign = 1.0 if math.cos(rad) >= 0 else -1.0
+    p3 = (p2[0] + shoulder_sign * shoulder_len, p2[1])
+
+    msp.add_line(tip, p2, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    msp.add_line(p2, p3, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    _draw_dxf_arrow(msp, tip, (-math.cos(rad), -math.sin(rad)), size=arrow_size)
+
+    align_u = TextEntityAlignment.BOTTOM_LEFT if shoulder_sign > 0 else TextEntityAlignment.BOTTOM_RIGHT
+    t_u = msp.add_text(text_upper, dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    tx = p2[0] + (1.0 if shoulder_sign > 0 else -1.0)
+    t_u.set_placement((tx, p2[1] + 0.6), align=align_u)
+
+    if text_lower:
+        align_l = TextEntityAlignment.TOP_LEFT if shoulder_sign > 0 else TextEntityAlignment.TOP_RIGHT
+        t_l = msp.add_text(text_lower, dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t_l.set_placement((tx, p2[1] - 0.6), align=align_l)
+
+
+def _draw_dxf_balloon(msp: Any, center: Tuple[float, float], number: int, start_pt: Tuple[float, float]):
+    """Draw component balloon circle with number and leader line."""
+    r = 3.2
+    msp.add_circle(center=center, radius=r, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    t = msp.add_text(str(number), dxfattribs={"height": 2.8, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t.set_placement(center, align=TextEntityAlignment.MIDDLE_CENTER)
+
+    dx = center[0] - start_pt[0]
+    dy = center[1] - start_pt[1]
+    dist = math.hypot(dx, dy)
+    if dist > r:
+        ux, uy = dx / dist, dy / dist
+        p_circ = (center[0] - ux * r, center[1] - uy * r)
+        msp.add_line(start_pt, p_circ, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_circle(center=start_pt, radius=0.6, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+
+def _draw_dxf_linear_dimension(
+    msp: Any,
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    dim_offset: float,
+    text: str,
+    orientation: str = "horizontal",
+):
+    """
+    Draw a clean, 100% CAD-compatible dimension line with extension lines, solid arrows, and text.
+    orientation: 'horizontal' or 'vertical'.
+    """
+    if orientation == "horizontal":
+        y_dim = p1[1] + dim_offset
+        x_min = min(p1[0], p2[0])
+        x_max = max(p1[0], p2[0])
+
+        ext_overshoot = 2.0 if dim_offset > 0 else -2.0
+        msp.add_line((x_min, p1[1]), (x_min, y_dim + ext_overshoot), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line((x_max, p2[1]), (x_max, y_dim + ext_overshoot), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line((x_min, y_dim), (x_max, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+        span = x_max - x_min
+        if span >= 8.0:
+            _draw_dxf_arrow(msp, (x_min, y_dim), (-1.0, 0.0), size=2.2)
+            _draw_dxf_arrow(msp, (x_max, y_dim), (1.0, 0.0), size=2.2)
+            t = msp.add_text(text, dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"})
+            t.set_placement(((x_min + x_max) / 2.0, y_dim + 0.8), align=TextEntityAlignment.BOTTOM_CENTER)
+        else:
+            _draw_dxf_arrow(msp, (x_min, y_dim), (1.0, 0.0), size=2.0)
+            _draw_dxf_arrow(msp, (x_max, y_dim), (-1.0, 0.0), size=2.0)
+            msp.add_line((x_min - 3.5, y_dim), (x_min, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+            msp.add_line((x_max, y_dim), (x_max + 3.5, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+            t = msp.add_text(text, dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"})
+            t.set_placement(((x_min + x_max) / 2.0, y_dim + 0.8), align=TextEntityAlignment.BOTTOM_CENTER)
+
+    else:  # vertical
+        x_dim = p1[0] + dim_offset
+        y_min = min(p1[1], p2[1])
+        y_max = max(p1[1], p2[1])
+
+        ext_overshoot = 2.0 if dim_offset > 0 else -2.0
+        msp.add_line((p1[0], y_min), (x_dim + ext_overshoot, y_min), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line((p2[0], y_max), (x_dim + ext_overshoot, y_max), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line((x_dim, y_min), (x_dim, y_max), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+        v_span = y_max - y_min
+        if v_span >= 8.0:
+            _draw_dxf_arrow(msp, (x_dim, y_min), (0.0, -1.0), size=2.2)
+            _draw_dxf_arrow(msp, (x_dim, y_max), (0.0, 1.0), size=2.2)
+        else:
+            _draw_dxf_arrow(msp, (x_dim, y_min), (0.0, 1.0), size=2.0)
+            _draw_dxf_arrow(msp, (x_dim, y_max), (0.0, -1.0), size=2.0)
+            msp.add_line((x_dim, y_min - 3.5), (x_dim, y_min), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+            msp.add_line((x_dim, y_max), (x_dim, y_max + 3.5), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+        t = msp.add_text(text, dxfattribs={"height": 2.5, "style": "HZ_STYLE", "layer": "6_TEXT", "rotation": 90.0})
+        t.set_placement((x_dim - 1.2, (y_min + y_max) / 2.0), align=TextEntityAlignment.BOTTOM_CENTER)
+
+
+def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
+    """Draw authentic dual-tier Optical Requirements & Tolerances table in top-left."""
+    tbl_w = 95.0
+    col1a_w = 27.0
+    col1b_w = 19.0
+    col2a_w = 27.0
+    col2b_w = 22.0
+
+    row_h = 5.0
+    header_h = 6.0
+    subheader_h = 5.0
+    data_rows_count = 8
+    total_h = header_h + subheader_h + data_rows_count * row_h
+    y_bottom = y_top - total_h
+
+    # Outer boundary
+    msp.add_lwpolyline(
+        [(x_start, y_bottom), (x_start + tbl_w, y_bottom), (x_start + tbl_w, y_top), (x_start, y_top)],
+        close=True,
+        dxfattribs={"layer": "1_TABLE"}
+    )
+
+    # Main Header
+    y_h1 = y_top - header_h
+    msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
+    t_hdr = msp.add_text("OPTICAL REQUIREMENTS & TOLERANCES", dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_hdr.set_placement((x_start + tbl_w / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # Subheader
+    y_h2 = y_h1 - subheader_h
+    msp.add_line((x_start, y_h2), (x_start + tbl_w, y_h2), dxfattribs={"layer": "1_TABLE"})
+    x_mid = x_start + col1a_w + col1b_w
+    msp.add_line((x_mid, y_bottom), (x_mid, y_h1), dxfattribs={"layer": "1_TABLE"})
+
+    t_sub1 = msp.add_text("MATERIAL CHARACTERISTICS", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_sub1.set_placement((x_start + (col1a_w + col1b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    t_sub2 = msp.add_text("PART REQUIREMENTS", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_sub2.set_placement((x_mid + (col2a_w + col2b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # Column dividers
+    x_c1b = x_start + col1a_w
+    x_c2b = x_mid + col2a_w
+    msp.add_line((x_c1b, y_bottom), (x_c1b, y_h2), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_c2b, y_bottom), (x_c2b, y_h2), dxfattribs={"layer": "1_TABLE"})
+
+    ca_str = f"\u03a6 {data.get('ca', 10.0):.1f}"
+    table_rows = [
+        ("Refractive Index △nd", data.get("delta_nd", "2C"), "Fringe Count N", data.get("N", "3")),
+        ("Dispersion △(nF-nC)", data.get("delta_nf_nc", "2C"), "Irregularity △N", data.get("delta_N", "0.3")),
+        ("Optical Homogeneity", data.get("homogeneity", "2"), "Curvature Tol △R", data.get("delta_R", "A")),
+        ("Stress Birefringence", data.get("stress_biref", "1"), "Surface Defect B", data.get("B", "40-20")),
+        ("Optical Striae", data.get("striae", "1"), "Centration χ", data.get("wedge_chi", "< 1'")),
+        ("Bubbles", data.get("bubbles", "1"), "Clear Aperture D0", ca_str),
+        ("Annealing", "Fine", "Ref Focal Length f'", data.get("efl_str", "-")),
+        ("Transmittance", "≥ 99.0%", "Ref Back Focus S'F", data.get("bfl_str", "-")),
+    ]
+
+    cur_y = y_h2
+    for r_idx, (m_lbl, m_val, p_lbl, p_val) in enumerate(table_rows):
+        next_y = cur_y - row_h
+        if r_idx < len(table_rows) - 1:
+            msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
+
+        mid_ry = cur_y - row_h / 2.0
+        t = msp.add_text(m_lbl, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t.set_placement((x_start + col1a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
+        t = msp.add_text(m_val, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t.set_placement((x_c1b + col1b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
+        t = msp.add_text(p_lbl, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t.set_placement((x_mid + col2a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
+        t = msp.add_text(p_val, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t.set_placement((x_c2b + col2b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
+
+        cur_y = next_y
+
+
+def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
+    """Draw authentic RCT-9503 Top-Left BOM Table for Optical System Assembly."""
+    tbl_w = 98.0
+    c1 = x_start + 10.0
+    c2 = x_start + 50.0
+    c3 = x_start + 88.0
+    header_h = 7.0
+    row_h = 6.0
+
+    assembly_elements = data.get("assembly_elements", [])
+    items = []
+    for elem in assembly_elements:
+        e_idx = elem.get("elem_index", 1)
+        comps = elem.get("components", [])
+        mat_str = " / ".join(c.get("material", "") for c in comps)
+        if len(comps) == 1:
+            desc = f"LENS ELEMENT E{e_idx:02d}"
+        elif len(comps) == 2:
+            desc = f"ACHROMATIC DOUBLET E{e_idx:02d}"
+        else:
+            desc = f"TRIPLET GROUP E{e_idx:02d}"
+        items.append((str(e_idx), desc, mat_str, "1"))
+
+    barrel_idx = len(items) + 1
+    ring_idx = len(items) + 2
+    items.append((str(barrel_idx), "LENS BARREL & SPACERS", "6061-T6 AL BLACK", "1"))
+    items.append((str(ring_idx), "SM1 RETAINING RING", "BRASS / BLACK", "1"))
+
+    total_h = header_h + len(items) * row_h
+    y_bottom = y_top - total_h
+
+    msp.add_lwpolyline(
+        [(x_start, y_bottom), (x_start + tbl_w, y_bottom), (x_start + tbl_w, y_top), (x_start, y_top)],
+        close=True,
+        dxfattribs={"layer": "1_TABLE"}
+    )
+
+    msp.add_line((c1, y_bottom), (c1, y_top), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c2, y_bottom), (c2, y_top), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c3, y_bottom), (c3, y_top), dxfattribs={"layer": "1_TABLE"})
+
+    y_h1 = y_top - header_h
+    msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
+
+    msp.add_text("ITEM", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((x_start + c1) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("DESCRIPTION", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((c1 + c2) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("MATERIAL", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((c2 + c3) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("QTY", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        ((c3 + x_start + tbl_w) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    cur_y = y_h1
+    for r_idx, (it, desc, mat, qty) in enumerate(items):
+        next_y = cur_y - row_h
+        if r_idx < len(items) - 1:
+            msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
+
+        mid_ry = cur_y - row_h / 2.0
+        msp.add_text(it, dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            ((x_start + c1) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        msp.add_text(desc, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            ((c1 + c2) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        mat_h = 1.9 if len(mat) <= 20 else 1.5
+        msp.add_text(mat, dxfattribs={"height": mat_h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            ((c2 + c3) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        msp.add_text(qty, dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            ((c3 + x_start + tbl_w) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        cur_y = next_y
+
+
+def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
+    """
+    Export single optical element or cemented component to full absorbed RCT-9503 DXF drawing.
+    """
+    doc, msp = _setup_gbt13323_dxf_document()
+
+    elements = drawing_data.get("elements", [])
+    if not elements:
+        elements = [{"index": 1, "r1": 50.0, "r2": -50.0, "t": 5.0, "k1": 0, "k2": 0, "material": "H-K9L"}]
+
+    od = float(drawing_data.get("od", 25.4))
+    ca = float(drawing_data.get("ca", 22.0))
+    od_tol = drawing_data.get("od_tolerance", "-0.05")
+    half_od = od / 2.0
+    half_ca = ca / 2.0
+    total_thickness = sum(e.get("t", 5.0) for e in elements)
+
+    # Scale calculation for center drawing area
+    axis_y = 115.0
+    available_w = 60.0
+    available_h = 52.0
+
+    scale_raw = min(available_w / max(total_thickness, 5.0), available_h / max(od, 5.0))
+    if scale_raw >= 8.0:
+        scale = 10.0
+    elif scale_raw >= 4.0:
+        scale = 4.0
+    elif scale_raw >= 3.0:
+        scale = 3.0
+    elif scale_raw >= 2.0:
+        scale = 2.0
+    elif scale_raw >= 1.5:
+        scale = 1.5
+    else:
+        scale = 1.0
+
+    drawing_data["drawing_scale"] = f"{int(scale)}:1" if scale == int(scale) else f"{scale:.1f}:1"
+
+    # Draw Top-Left Optical Requirements Table
+    _draw_dxf_optical_table(msp, drawing_data, x_start=15.0, y_top=205.0)
+
+    # Draw Bottom-Right Title Block
+    _draw_dxf_title_block(msp, drawing_data, is_assembly=False)
+
+    # Draw Bottom-Left Notes / Specifications
+    notes_list = [
+        "NOTES/SPECIFICATIONS:",
+        f"1. DESIGN WAVELENGTHS: {drawing_data.get('spectral_range', '785 nm, 810 nm, 850 nm')}",
+        f"2. FOCAL LENGTH: {drawing_data.get('efl_str', '4.75')} mm \u00b11%",
+        f"3. BACK FOCAL LENGTH (REF): {drawing_data.get('bfl_str', '-')} mm",
+        f"4. LENS DIAMETER: \u03a6 {od:.2f} +0.00/{od_tol} mm",
+        f"5. LENS CENTER THICKNESS: {total_thickness:.2f} \u00b10.02 mm",
+        f"6. CLEAR APERTURE: >90% OF LENS DIAMETER (\u03a6 {ca:.1f} mm)",
+        "7. SURFACE QUALITY: 40-20 SCRATCH-DIG",
+        "8. CENTRATION: < 3 arcmin",
+        "9. COATING: BBAR Ravg < 0.5% FROM 780-860nm, 0\u00b0 AOI, ON BOTH OPTICAL SURFACES",
+        "10. PROTECTIVE CHAMFER: 0.3\u00d745\u00b0 AROUND ALL EDGES, NO CHIPPING",
+        "",
+        "FOR INFORMATION ONLY NOT FOR MANUFACTURING PURPOSES"
+    ]
+    _draw_dxf_technical_notes(msp, notes_list, x=15.0, y_top=72.0)
+
+    # Optical Axis (Red Centerline)
+    axis_x0 = 105.0
+    axis_x1 = 215.0
+    msp.add_line((axis_x0, axis_y), (axis_x1, axis_y), dxfattribs={"layer": "3_AXIS", "color": 1})
+
+    x_origin = 155.0 - (total_thickness * scale) / 2.0
+    cur_z = x_origin
+    dim_stagger_idx = 0
+    all_slices = []
+    hatches_angles = [45, 135, 45, 135]
+
+    for idx, elem in enumerate(elements):
+        r1 = elem.get("r1", 0.0)
+        r2 = elem.get("r2", 0.0)
+        k1 = elem.get("k1", 0.0)
+        k2 = elem.get("k2", 0.0)
+        ct = elem.get("t", 5.0)
+        ct_tol = elem.get("t_tolerance", "±0.02")
+
+        z_front = cur_z
+        z_rear = z_front + ct * scale
+
+        n_pts = 35
+        front_pts = []
+        for i in range(n_pts + 1):
+            y = -half_ca + (2 * half_ca * i) / n_pts
+            z = z_front + _calculate_sag(r1, k1, y) * scale
+            front_pts.append((z, axis_y + y * scale))
+
+        rear_pts = []
+        for i in range(n_pts + 1):
+            y = half_ca - (2 * half_ca * i) / n_pts
+            z = z_rear + _calculate_sag(r2, k2, y) * scale
+            rear_pts.append((z, axis_y + y * scale))
+
+        poly = []
+        poly.extend(front_pts)
+        poly.append((front_pts[-1][0], axis_y + half_od * scale))
+        poly.append((rear_pts[0][0], axis_y + half_od * scale))
+        poly.extend(rear_pts)
+        poly.append((rear_pts[-1][0], axis_y - half_od * scale))
+        poly.append((front_pts[0][0], axis_y - half_od * scale))
+
+        msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": "2_CONTOUR"})
+        try:
+            h = msp.add_hatch(color=4, dxfattribs={"layer": "4_HATCH"})
+            h.set_pattern_fill("ANSI31", scale=0.7, angle=hatches_angles[idx % len(hatches_angles)])
+            h.paths.add_polyline_path(poly, is_closed=True)
+        except Exception:
+            pass
+
+        if len(elements) > 1:
+            mid_z = (z_front + z_rear) / 2.0
+            balloon_y = axis_y + half_od * scale + 10.0 + idx * 8.0
+            _draw_dxf_balloon(msp, (mid_z, balloon_y), elem.get("index", idx + 1), (mid_z, axis_y + half_od * scale * 0.4))
+
+        dim_y_offset = -half_od * scale - 7.0 - (dim_stagger_idx % 3) * 6.0
+        dim_stagger_idx += 1
+        dim_txt = f"{ct:.2f} {ct_tol}" if ct_tol else f"{ct:.2f}"
+        _draw_dxf_linear_dimension(msp, (z_front, axis_y), (z_rear, axis_y), dim_y_offset, dim_txt, orientation="horizontal")
+
+        all_slices.append((z_front, z_rear, front_pts, rear_pts, r1, r2, ct))
+        cur_z = z_rear
+
+    if len(elements) > 1:
+        tot_z0 = all_slices[0][0]
+        tot_z1 = all_slices[-1][1]
+        tot_dim_y = -half_od * scale - 7.0 - min(len(elements), 3) * 6.0 - 2.5
+        tot_txt = f"{total_thickness:.2f} (REF)"
+        _draw_dxf_linear_dimension(msp, (tot_z0, axis_y), (tot_z1, axis_y), tot_dim_y, tot_txt, orientation="horizontal")
+
+    min_x = min(pt[0] for s in all_slices for pt in s[2])
+    max_x = max(pt[0] for s in all_slices for pt in s[3])
+    right_x = max_x
+    od_txt = f"\u03a6 {od:.2f} {od_tol}" if od_tol else f"\u03a6 {od:.2f}"
+    dim_offset_x = max(34.0, half_od * scale * 0.4 + 14.0)
+    _draw_dxf_linear_dimension(msp, (right_x, axis_y - half_od * scale), (right_x, axis_y + half_od * scale), dim_offset_x, od_txt, orientation="vertical")
+
+    r1_val = elements[0].get("r1", 0.0)
+    front_tip = all_slices[0][2][int(len(all_slices[0][2]) * 0.75)]
+    sag1 = abs(_calculate_sag(r1_val, 0, half_ca))
+    r1_txt = f"R {r1_val:.3f}" if r1_val != 0 and abs(r1_val) < 1e8 else "R \u221e PLANO"
+    sag1_txt = f"(S={sag1:.3f})" if sag1 > 0.005 else None
+    front_dx = max(10.0, (front_tip[0] - min_x) + 8.0)
+    r1_stem_len = front_dx / 0.707
+    _draw_dxf_leader(msp, front_tip, 135.0, r1_stem_len, 12.0, r1_txt, sag1_txt)
+
+    if len(elements) == 2:
+        r_mid = elements[0].get("r2", 0.0)
+        cemented_pts = all_slices[0][3]
+        mid_tip = cemented_pts[int(len(cemented_pts) * 0.75)]
+        sag_m = abs(_calculate_sag(r_mid, 0, half_ca))
+        r_mid_txt = f"R {r_mid:.3f}" if r_mid != 0 and abs(r_mid) < 1e8 else "R \u221e PLANO"
+        s_mid_txt = f"(S={sag_m:.3f})" if sag_m > 0.005 else None
+        mid_dx = max(12.0, (mid_tip[0] - min_x) + 8.0)
+        mid_stem_len = mid_dx / 0.866
+        _draw_dxf_leader(msp, mid_tip, -150.0, mid_stem_len, 12.0, r_mid_txt, s_mid_txt)
+    elif len(elements) == 3:
+        r_m1 = elements[0].get("r2", 0.0)
+        c_pts1 = all_slices[0][3]
+        mid_tip1 = c_pts1[int(len(c_pts1) * 0.75)]
+        sag_m1 = abs(_calculate_sag(r_m1, 0, half_ca))
+        r_m1_txt = f"R {r_m1:.3f}" if r_m1 != 0 and abs(r_m1) < 1e8 else "R \u221e PLANO"
+        s_m1_txt = f"(S={sag_m1:.3f})" if sag_m1 > 0.005 else None
+        m1_dx = max(12.0, (mid_tip1[0] - min_x) + 8.0)
+        _draw_dxf_leader(msp, mid_tip1, -155.0, m1_dx / 0.90, 12.0, r_m1_txt, s_m1_txt)
+
+        r_m2 = elements[1].get("r2", 0.0)
+        c_pts2 = all_slices[1][3]
+        mid_tip2 = c_pts2[int(len(c_pts2) * 0.75)]
+        sag_m2 = abs(_calculate_sag(r_m2, 0, half_ca))
+        r_m2_txt = f"R {r_m2:.3f}" if r_m2 != 0 and abs(r_m2) < 1e8 else "R \u221e PLANO"
+        s_m2_txt = f"(S={sag_m2:.3f})" if sag_m2 > 0.005 else None
+        _draw_dxf_leader(msp, mid_tip2, -35.0, 12.0, 12.0, r_m2_txt, s_m2_txt)
+
+    r2_val = elements[-1].get("r2", 0.0)
+    rear_pts = all_slices[-1][3]
+    rear_tip = rear_pts[int(len(rear_pts) * 0.25)]
+    sag2 = abs(_calculate_sag(r2_val, 0, half_ca))
+    r2_txt = f"R {r2_val:.3f}" if r2_val != 0 and abs(r2_val) < 1e8 else "R \u221e PLANO"
+    sag2_txt = f"(S={sag2:.3f})" if sag2 > 0.005 else None
+    rear_dx = max(8.0, (max_x - rear_tip[0]) + 6.0)
+    _draw_dxf_leader(msp, rear_tip, 32.0, rear_dx / 0.848, 10.0, r2_txt, sag2_txt)
+
+    chamfer_tip = (max_x, axis_y + half_od * scale)
+    _draw_dxf_leader(msp, chamfer_tip, 55.0, 7.0, 9.0, "0.3\u00d745\u00b0", None)
+
+    t_rim_ra = msp.add_text("1.6 / ▽", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_rim_ra.set_placement(((all_slices[0][0] + all_slices[-1][1]) / 2.0, axis_y + half_od * scale + 1.2), align=TextEntityAlignment.BOTTOM_CENTER)
+
+    doc.saveas(filepath)
+
+
+def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
+    """
+    Export optical system assembly drawing to authentic absorbed RCT-9503 DXF.
+    """
+    doc, msp = _setup_gbt13323_dxf_document()
+
+    assembly_elements = drawing_data.get("assembly_elements", [])
+    if not assembly_elements:
+        doc.saveas(filepath)
+        return
+
+    max_od = max(e.get("od", 20.0) for e in assembly_elements)
+    total_track = sum(e.get("ct", 5.0) + e.get("air_after", 0.0) for e in assembly_elements)
+
+    # Scale calculation
+    axis_y = 115.0
+    scale = min(150.0 / max(total_track, 20.0), 2.5)
+    if scale >= 2.0:
+        scale = 2.0
+    elif scale >= 1.5:
+        scale = 1.5
+    else:
+        scale = 1.0
+
+    drawing_data["drawing_scale"] = f"{int(scale)}:1" if scale == int(scale) else f"{scale:.1f}:1"
+
+    # Draw Top-Left BOM Table
+    _draw_dxf_assembly_table(msp, drawing_data, x_start=15.0, y_top=205.0)
+
+    # Draw Bottom-Right Title Block
+    _draw_dxf_title_block(msp, drawing_data, is_assembly=True)
+
+    # Draw Bottom-Left Notes
+    notes_list = [
+        "NOTES/SPECIFICATIONS:",
+        f"1. DESIGN WAVELENGTHS: {drawing_data.get('spectral_range', '785 ~ 850 nm')}",
+        f"2. EFFECTIVE FOCAL LENGTH: {drawing_data.get('efl_str', '4.75')} mm \u00b11%",
+        f"3. NUMERICAL APERTURE: NA={drawing_data.get('na_str', '0.90')} (WATER IMMERSION n=1.33)",
+        f"4. WORKING DISTANCE: {drawing_data.get('wd_str', '0.78')} mm",
+        f"5. FIELD OF VIEW: {drawing_data.get('fov_str', '\u03a6 0.71 mm')}",
+        f"6. TOTAL OPTICAL TRACK: {total_track:.2f} mm",
+        "7. ASSEMBLY ALIGNMENT: ELEMENT CENTERING ERROR \u2264 0.003 mm",
+        "8. SPACING RINGS: FLATNESS & PARALLELISM \u2264 0.002 mm",
+        "9. OPERATING TEMPERATURE: 20\u2103 \u00b1 2\u2103",
+        "",
+        "FOR INFORMATION ONLY NOT FOR MANUFACTURING PURPOSES"
+    ]
+    _draw_dxf_technical_notes(msp, notes_list, x=15.0, y_top=72.0)
+
+    # Horizontal placement: centered across middle area
+    x_origin = 195.0 - (total_track * scale) / 2.0
+    axis_x0 = max(115.0, x_origin - 12.0)
+    axis_x1 = min(285.0, x_origin + total_track * scale + 15.0)
+    msp.add_line((axis_x0, axis_y), (axis_x1, axis_y), dxfattribs={"layer": "3_AXIS", "color": 1})
+
+    cur_z = x_origin
+    hatches_angles = [45, 135, 45, 135]
+
+    for elem_idx, elem in enumerate(assembly_elements):
+        comps = elem.get("components", [])
+        elem_od = float(elem.get("od", max_od))
+        half_od = elem_od / 2.0
+        air_after = elem.get("air_after", 0.0)
+
+        comp_cur_z = cur_z
+        elem_start_z = cur_z
+        for c_idx, comp in enumerate(comps):
+            r1 = comp.get("r1", 0.0)
+            r2 = comp.get("r2", 0.0)
+            k1 = comp.get("k1", 0.0)
+            k2 = comp.get("k2", 0.0)
+            ct = comp.get("ct", 5.0)
+            ca = comp.get("ca", elem_od - 2.0)
+            half_ca = ca / 2.0
+
+            z_front = comp_cur_z
+            z_rear = z_front + ct * scale
+
+            n_pts = 30
+            front_pts = []
+            for i in range(n_pts + 1):
+                y = -half_ca + (2 * half_ca * i) / n_pts
+                z = z_front + _calculate_sag(r1, k1, y) * scale
+                front_pts.append((z, axis_y + y * scale))
+
+            rear_pts = []
+            for i in range(n_pts + 1):
+                y = half_ca - (2 * half_ca * i) / n_pts
+                z = z_rear + _calculate_sag(r2, k2, y) * scale
+                rear_pts.append((z, axis_y + y * scale))
+
+            poly = []
+            poly.extend(front_pts)
+            poly.append((front_pts[-1][0], axis_y + half_od * scale))
+            poly.append((rear_pts[0][0], axis_y + half_od * scale))
+            poly.extend(rear_pts)
+            poly.append((rear_pts[-1][0], axis_y - half_od * scale))
+            poly.append((front_pts[0][0], axis_y - half_od * scale))
+
+            msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": "2_CONTOUR"})
+            try:
+                h = msp.add_hatch(color=4, dxfattribs={"layer": "4_HATCH"})
+                h.set_pattern_fill("ANSI31", scale=0.7, angle=hatches_angles[c_idx % len(hatches_angles)])
+                h.paths.add_polyline_path(poly, is_closed=True)
+            except Exception:
+                pass
+
+            comp_cur_z = z_rear
+
+        elem_end_z = comp_cur_z
+
+        balloon_y = axis_y + half_od * scale + 8.0 + (elem_idx % 2) * 7.0
+        _draw_dxf_balloon(msp, ((elem_start_z + elem_end_z) / 2.0, balloon_y), elem.get("elem_index", elem_idx + 1), ((elem_start_z + elem_end_z) / 2.0, axis_y + half_od * scale))
+
+        if air_after > 0.05 and elem_idx < len(assembly_elements) - 1:
+            next_z = elem_end_z + air_after * scale
+            gap_txt = f"{air_after:.2f}"
+            gap_y_offset = -half_od * scale - 6.0 - (elem_idx % 2) * 6.5
+            _draw_dxf_linear_dimension(msp, (elem_end_z, axis_y), (next_z, axis_y), gap_y_offset, gap_txt, orientation="horizontal")
+
+        cur_z = elem_end_z + air_after * scale
+
+    tot_z0 = x_origin
+    tot_z1 = cur_z
+    tot_dim_y = -max_od * scale / 2.0 - 22.0
+    tot_txt = f"TOTAL TRACK {total_track:.2f}"
+    _draw_dxf_linear_dimension(msp, (tot_z0, axis_y), (tot_z1, axis_y), tot_dim_y, tot_txt, orientation="horizontal")
+
+    doc.saveas(filepath)
+
+
+
 def zemax_export_optical_drawing(
     element_index: Optional[Union[int, str]] = None,
     output_dir: Optional[str] = None,
@@ -1116,6 +2028,7 @@ def zemax_export_optical_drawing(
     iso_tolerance_grade: str = "Precision",
     export_assembly: bool = True,
     generate_2d_plot: bool = True,
+    export_dxf: bool = True,
 ) -> Dict[str, Any]:
     """
     Generate manufacturing-compliant optical engineering drawings according to Chinese National Standards
@@ -1335,7 +2248,20 @@ def zemax_export_optical_drawing(
         }
         _write_element_markdown_drawing(iso_spec, iso_md_filepath)
 
-        if generate_2d_plot:
+        dxf_filename = f"drawing_element_{e_idx}.dxf"
+        dxf_filepath = os.path.join(output_dir, dxf_filename)
+        png_rendered = False
+
+        if export_dxf and EZDXF_AVAILABLE:
+            try:
+                _export_gbt13323_element_dxf(dwg_data, dxf_filepath)
+                dwg_data["dxf_drawing_file"] = dxf_filepath
+                if generate_2d_plot:
+                    png_rendered = _render_dxf_to_png(dxf_filepath, png_filepath)
+            except Exception as e:
+                dwg_data["dxf_error"] = str(e)
+
+        if generate_2d_plot and not png_rendered:
             _render_gbt13323_element_drawing(dwg_data, png_filepath)
 
         dwg_data["gbt_markdown_file"] = gbt_md_filepath
@@ -1443,8 +2369,8 @@ def zemax_export_optical_drawing(
             "na_str": na_str,
             "efl_str": efl_str,
             "wd_str": wd_str,
-            "fov_str": "Ø 0.71 mm",
-            "pupil_str": "Ø 7.20 mm",
+            "fov_str": "\u03a6 0.71 mm",
+            "pupil_str": "\u03a6 7.20 mm",
             "immersion_str": "水 (n=1.33)",
             "coverglass_str": "0.17 mm",
             "rms_wavefront": "< 0.05 λ",
@@ -1466,12 +2392,25 @@ def zemax_export_optical_drawing(
         asm_md_path = os.path.join(output_dir, "drawing_assembly.md")
 
         _write_assembly_markdown_drawing(asm_dwg_data, asm_md_path)
-        if generate_2d_plot:
+        asm_dxf_path = os.path.join(output_dir, "drawing_assembly.dxf")
+        asm_png_rendered = False
+
+        if export_dxf and EZDXF_AVAILABLE:
+            try:
+                _export_gbt13323_assembly_dxf(asm_dwg_data, asm_dxf_path)
+                if generate_2d_plot:
+                    asm_png_rendered = _render_dxf_to_png(asm_dxf_path, asm_png_path)
+            except Exception as e:
+                asm_dxf_path = f"error: {str(e)}"
+
+        if generate_2d_plot and not asm_png_rendered:
             _render_gbt13323_assembly_drawing(asm_dwg_data, asm_png_path)
+
 
         assembly_drawing_info = {
             "assembly_markdown_file": asm_md_path,
             "assembly_image_file": asm_png_path,
+            "assembly_dxf_file": asm_dxf_path,
             "total_track_length": total_track,
             "elements_count": len(assembly_elements),
         }

@@ -68,10 +68,10 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
    - **Standard 5-Stage Modular Workflow**: Paraxial layout & Lagrange invariant partitioning $\to$ Aberration budget RSS allocation ($\sigma_{\text{obj}} \le 0.045\lambda$, $\sigma_{\text{scan}} \le 0.035\lambda$, $\sigma_{\text{tube}} \le 0.030\lambda$) $\to$ Sub-module offline isolated design $\to$ Paraxial lens isolation testing $\to$ Progressive 4-stage release (100% freeze $\to$ tune relay air spaces $\to$ damped $\pm 5\%$ curvature fine-tuning $\to$ wavefront lock).
    - **Operand Iron Curtain (Anti-Ghost Compensation)**: Imposes strict barrier operands: `EFLA` (subgroup focal length pinning), `REAB` / `RAED` (exit beam collimation $\theta = 0.0^\circ$), `REAY` (entrance/exit pupil beam size & chief ray height at pupil = 0), `RAID` (intermediate image CRA $\le 0.5^\circ$), `MXCA` ($\le 12\,\text{mm}$ intra-module air gap), `MNEG` ($\ge 1.2\,\text{mm}$ glass edge), and `MNEA` ($\ge 0.8\,\text{mm}$ air edge clearance).
    - **DFM & Drop-in Barrel Assembly**: Single-barrel aspect ratio $L/D \le 2.0 \sim 2.5:1$, unified element diameters, and flat mounting lands ($W \ge 0.8 \sim 1.5\,\text{mm}$ with $0.3\,\text{mm}\times 45^\circ$ chamfer) for drop-in assembly without optical surface line contact.
-7. **Native 2D CAD Vector Drawings (RCT-9503 Standard / ezdxf), 3D CAD & Optomechanical Linkage**:
+7. **Native 2D CAD Vector Drawings (GB/T 13323 & ISO Standards / ezdxf), 3D CAD & Optomechanical Linkage**:
    - **Native Editable 2D CAD Vector Drawings (`zemax_export_optical_drawing`)**: 
      - **Dual Deliverables**: Directly outputs native, 100% editable AutoCAD R2010 `.dxf` vector files along with 300 DPI pixel-perfect vector-rasterized `.png` previews and Markdown manufacturing specifications.
-     - **Absorbed Industrial CAD Template (`RCT-9503`)**: Fully incorporates authentic production drawing architecture—standard A4 landscape format with centering marks, authentic 4-tier title block, third-angle projection cone symbol, and upper-right surface roughness block (`其余 1.6 / ∿`).
+     - **Industrial Production CAD Template Architecture**: Fully incorporates authentic production drawing architecture—standard A4 landscape format with centering marks, authentic 4-tier title block, third-angle projection cone symbol, and upper-right surface roughness block (`其余 1.6 / ∿`).
      - **Negative Constraint Strictly Enforced**: Completely omits company/unit name (`去掉单位名称`) for general manufacturing and confidentiality compliance.
      - **Zero Text Overflow & Scientific Layout**: Left-hand dual-tier optical specification table (material characteristics & part requirements) re-engineered with balanced column widths (`38mm / 12mm / 38mm / 16mm`) and text width factor (`0.82`), completely preventing long string overflow across borders and dividing lines. Assembly drawings feature dynamic BOM tables with adaptive font scaling.
      - **Lightweight Standalone Architecture**: 2D drawings are generated purely via Python (`ezdxf` + `matplotlib`), requiring **zero SolidWorks installation or runtime**, producing drawings in milliseconds.
@@ -256,10 +256,10 @@ pip install -r requirements.txt
    - **模块化标准化五阶段闭环流程**：顶层高斯光学计算与拉格朗日不变量切分 $\to$ 像差预算方和根（RSS）分解 $\to$ 子模块独立离线自洽设计 $\to$ 理想近轴透镜隔离替代测试 $\to$ 阶梯式四步联调释放（全变量冻结 $\to$ 仅释放模块机械间隙消除初级离焦 $\to$ 透镜曲率 $\pm 5\%$ 阻尼微调 $\to$ RMS Wavefront 锁定公差钝化）。
    - **评价函数“铁幕硬屏障”防代偿机制**：预埋 `EFLA`（锁死子模块独立焦距）、`REAB` / `RAED`（锁定平行光出射角）、`REAY`（锁定物镜光瞳口径与边缘视场主光线归零）、`RAID`（锁定中间像面主光线角度）、`MXCA`（内部气隙 $\le 12.0\,\text{mm}$）、`MNEG`（玻璃边缘 $\ge 1.2\,\text{mm}$）与 `MNEA`（空气边缘净空 $\ge 0.8\,\text{mm}$），杜绝跨模块幽灵代偿与优化器逃逸。
    - **DFM 面向制造与机械装配纪律**：单镜筒深径比控制在 $L/D \le 2.0 \sim 2.5:1$；镜片外径模数化统一；镜片边缘预留宽平直平台（Flat Land, $W \ge 0.8 \sim 1.5\,\text{mm}$ 并带 $0.3\,\text{mm}\times 45^\circ$ 倒角），实现精密落入式装配（Drop-in Assembly），严禁曲面边缘线接触。
-7. **原生 2D CAD 矢量制图（RCT-9503 工业标准 / ezdxf 引擎）、3D CAD 与光机工程协同**：
+7. **原生 2D CAD 矢量制图（GB/T 13323 工业标准 / ezdxf 引擎）、3D CAD 与光机工程协同**：
    - **原生可编辑 2D CAD 矢量图样输出 (`zemax_export_optical_drawing`)**：
      - **双轨同步交付**：直接生成原生可编辑的 AutoCAD R2010 格式 `.dxf` 矢量图样，同时提供 300 DPI 矢量光栅化 `.png` 高清预览与 Markdown 制造规范书，支持在 AutoCAD、中望CAD、SolidWorks 中双击自由编辑图层、文字与样条曲线。
-     - **深度吸收 `RCT-9503` 工业级 CAD 图纸模板**：完整集成 A4 横向国标外框与对中标记、4 阶国际/国标工业级通用标题栏、标准第三视角圆台投影符号（红中心线）、右上角表面粗糙度统揽（`其余 1.6 / ∿`）。
+     - **工业级标准 CAD 图纸架构**：完整集成 A4 横向国标外框与对中标记、4 阶国际/国标工业级通用标题栏、标准第三视角圆台投影符号（红中心线）、右上角表面粗糙度统揽（`其余 1.6 / ∿`）。
      - **严格执行“去掉单位名称”**：标题栏坚决剔除任何公司/单位名称块，仅保留设计/制图/审核等技术参数与签章栏。
      - **无文字溢出与科学排版**：左上角光学特性双联表（材料特性与零件要求）采用科学平衡列宽（`38mm / 12mm / 38mm / 16mm`）与 CAD 文本宽度因子（`width: 0.82`），彻底根治长英文字符穿透外框与切断分割线的痛点；装配图自适应 BOM 物料清单支持长材质牌号自适应字号。
      - **纯代码独立运行架构**：2D 工程制图由纯 Python 矢量引擎（`ezdxf`）在内存毫秒级直接生成，**100% 独立于 SolidWorks，不启动亦无需安装 SolidWorks**。

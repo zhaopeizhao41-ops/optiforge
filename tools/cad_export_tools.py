@@ -1146,7 +1146,7 @@ def _write_element_markdown_drawing(spec: Dict[str, Any], filepath: str):
 
 
 def _setup_gbt13323_dxf_document() -> Tuple[Any, Any]:
-    """Create an authentic absorbed RCT-9503 / ISO A4 Landscape (297x210mm) DXF document."""
+    """Create a standard GB/T 13323 / ISO A4 Landscape (297x210mm) DXF document."""
     doc = ezdxf.new("R2010")
     doc.units = units.MM
 
@@ -1203,7 +1203,7 @@ def _setup_gbt13323_dxf_document() -> Tuple[Any, Any]:
 
 def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = False):
     """
-    Draw authentic absorbed RCT-9503 Title Block:
+    Draw standard industrial GB/T 13323 & ISO 10110 Title Block:
     - Dimensions: X from 182.0 to 292.0 (width 110mm), Y from 5.0 to 49.0 (height 44mm).
     - 4 equal tiers (11.0mm each).
     - Left sub-block (46mm width, X: 182 to 228):
@@ -1392,7 +1392,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
 
 
 def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 15.0, y_top: float = 72.0):
-    """Draw authentic absorbed RCT-9503 Notes/Specifications block in bottom-left."""
+    """Draw standard GB/T 13323 Notes/Specifications block in bottom-left."""
     cur_y = y_top
     for idx, note in enumerate(notes):
         if idx == 0:
@@ -1617,7 +1617,7 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.
 
 
 def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
-    """Draw authentic RCT-9503 Top-Left BOM Table for Optical System Assembly."""
+    """Draw standard Top-Left BOM Table for Optical System Assembly."""
     tbl_w = 98.0
     c1 = x_start + 10.0
     c2 = x_start + 50.0
@@ -1699,7 +1699,7 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15
 
 def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     """
-    Export single optical element or cemented component to full absorbed RCT-9503 DXF drawing.
+    Export single optical element or cemented component to standard GB/T 13323 DXF drawing.
     """
     doc, msp = _setup_gbt13323_dxf_document()
 
@@ -1894,7 +1894,7 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
 
 def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
     """
-    Export optical system assembly drawing to authentic absorbed RCT-9503 DXF.
+    Export optical system assembly drawing to standard GB/T 13323 DXF.
     """
     doc, msp = _setup_gbt13323_dxf_document()
 

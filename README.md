@@ -68,10 +68,15 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
    - **Standard 5-Stage Modular Workflow**: Paraxial layout & Lagrange invariant partitioning $\to$ Aberration budget RSS allocation ($\sigma_{\text{obj}} \le 0.045\lambda$, $\sigma_{\text{scan}} \le 0.035\lambda$, $\sigma_{\text{tube}} \le 0.030\lambda$) $\to$ Sub-module offline isolated design $\to$ Paraxial lens isolation testing $\to$ Progressive 4-stage release (100% freeze $\to$ tune relay air spaces $\to$ damped $\pm 5\%$ curvature fine-tuning $\to$ wavefront lock).
    - **Operand Iron Curtain (Anti-Ghost Compensation)**: Imposes strict barrier operands: `EFLA` (subgroup focal length pinning), `REAB` / `RAED` (exit beam collimation $\theta = 0.0^\circ$), `REAY` (entrance/exit pupil beam size & chief ray height at pupil = 0), `RAID` (intermediate image CRA $\le 0.5^\circ$), `MXCA` ($\le 12\,\text{mm}$ intra-module air gap), `MNEG` ($\ge 1.2\,\text{mm}$ glass edge), and `MNEA` ($\ge 0.8\,\text{mm}$ air edge clearance).
    - **DFM & Drop-in Barrel Assembly**: Single-barrel aspect ratio $L/D \le 2.0 \sim 2.5:1$, unified element diameters, and flat mounting lands ($W \ge 0.8 \sim 1.5\,\text{mm}$ with $0.3\,\text{mm}\times 45^\circ$ chamfer) for drop-in assembly without optical surface line contact.
-7. **Opto-Mechanical Linkage, 3D CAD & GB/T 13323-2009 / ISO 10110 Drawings (SolidWorks MCP Integration)**:
-   - **Direct 3D CAD Export (`zemax_export_cad`)**: Headless export of precise 3D solid STEP, IGES, SAT, and STL geometry with solid volumes and optional ray path bundles.
-   - **National Standard GB/T 13323-2009 & ISO 10110 Optical Manufacturing Drawings (`zemax_export_optical_drawing`)**: Automatically generates standardized optical manufacturing drawings conforming to Chinese National Standards (**GB/T 13323-2009《光学制图》**, **GB/T 903-2019《无色光学玻璃》**, **GB/T 2831-2009《光学零件面形偏差》**, **GB/T 1185-2006《表面疵病》**) and ISO 10110. Features A4 landscape border with centering ticks, administrative left-margin filing boxes, top-left optical characteristics/tolerance tables, fully standardized title block with **company/unit name strictly omitted (`去掉单位名称`)**, linear dimensions without redundant "mm" suffixes, 45°/135° alternating hatching for multiplets, sagitta reference values, surface roughness markings, protective chamfers, and automated system assembly drawings with spacer air gap dimensions.
-   - **SolidWorks MCP Bridge (`zemax_export_prescription_for_cad`)**: Converts Zemax prescriptions into clean JSON for SolidWorks MCP (`build_system_from_prescription`), calculating spacer rings (`create_3d_lens_spacer`), retaining ring (`create_3d_retaining_ring`), and stepped lens barrels (`create_3d_lens_barrel`).
+7. **Native 2D CAD Vector Drawings (RCT-9503 Standard / ezdxf), 3D CAD & Optomechanical Linkage**:
+   - **Native Editable 2D CAD Vector Drawings (`zemax_export_optical_drawing`)**: 
+     - **Dual Deliverables**: Directly outputs native, 100% editable AutoCAD R2010 `.dxf` vector files along with 300 DPI pixel-perfect vector-rasterized `.png` previews and Markdown manufacturing specifications.
+     - **Absorbed Industrial CAD Template (`RCT-9503`)**: Fully incorporates authentic production drawing architecture—standard A4 landscape format with centering marks, authentic 4-tier title block, third-angle projection cone symbol, and upper-right surface roughness block (`其余 1.6 / ∿`).
+     - **Negative Constraint Strictly Enforced**: Completely omits company/unit name (`去掉单位名称`) for general manufacturing and confidentiality compliance.
+     - **Zero Text Overflow & Scientific Layout**: Left-hand dual-tier optical specification table (material characteristics & part requirements) re-engineered with balanced column widths (`38mm / 12mm / 38mm / 16mm`) and text width factor (`0.82`), completely preventing long string overflow across borders and dividing lines. Assembly drawings feature dynamic BOM tables with adaptive font scaling.
+     - **Lightweight Standalone Architecture**: 2D drawings are generated purely via Python (`ezdxf` + `matplotlib`), requiring **zero SolidWorks installation or runtime**, producing drawings in milliseconds.
+   - **Direct 3D CAD Export (`zemax_export_cad`)**: Headless export of precise 3D solid STEP, IGES, SAT, and STL geometry with solid volumes and optional ray path bundles directly from the Zemax engine.
+   - **SolidWorks MCP Optomechanical Bridge (`zemax_export_prescription_for_cad`)**: Converts Zemax prescriptions into clean JSON payloads for the downstream SolidWorks MCP (`build_system_from_prescription`), calculating spacer rings (`create_3d_lens_spacer`), retaining rings (`create_3d_retaining_ring`), and stepped barrels (`create_3d_lens_barrel`) whenever 3D mechanical enclosure modeling is required.
 8. **Project Workspace Directory Isolation**:
    - Eliminates cluttered root dumps by isolating each design project into dedicated folders (`output/<project_name>/`).
    - Standard subdirectories: `cad/` (3D STEP/IGES/STL bodies), `drawings/` (ISO 10110 specifications & 2D cross-section PNGs), `optomech/` (SolidWorks bridge JSON payloads), and `reports/` (proposals, MTF, spot charts).
@@ -168,7 +173,7 @@ Applying the modular protocol and **Stagnation Guard**, the AI agent autonomousl
 - Windows 10/11 x64
 - Ansys Zemax OpticStudio 2021+ (Tested on 2024 R1)
 - Python 3.10+
-- Dependencies: `pythonnet>=3.0.0`, `fastmcp>=0.1.0`, `matplotlib>=3.8.0`, `pydantic>=2.0.0`
+- Dependencies: `pythonnet>=3.0.0`, `fastmcp>=0.1.0`, `matplotlib>=3.8.0`, `ezdxf>=1.1.0`, `pydantic>=2.0.0`
 
 #### Installation
 ```powershell
@@ -251,10 +256,15 @@ pip install -r requirements.txt
    - **模块化标准化五阶段闭环流程**：顶层高斯光学计算与拉格朗日不变量切分 $\to$ 像差预算方和根（RSS）分解 $\to$ 子模块独立离线自洽设计 $\to$ 理想近轴透镜隔离替代测试 $\to$ 阶梯式四步联调释放（全变量冻结 $\to$ 仅释放模块机械间隙消除初级离焦 $\to$ 透镜曲率 $\pm 5\%$ 阻尼微调 $\to$ RMS Wavefront 锁定公差钝化）。
    - **评价函数“铁幕硬屏障”防代偿机制**：预埋 `EFLA`（锁死子模块独立焦距）、`REAB` / `RAED`（锁定平行光出射角）、`REAY`（锁定物镜光瞳口径与边缘视场主光线归零）、`RAID`（锁定中间像面主光线角度）、`MXCA`（内部气隙 $\le 12.0\,\text{mm}$）、`MNEG`（玻璃边缘 $\ge 1.2\,\text{mm}$）与 `MNEA`（空气边缘净空 $\ge 0.8\,\text{mm}$），杜绝跨模块幽灵代偿与优化器逃逸。
    - **DFM 面向制造与机械装配纪律**：单镜筒深径比控制在 $L/D \le 2.0 \sim 2.5:1$；镜片外径模数化统一；镜片边缘预留宽平直平台（Flat Land, $W \ge 0.8 \sim 1.5\,\text{mm}$ 并带 $0.3\,\text{mm}\times 45^\circ$ 倒角），实现精密落入式装配（Drop-in Assembly），严禁曲面边缘线接触。
-7. **光机联动、原生 3D CAD 与 GB/T 13323-2009 / ISO 10110 国家标准光学加工图纸导出（SolidWorks MCP 深度协同）**：
-   - **原生 3D CAD 实体导出 (`zemax_export_cad`)**：支持无头静默导出 STEP (AP203/AP214/AP242)、IGES、SAT 与 STL 实体几何模型，可按需附带全光路真实光线追迹实体样条线。
-   - **GB/T 13323-2009 国家标准《光学制图》与 ISO 10110 光学加工图纸 (`zemax_export_optical_drawing`)**：全自动逐片生成符合中国国家标准（**GB/T 13323-2009《光学制图》**、**GB/T 903-2019《无色光学玻璃》**、**GB/T 2831-2009《光学零件面形偏差》**、**GB/T 1185-2006《表面疵病》**）与 ISO 10110 的工程图纸。具有 A4 横版国标粗实线图框与四边对中标记、左侧边栏管理检索栏（介质编号/底图总号等）；左上角标准化双联表（材料特性 $\Delta n_d$、$\Delta(n_F-n_C)$、均匀性、双折射、吸收系数、条纹度、气泡度及零件要求 $N$、$\Delta N$、$\Delta R$、表面疵病 $B$、偏角差 $\chi$）；**规范化标题栏（严格去除单位名称，符合通用制造与保密规范）**；尺寸标注严格遵循国标去除冗余 "mm" 后缀；多胶合透镜自动采用 $45^\circ/135^\circ$ 交替剖面线与气球标；清晰绘制平直安装台阶（Flat Land）、保护倒角（`0.3×45°`）、表面粗糙度（`1.6 / ▽` 与 `其余 0.05 / ▽`）及光学系统总装配合图（自动标注焦距、波长、NA、工作距离、各镜组厚度与金属隔圈空气间隙尺寸）。
-   - **SolidWorks MCP 处方中继转换器 (`zemax_export_prescription_for_cad`)**：将 Zemax LDE 转换为符合 SolidWorks MCP (`build_system_from_prescription`) 严格 JSON Schema 的无污染规范数据，并自动计算全系统机械隔圈（`create_3d_lens_spacer`）、前端压圈（`create_3d_retaining_ring`）及阶梯沉孔镜筒（`create_3d_lens_barrel`）尺寸，一键触发 SolidWorks 3D 光机装配建模与间隙干涉碰撞审计（`check_assembly_clearance`）。
+7. **原生 2D CAD 矢量制图（RCT-9503 工业标准 / ezdxf 引擎）、3D CAD 与光机工程协同**：
+   - **原生可编辑 2D CAD 矢量图样输出 (`zemax_export_optical_drawing`)**：
+     - **双轨同步交付**：直接生成原生可编辑的 AutoCAD R2010 格式 `.dxf` 矢量图样，同时提供 300 DPI 矢量光栅化 `.png` 高清预览与 Markdown 制造规范书，支持在 AutoCAD、中望CAD、SolidWorks 中双击自由编辑图层、文字与样条曲线。
+     - **深度吸收 `RCT-9503` 工业级 CAD 图纸模板**：完整集成 A4 横向国标外框与对中标记、4 阶国际/国标工业级通用标题栏、标准第三视角圆台投影符号（红中心线）、右上角表面粗糙度统揽（`其余 1.6 / ∿`）。
+     - **严格执行“去掉单位名称”**：标题栏坚决剔除任何公司/单位名称块，仅保留设计/制图/审核等技术参数与签章栏。
+     - **无文字溢出与科学排版**：左上角光学特性双联表（材料特性与零件要求）采用科学平衡列宽（`38mm / 12mm / 38mm / 16mm`）与 CAD 文本宽度因子（`width: 0.82`），彻底根治长英文字符穿透外框与切断分割线的痛点；装配图自适应 BOM 物料清单支持长材质牌号自适应字号。
+     - **纯代码独立运行架构**：2D 工程制图由纯 Python 矢量引擎（`ezdxf`）在内存毫秒级直接生成，**100% 独立于 SolidWorks，不启动亦无需安装 SolidWorks**。
+   - **原生 3D CAD 实体导出 (`zemax_export_cad`)**：利用 Zemax 内核静默无头导出 STEP (AP203/AP214/AP242)、IGES、SAT 与 STL 封闭实体模型，可按需附带全光路真实光线追迹实体样条线。
+   - **SolidWorks MCP 结构桥接数据中继 (`zemax_export_prescription_for_cad`)**：将 Zemax LDE 转换为符合 SolidWorks MCP (`build_system_from_prescription`) 严格 JSON Schema 的无污染规范数据，当用户需要 3D 机械结构建模时，自动计算全系统隔圈（`create_3d_lens_spacer`）、前端压圈（`create_3d_retaining_ring`）及阶梯沉孔镜筒（`create_3d_lens_barrel`）参数，一键驱动 SolidWorks 进行 3D 光机装配与空间干涉碰撞审计（`check_assembly_clearance`）。
 8. **工程项目独立工作区隔离归档 (Project Workspace Isolation)**：
    - 彻底杜绝所有输出文件散乱混杂堆放于顶层 `output/` 根目录。每个光学设计项目自动拥有专有文件夹 `output/<project_name>/`。
    - 规范化子目录体系：`cad/`（3D 实体模型 STEP/IGES/SAT/STL）、`drawings/`（ISO 10110 零件制造图纸规格书与 2D 剖面 PNG）、`optomech/`（SolidWorks 机械装配桥接参数与隔圈/压圈 JSON）、`reports/`（设计提案报告与 MTF/点列图等分析图表）。
@@ -352,7 +362,7 @@ pip install -r requirements.txt
 - Windows 10/11 x64
 - Ansys Zemax OpticStudio 2021+（推荐 2024 R1）
 - Python 3.10+
-- 依赖包：`pythonnet>=3.0.0`, `fastmcp>=0.1.0`, `matplotlib>=3.8.0`, `pydantic>=2.0.0`
+- 依赖包：`pythonnet>=3.0.0`, `fastmcp>=0.1.0`, `matplotlib>=3.8.0`, `ezdxf>=1.1.0`, `pydantic>=2.0.0`
 
 #### 安装运行
 ```powershell

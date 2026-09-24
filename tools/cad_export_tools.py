@@ -1299,17 +1299,17 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     )
 
     # Tier 4 (Y: 5.0 to 16.0): Mandatory disclaimer
-    msp.add_text("VALUES IN PARENTHESIS ARE CALCULATED", dxfattribs={"height": 1.6, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("VALUES IN PARENTHESIS ARE CALCULATED", dxfattribs={"height": 1.5, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((tb_x0 + x_mid) / 2.0, 11.8), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("AND MAY CONTAIN ROUNDOFF ERRORS", dxfattribs={"height": 1.6, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("AND MAY CONTAIN ROUNDOFF ERRORS", dxfattribs={"height": 1.5, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((tb_x0 + x_mid) / 2.0, 8.2), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
     # === RIGHT SUB-BLOCK (Width 64mm, X: 228.0 to 292.0) ===
     # Tier 1 (Y: 38.0 to 49.0): Classification Header (NO COMPANY NAME)
     hdr_title = "OPTICAL ASSEMBLY SPECIFICATION" if is_assembly else "OPTICAL COMPONENT SPECIFICATION"
-    msp.add_text(hdr_title, dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(hdr_title, dxfattribs={"height": 2.3, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + tb_x1) / 2.0, 43.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1324,13 +1324,13 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
         mat_clean = data.get('material', 'N-BK7').replace('\n', ' / ')
         line2 = f"MAT: {mat_clean}, -BBAR COAT"
 
-    h_line1 = 2.4 if len(line1) <= 34 else 2.0
-    h_line2 = 2.1 if len(line2) <= 34 else 1.8
+    h_line1 = 2.3 if len(line1) <= 34 else 1.9
+    h_line2 = 2.0 if len(line2) <= 34 else 1.7
 
-    msp.add_text(line1, dxfattribs={"height": h_line1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(line1, dxfattribs={"height": h_line1, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + tb_x1) / 2.0, 34.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text(line2, dxfattribs={"height": h_line2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(line2, dxfattribs={"height": h_line2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + tb_x1) / 2.0, 29.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1343,12 +1343,15 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
         (x_mid + 2.0, 24.5), align=TextEntityAlignment.MIDDLE_LEFT
     )
     mat_val = data.get("material", "H-K9L").replace("\n", " / ") if not is_assembly else "N/A"
-    mat_h = 2.2
-    if len(mat_val) > 20:
-        mat_h = 1.6
+    mat_h = 2.1
+    mat_w_fac = 0.85
+    if len(mat_val) > 22:
+        mat_h = 1.5
+        mat_w_fac = 0.78
     elif len(mat_val) > 13:
-        mat_h = 1.8
-    msp.add_text(mat_val, dxfattribs={"height": mat_h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        mat_h = 1.7
+        mat_w_fac = 0.82
+    msp.add_text(mat_val, dxfattribs={"height": mat_h, "width": mat_w_fac, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + x_r1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1356,14 +1359,14 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
         ((x_r1 + x_r2) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
     scale_str = data.get("drawing_scale", "2:1")
-    msp.add_text(scale_str, dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(scale_str, dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r1 + x_r2) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
     msp.add_text("REV", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r2 + tb_x1) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("A", dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("A", dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r2 + tb_x1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1375,7 +1378,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
         (x_mid + 2.0, 13.5), align=TextEntityAlignment.MIDDLE_LEFT
     )
     item_code = data.get("drawing_code", "OPT-WATER-01")
-    msp.add_text(item_code, dxfattribs={"height": 2.3, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(item_code, dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + x_r3) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1383,7 +1386,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
         ((x_r3 + tb_x1) / 2.0, 13.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
     wt_str = data.get("weight_str", "0.02 Kg" if is_assembly else "0.005 Kg")
-    msp.add_text(wt_str, dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(wt_str, dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r3 + tb_x1) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1393,18 +1396,18 @@ def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 15.0, y_top
     cur_y = y_top
     for idx, note in enumerate(notes):
         if idx == 0:
-            h = 2.3
-            msp.add_text(note, dxfattribs={"height": h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            h = 2.2
+            msp.add_text(note, dxfattribs={"height": h, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
                 (x, cur_y), align=TextEntityAlignment.TOP_LEFT
             )
             cur_y -= 4.5
         elif idx == len(notes) - 1 and "INFORMATION ONLY" in note:
             cur_y -= 1.5
-            msp.add_text(note, dxfattribs={"height": 1.8, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            msp.add_text(note, dxfattribs={"height": 1.7, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
                 (x, cur_y), align=TextEntityAlignment.TOP_LEFT
             )
         else:
-            msp.add_text(note, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+            msp.add_text(note, dxfattribs={"height": 1.8, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
                 (x, cur_y), align=TextEntityAlignment.TOP_LEFT
             )
             cur_y -= 4.0
@@ -1538,11 +1541,11 @@ def _draw_dxf_linear_dimension(
 
 def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
     """Draw authentic dual-tier Optical Requirements & Tolerances table in top-left."""
-    tbl_w = 95.0
-    col1a_w = 27.0
-    col1b_w = 19.0
-    col2a_w = 27.0
-    col2b_w = 22.0
+    col1a_w = 38.0
+    col1b_w = 12.0
+    col2a_w = 38.0
+    col2b_w = 16.0
+    tbl_w = col1a_w + col1b_w + col2a_w + col2b_w  # 104.0mm
 
     row_h = 5.0
     header_h = 6.0
@@ -1561,7 +1564,7 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.
     # Main Header
     y_h1 = y_top - header_h
     msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
-    t_hdr = msp.add_text("OPTICAL REQUIREMENTS & TOLERANCES", dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_hdr = msp.add_text("OPTICAL REQUIREMENTS & TOLERANCES", dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
     t_hdr.set_placement((x_start + tbl_w / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
 
     # Subheader
@@ -1570,10 +1573,10 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.
     x_mid = x_start + col1a_w + col1b_w
     msp.add_line((x_mid, y_bottom), (x_mid, y_h1), dxfattribs={"layer": "1_TABLE"})
 
-    t_sub1 = msp.add_text("MATERIAL CHARACTERISTICS", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_sub1 = msp.add_text("MATERIAL CHARACTERISTICS", dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
     t_sub1.set_placement((x_start + (col1a_w + col1b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    t_sub2 = msp.add_text("PART REQUIREMENTS", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
+    t_sub2 = msp.add_text("PART REQUIREMENTS", dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
     t_sub2.set_placement((x_mid + (col2a_w + col2b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
 
     # Column dividers
@@ -1601,13 +1604,13 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.
             msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
 
         mid_ry = cur_y - row_h / 2.0
-        t = msp.add_text(m_lbl, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t = msp.add_text(m_lbl, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
         t.set_placement((x_start + col1a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(m_val, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t = msp.add_text(m_val, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
         t.set_placement((x_c1b + col1b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(p_lbl, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t = msp.add_text(p_lbl, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
         t.set_placement((x_mid + col2a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(p_val, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"})
+        t = msp.add_text(p_val, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
         t.set_placement((x_c2b + col2b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
 
         cur_y = next_y
@@ -1657,16 +1660,16 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15
     y_h1 = y_top - header_h
     msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
 
-    msp.add_text("ITEM", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("ITEM", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_start + c1) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("DESCRIPTION", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("DESCRIPTION", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((c1 + c2) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("MATERIAL", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("MATERIAL", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((c2 + c3) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("QTY", dxfattribs={"height": 2.1, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text("QTY", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((c3 + x_start + tbl_w) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1677,17 +1680,18 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15
             msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
 
         mid_ry = cur_y - row_h / 2.0
-        msp.add_text(it, dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        msp.add_text(it, dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
             ((x_start + c1) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        msp.add_text(desc, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        msp.add_text(desc, dxfattribs={"height": 1.8, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
             ((c1 + c2) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        mat_h = 1.9 if len(mat) <= 20 else 1.5
-        msp.add_text(mat, dxfattribs={"height": mat_h, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        mat_h = 1.8 if len(mat) <= 20 else 1.45
+        mat_w_fac = 0.82 if len(mat) <= 20 else 0.78
+        msp.add_text(mat, dxfattribs={"height": mat_h, "width": mat_w_fac, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
             ((c2 + c3) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        msp.add_text(qty, dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+        msp.add_text(qty, dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
             ((c3 + x_start + tbl_w) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
         )
         cur_y = next_y
@@ -1756,7 +1760,7 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     _draw_dxf_technical_notes(msp, notes_list, x=15.0, y_top=72.0)
 
     # Optical Axis (Red Centerline)
-    axis_x0 = 105.0
+    axis_x0 = 120.0
     axis_x1 = 215.0
     msp.add_line((axis_x0, axis_y), (axis_x1, axis_y), dxfattribs={"layer": "3_AXIS", "color": 1})
 

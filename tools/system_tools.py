@@ -19,6 +19,16 @@ from tools.project_manager import (
 )
 
 
+def _is_within(path: str, root: str) -> bool:
+    """True if path lies inside root (case-insensitive on Windows, no string-prefix false positives)."""
+    path_n = os.path.normcase(os.path.abspath(path))
+    root_n = os.path.normcase(os.path.abspath(root))
+    try:
+        return os.path.commonpath([path_n, root_n]) == root_n
+    except ValueError:  # different drives
+        return False
+
+
 def zemax_system_info() -> Dict[str, Any]:
     """
     Get current Zemax OpticStudio status, active license, primary system parameters,
@@ -37,15 +47,20 @@ def zemax_system_info() -> Dict[str, Any]:
     mode = session.mode
     is_valid = bool(app.IsValidLicenseForAPI)
 
-    # First-order paraxial evaluation via MFE
-    try:
-        efl = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 1, 0, 0, 0, 0, 0, 0, 0)
-        totr = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.TOTR, 0, 0, 0, 0, 0, 0, 0, 0)
-        wfno = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.WFNO, 1, 0, 0, 0, 0, 0, 0, 0)
-        enpz = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.ENPZ, 0, 0, 0, 0, 0, 0, 0, 0)
-        expp = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EXPP, 0, 0, 0, 0, 0, 0, 0, 0)
-    except Exception:
-        efl, totr, wfno, enpz, expp = 0.0, 0.0, 0.0, 0.0, 0.0
+    # First-order paraxial evaluation via MFE (each operand separately so one failure
+    # does not zero out the others)
+    def _operand(name: str) -> float:
+        try:
+            op_type = getattr(zos.Editors.MFE.MeritOperandType, name)
+            return float(sys.MFE.GetOperandValue(op_type, 0, 0, 0, 0, 0, 0, 0, 0))
+        except Exception:
+            return 0.0
+
+    efl = _operand("EFFL")
+    totr = _operand("TOTR")
+    wfno = _operand("WFNO")
+    enpz = _operand("ENPP")
+    expp = _operand("EXPP")
 
     sd = sys.SystemData
     aperture_type = str(sd.Aperture.ApertureType)
@@ -149,7 +164,7 @@ def zemax_load_file(filepath: str) -> Dict[str, Any]:
     # Automatically synchronize active project context
     norm_path = os.path.normpath(abs_path)
     output_dir = os.path.normpath(get_output_base_dir())
-    if norm_path.startswith(output_dir):
+    if _is_within(norm_path, output_dir):
         rel = os.path.relpath(norm_path, output_dir)
         parts = rel.split(os.sep)
         if len(parts) >= 2 and not parts[0].startswith("."):
@@ -190,7 +205,7 @@ def zemax_save_file(
             if (
                 session.current_filepath
                 and os.path.isabs(session.current_filepath)
-                and active_proj in session.current_filepath
+                and _is_within(session.current_filepath, get_project_dir(active_proj))
             ):
                 target_path = session.current_filepath
             else:
@@ -312,6 +327,18 @@ def zemax_load_template(template_id: str) -> Dict[str, Any]:
     sys.SystemData.MaterialCatalogs.AddCatalog("CDGM")
 
     # Aperture
+    ap_types = zos.SystemData.ZemaxApertureType
+    ap_map = {
+        "EPD": ap_types.EntrancePupilDiameter,
+        "IMAGE_FNUM": ap_types.ImageSpaceFNum,
+        "OBJECT_NA": ap_types.ObjectSpaceNA,
+        "FLOAT_BY_STOP": ap_types.FloatByStopSize,
+        "PARAXIAL_WORKING_FNUM": ap_types.ParaxialWorkingFNum,
+        "OBJECT_CONE_ANGLE": ap_types.ObjectConeAngle,
+    }
+    ap_type = str(tmpl["aperture"].get("type", "EPD")).upper()
+    if ap_type in ap_map:
+        sys.SystemData.Aperture.ApertureType = ap_map[ap_type]
     sys.SystemData.Aperture.ApertureValue = tmpl["aperture"]["value"]
 
     # Wavelengths
@@ -349,6 +376,15 @@ def zemax_load_template(template_id: str) -> Dict[str, Any]:
     stop_idx = tmpl.get("stop_surface", 1)
     if stop_idx < lde.NumberOfSurfaces:
         lde.GetSurfaceAt(stop_idx).IsStop = True
+
+    # New() leaves its default stop surface behind the inserted ones (just before the image).
+    # Remove it so the last template surface is the one directly in front of the image and
+    # Quick Focus / BFL act on the real back focal distance.
+    leftover_idx = len(surfaces_data) + 1
+    if leftover_idx == lde.NumberOfSurfaces - 2:
+        leftover = lde.GetSurfaceAt(leftover_idx)
+        if not leftover.IsStop and not str(leftover.Material).strip():
+            lde.RemoveSurfaceAt(leftover_idx)
 
     return {
         "status": "success",

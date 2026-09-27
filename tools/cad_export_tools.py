@@ -147,7 +147,7 @@ def zemax_export_cad(
         project_name=active_proj,
     )
 
-    cad_tool = sys.Tools.OpenExportCAD()
+    cad_tool = session.open_tool("OpenExportCAD")
     try:
         cad_tool.FileType = cad_enum
         cad_tool.SurfacesAsSolids = bool(surfaces_as_solids)
@@ -1929,7 +1929,7 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
         "NOTES/SPECIFICATIONS:",
         f"1. DESIGN WAVELENGTHS: {drawing_data.get('spectral_range', '785 ~ 850 nm')}",
         f"2. EFFECTIVE FOCAL LENGTH: {drawing_data.get('efl_str', '4.75')} mm \u00b11%",
-        f"3. NUMERICAL APERTURE: NA={drawing_data.get('na_str', '0.90')} (WATER IMMERSION n=1.33)",
+        f"3. NUMERICAL APERTURE: NA={drawing_data.get('na_str', '-')} (OBJECT SPACE: {drawing_data.get('immersion_str', 'AIR')})",
         f"4. WORKING DISTANCE: {drawing_data.get('wd_str', '0.78')} mm",
         f"5. FIELD OF VIEW: {drawing_data.get('fov_str', '\u03a6 0.71 mm')}",
         f"6. TOTAL OPTICAL TRACK: {total_track:.2f} mm",
@@ -2322,9 +2322,13 @@ def zemax_export_optical_drawing(
 
         # Extract first-order optical data for assembly drawing
         efl_str = "-"
-        na_str = "0.90"
-        spectral_str = "785 ~ 850 nm"
+        na_str = "-"
+        spectral_str = "-"
         wd_str = "-"
+        fov_str = "-"
+        pupil_str = "-"
+        immersion_str = "空气 (n=1.000)"
+        axial_color_str = "-"
         try:
             zos = session.ZOSAPI
             efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 1, 0, 0, 0, 0, 0, 0, 0)
@@ -2359,6 +2363,37 @@ def zemax_export_optical_drawing(
         except Exception:
             pass
 
+        try:
+            zos = session.ZOSAPI
+            expd = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EXPD, 0, 0, 0, 0, 0, 0, 0, 0)
+            if 0.001 < abs(expd) < 1e5:
+                pupil_str = f"Φ {abs(expd):.2f} mm"
+            axcl = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.AXCL, 0, 0, 0, 0, 0, 0, 0, 0)
+            if abs(axcl) < 1e3:
+                axial_color_str = f"{abs(axcl) * 1000.0:.1f} μm"
+        except Exception:
+            pass
+
+        try:
+            flds = sys.SystemData.Fields
+            max_f = max(
+                math.hypot(float(flds.GetField(i).X), float(flds.GetField(i).Y))
+                for i in range(1, int(flds.NumberOfFields) + 1)
+            )
+            if "Angle" in str(flds.GetFieldType()):
+                fov_str = f"2ω = {2.0 * max_f:.2f}°"
+            elif max_f > 0:
+                fov_str = f"Φ {2.0 * max_f:.2f} mm"
+        except Exception:
+            pass
+
+        try:
+            obj_mat = str(sys.LDE.GetSurfaceAt(0).Material).strip()
+            if obj_mat:
+                immersion_str = obj_mat
+        except Exception:
+            pass
+
         proj_clean = active_proj.replace('_', ' ').title()
         if "Water" in proj_clean and "Objective" in proj_clean:
             dwg_name_title = "高数值孔径水浸显微物镜\n光学系统总装配合图"
@@ -2373,12 +2408,12 @@ def zemax_export_optical_drawing(
             "na_str": na_str,
             "efl_str": efl_str,
             "wd_str": wd_str,
-            "fov_str": "\u03a6 0.71 mm",
-            "pupil_str": "\u03a6 7.20 mm",
-            "immersion_str": "水 (n=1.33)",
-            "coverglass_str": "0.17 mm",
-            "rms_wavefront": "< 0.05 λ",
-            "axial_color": "< 2.5 μm",
+            "fov_str": fov_str,
+            "pupil_str": pupil_str,
+            "immersion_str": immersion_str,
+            "coverglass_str": "-",
+            "rms_wavefront": "-",
+            "axial_color": axial_color_str,
             "concentricity": "< 0.003",
             "barrel_fit": "g6/H7",
             "totr_str": f"{total_track:.2f}",

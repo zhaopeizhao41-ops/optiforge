@@ -31,9 +31,10 @@ def get_template(name: str) -> Dict[str, Any]:
             ],
             "wavelengths": [0.58756, 0.48613, 0.65627],  # d, F, C
             "surfaces": [
-                {"radius": 62.0, "thickness": 6.0, "material": "N-BK7", "comment": "Crown Front"},
-                {"radius": -45.0, "thickness": 3.0, "material": "N-SF11", "comment": "Cemented Interface"},
-                {"radius": -120.0, "thickness": 95.0, "material": "", "comment": "Flint Rear"},
+                # Thin-lens achromat start (phi1/phi2 = -V1/V2) refined by DLS on RMS spot + EFFL=100
+                {"radius": 60.74, "thickness": 6.0, "material": "N-BK7", "comment": "Crown Front"},
+                {"radius": -56.37, "thickness": 3.0, "material": "N-SF11", "comment": "Cemented Interface"},
+                {"radius": -123.76, "thickness": 95.59, "material": "", "comment": "Flint Rear"},
             ],
             "stop_surface": 1,
         },

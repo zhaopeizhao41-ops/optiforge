@@ -41,6 +41,7 @@ from tools.analysis_tools import (
     zemax_run_ray_fan,
     zemax_run_wavefront_map,
     zemax_run_field_curvature_distortion,
+    zemax_export_spot_diagram_plot,
 )
 from tools.validation_tools import (
     zemax_validate_design_rules,
@@ -83,6 +84,7 @@ __all__ = [
     "zemax_run_ray_fan",
     "zemax_run_wavefront_map",
     "zemax_run_field_curvature_distortion",
+    "zemax_export_spot_diagram_plot",
     "zemax_validate_design_rules",
     "zemax_lookup_manual",
     "zemax_export_cad",

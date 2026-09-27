@@ -79,7 +79,7 @@ def zemax_set_fields(
     # Clear excess existing fields
     current_count = sd_fields.NumberOfFields
     while current_count > 1:
-        sd_fields.DeleteField(current_count)
+        sd_fields.DeleteFieldAt(current_count)
         current_count = sd_fields.NumberOfFields
 
     # Populate fields

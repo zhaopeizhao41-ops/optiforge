@@ -52,6 +52,7 @@ def run_tests():
     s3 = zemax_set_solve(3, "radius", "variable")
     t1 = zemax_set_solve(1, "thickness", "variable")
     t2 = zemax_set_solve(2, "thickness", "variable")
+    t3 = zemax_set_solve(3, "thickness", "variable")  # back focal distance
     print("Solve configuration on doublet surfaces 1..3: SUCCESS")
     assert s1["status"] == "success"
 
@@ -194,9 +195,12 @@ def run_tests():
     print("ISO 10110 drawing export:", draw_res["status"], "| Drawings:", draw_res["drawings_count"])
     assert draw_res["status"] == "success"
     assert draw_res["drawings_count"] >= 1
-    d0 = draw_res["drawings"][0]
-    assert os.path.exists(d0["spec_markdown_file"])
+    d0 = draw_res["element_drawings"][0]
+    assert os.path.exists(d0["gbt_markdown_file"])
+    assert os.path.exists(d0["iso_markdown_file"])
     assert os.path.exists(d0["drawing_image_file"])
+    asm = draw_res["assembly_drawing"]
+    assert asm is not None and os.path.exists(asm["assembly_markdown_file"])
 
     print("\n=== 17. Testing zemax_export_prescription_for_cad (SolidWorks MCP Bridge) ===")
     presc_res = zemax_export_prescription_for_cad()

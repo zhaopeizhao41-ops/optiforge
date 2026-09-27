@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Zemax OpticStudio MCP logo">
+  <title>Zemax OpticStudio MCP</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A1A33"/>
+      <stop offset="1" stop-color="#15396B"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7FDBFF" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#C9F1FF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7FDBFF" stop-opacity="0.55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#FFF6D6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFF6D6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- optical axis -->
+  <line x1="22" y1="128" x2="234" y2="128" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2" stroke-dasharray="6 6"/>
+
+  <!-- rays: F (blue), d (green), C (red) converge to one focus: an achromat -->
+  <g fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M26 66 L100 66 L198 128" stroke="#4DA3FF"/>
+    <path d="M26 190 L100 190 L198 128" stroke="#4DA3FF"/>
+    <path d="M26 90 L100 90 L198 128" stroke="#3DDC97"/>
+    <path d="M26 166 L100 166 L198 128" stroke="#3DDC97"/>
+    <path d="M26 112 L100 112 L198 128" stroke="#FF6B6B"/>
+    <path d="M26 144 L100 144 L198 128" stroke="#FF6B6B"/>
+  </g>
+
+  <!-- biconvex lens -->
+  <path d="M100 44 Q130 128 100 212 Q70 128 100 44 Z" fill="url(#glass)" stroke="#E6FAFF" stroke-width="3"/>
+
+  <!-- Airy pattern at the focus -->
+  <circle cx="198" cy="128" r="26" fill="url(#glow)"/>
+  <circle cx="198" cy="128" r="17" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="2"/>
+  <circle cx="198" cy="128" r="11" fill="none" stroke="#FFFFFF" stroke-opacity="0.6" stroke-width="2"/>
+  <circle cx="198" cy="128" r="5.5" fill="#FFFFFF"/>
+</svg>

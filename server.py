@@ -44,6 +44,7 @@ from tools import (
     zemax_run_ray_fan as _run_ray_fan,
     zemax_run_wavefront_map as _run_wavefront_map,
     zemax_run_field_curvature_distortion as _run_field_curvature_distortion,
+    zemax_export_spot_diagram_plot as _export_spot_diagram_plot,
     zemax_validate_design_rules as _validate_design_rules,
     zemax_lookup_manual as _lookup_manual,
     zemax_export_cad as _export_cad,
@@ -520,16 +521,26 @@ def zemax_run_optimization(
     algorithm: str = "DLS",
     cycles: str = "Automatic",
     cores: int = 8,
+    stagnation_threshold: float = 0.005,
+    max_rounds: int = 6,
 ) -> str:
     """
     Run Local Optimization on the current optical system.
     algorithm: 'DLS' (Damped Least Squares) or 'OD' (Orthogonal Descent).
     cycles: 'Automatic', '1', '5', '10', '50'.
+    stagnation_threshold: In 'Automatic' mode, stop when a 10-cycle round improves MF by less than this fraction (0.005 = 0.5%).
+    max_rounds: In 'Automatic' mode, maximum number of 10-cycle rounds.
 
     [SOP PREREQUISITE GATE]: Optimization runs MUST be preceded by web search of initial structures,
     deep optical thinking, design proposal review, and explicit user approval.
     """
-    res = _run_optimization(algorithm=algorithm, cycles=cycles, cores=cores)
+    res = _run_optimization(
+        algorithm=algorithm,
+        cycles=cycles,
+        cores=cores,
+        stagnation_threshold=stagnation_threshold,
+        max_rounds=max_rounds,
+    )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
@@ -576,10 +587,11 @@ def zemax_run_fft_mtf(
 
 
 @app.tool()
-def zemax_run_ray_fan(field_index: int = 1) -> str:
+def zemax_run_ray_fan(field_index: Optional[int] = None) -> str:
     """
     Run Ray Fan analysis (transverse ray aberrations Ey vs Py and Ex vs Px).
     Examines spherical aberration, coma, and astigmatism signatures.
+    field_index: 1-based field to evaluate; omit to evaluate all fields.
     """
     res = _run_ray_fan(field_index=field_index)
     return json.dumps(res, ensure_ascii=False, indent=2)
@@ -590,6 +602,7 @@ def zemax_run_wavefront_map(field_index: int = 1) -> str:
     """
     Run Wavefront Map analysis to evaluate optical path difference (OPD).
     Returns Peak-to-Valley (PV) error, RMS wavefront error (in waves), and estimated Strehl ratio.
+    field_index: 1-based field to evaluate.
     """
     res = _run_wavefront_map(field_index=field_index)
     return json.dumps(res, ensure_ascii=False, indent=2)
@@ -602,6 +615,18 @@ def zemax_run_field_curvature_distortion() -> str:
     Evaluates tangential/sagittal focal shifts and percentage distortion across the field.
     """
     res = _run_field_curvature_distortion()
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_export_spot_diagram_plot(rings: int = 12, filename: str = "spot_diagram.png") -> str:
+    """
+    Render a Zemax-style spot diagram PNG (all fields x wavelengths, Airy disk circle,
+    chief-ray reference) from a Batch Ray Trace into the active project's reports/ folder.
+    rings: Hexapolar pupil rings (ring k holds 6k rays; default 12 -> 469 rays per wavelength).
+    filename: Output PNG file name.
+    """
+    res = _export_spot_diagram_plot(rings=rings, filename=filename)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
@@ -722,10 +747,7 @@ def zemax_export_optical_drawing(
         generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
         export_dxf: If True, generates standard editable AutoCAD .dxf drawings via ezdxf.
     """
-    import importlib
-    import tools.cad_export_tools
-    importlib.reload(tools.cad_export_tools)
-    res = tools.cad_export_tools.zemax_export_optical_drawing(
+    res = _export_optical_drawing(
         element_index=element_index,
         output_dir=output_dir,
         project_name=project_name,

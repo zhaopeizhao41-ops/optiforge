@@ -195,7 +195,11 @@ def resolve_project_file_path(
         os.makedirs(os.path.dirname(user_path), exist_ok=True)
         return user_path
     
-    # Relative path
+    # Relative path. A leading "output/" (the global output root) is dropped so that
+    # "output/foo.step" lands in the project folder instead of "<project>/output/foo.step".
+    parts = os.path.normpath(user_path).split(os.sep)
+    if len(parts) > 1 and os.path.normcase(parts[0]) == os.path.normcase(os.path.basename(get_output_base_dir())):
+        user_path = os.path.join(*parts[1:])
     target = os.path.join(p_dir, user_path)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     return target

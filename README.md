@@ -27,7 +27,7 @@ This server empowers AI coding agents (such as **Antigravity**, **Gemini**, and 
 ### Key Capabilities
 
 1. **Autonomous Optical Design & Optimization**:
-   - Exposes **34 modular optical, project management, and CAD tools**, **5 system/workflow resources**, and dedicated design prompts.
+   - Exposes **35 modular optical, project management, and CAD tools**, **5 system/workflow resources**, and dedicated design prompts.
    - Supports complex progressive optimization pipelines: radii tuning, air/glass thickness solves, DLS/Hammer solvers, and multi-stage merit function configuration.
 2. **Mandatory 5-Stage Closed-Loop Optical Design Protocol (SOP)**:
    ```mermaid
@@ -154,14 +154,14 @@ Applying the modular protocol and **Stagnation Guard**, the AI agent autonomousl
 
 ---
 
-### Tool Catalog (34 Tools)
+### Tool Catalog (35 Tools)
 
 - **System & ORS Management**: `zemax_audit_requirements`, `zemax_system_info`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`.
 - **Project Workspace Management**: `zemax_set_project`, `zemax_get_project`, `zemax_list_projects`.
 - **Optical Setup Tools**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`.
 - **Surface & Solve Tools**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`.
 - **Optimization Tools**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`.
-- **Analysis Tools**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`.
+- **Analysis Tools**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot` (Batch Ray Trace spot diagram PNG with Airy disk).
 - **Validation & Manual Knowledge**: `zemax_validate_design_rules`, `zemax_lookup_manual`.
 - **Optomechanical & CAD Linkage**: `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad`.
 
@@ -216,7 +216,7 @@ pip install -r requirements.txt
 ### 核心特性
 
 1. **AI 闭环光学自主设计**：
-   - 暴露 **34 个高抽象度、原子化的光学与 CAD 导出工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
+   - 暴露 **35 个高抽象度、原子化的光学与 CAD 导出工具**、**5 项全局/工作流资源** 与专属设计 Prompts。
    - 智能体通过自然语言指令即可完成：从需求完备性审查、初始结构载入、视场与波长配置、曲率与厚度变量分配、评价函数构建、多阶段 DLS 阻尼最小二乘优化到全套像差图表生成的全流程。
 2. **强制执行五步闭环光学设计工作流 (SOP)**：
    ```mermaid
@@ -343,14 +343,14 @@ pip install -r requirements.txt
 
 ---
 
-### 工具目录 (34 个核心工具)
+### 工具目录 (35 个核心工具)
 
 - **系统与需求管理**: `zemax_system_info`, `zemax_audit_requirements`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template`
 - **项目工作区管理**: `zemax_set_project`, `zemax_get_project`, `zemax_list_projects`
 - **光学参数配置**: `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming`
 - **表面与求解器管理**: `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve`
 - **优化与评价函数**: `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer`
-- **光学性能分析**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`
+- **光学性能分析**: `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot`（光线追迹点列图 PNG，含艾里斑圆）
 - **手册规则审计与知识**: `zemax_validate_design_rules`, `zemax_lookup_manual`
 - **光机工程与 CAD 联动**: `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad`
 

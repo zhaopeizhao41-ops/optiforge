@@ -85,6 +85,18 @@ def zemax_setup_merit_function(
 
     added_operands = []
 
+    # The wizard's air bounds cover every air space, including the image-space gap
+    # (back focal distance). An MXCA there (e.g. <= 12 mm on a 95 mm BFD) dominates the
+    # merit function and fights any EFL target, collapsing the design; release it.
+    merit_col = zos.Editors.MFE.MeritColumn
+    image_gap_idx = lde.NumberOfSurfaces - 2
+    for row in range(1, mfe.NumberOfOperands + 1):
+        op = mfe.GetOperandAt(row)
+        if op.Type == zos.Editors.MFE.MeritOperandType.MXCA:
+            if op.GetOperandCell(merit_col.Param1).IntegerValue == image_gap_idx:
+                op.Weight = 0.0
+                added_operands.append(f"MXCA (Surface {image_gap_idx}, image-space gap) released: weight=0")
+
     # Detect glass surface indices to classify internal vs external spaces
     glass_surfs = []
     for s_idx in range(1, lde.NumberOfSurfaces - 1):
@@ -126,7 +138,11 @@ def zemax_setup_merit_function(
         op_efl.ChangeType(zos.Editors.MFE.MeritOperandType.EFFL)
         op_efl.Target = float(target_efl)
         op_efl.Weight = float(efl_weight)
-        op_efl.GetCellAt(2).IntegerValue = 1  # Primary wave
+        waves = sys.SystemData.Wavelengths
+        primary_wave = next(
+            (w for w in range(1, waves.NumberOfWavelengths + 1) if waves.GetWavelength(w).IsPrimary), 1
+        )
+        op_efl.GetOperandCell(merit_col.Param2).IntegerValue = primary_wave  # EFFL: Param2 = Wave
         added_operands.append(f"EFFL target={target_efl}, weight={efl_weight}")
 
     if max_totr is not None:
@@ -218,15 +234,17 @@ def zemax_quick_focus(
     sys = session.system
     zos = session.ZOSAPI
 
-    qf = sys.Tools.OpenQuickFocus()
-    if "wavefront" in criterion.lower():
-        qf.Criterion = zos.Tools.General.QuickFocusCriterion.Wavefront
-    else:
-        qf.Criterion = zos.Tools.General.QuickFocusCriterion.SpotSizeRadial
+    qf = session.open_tool("OpenQuickFocus")
+    try:
+        if "wavefront" in criterion.lower():
+            qf.Criterion = zos.Tools.General.QuickFocusCriterion.Wavefront
+        else:
+            qf.Criterion = zos.Tools.General.QuickFocusCriterion.SpotSizeRadial
 
-    qf.UseCentroid = bool(use_centroid)
-    qf.RunAndWaitForCompletion()
-    qf.Close()
+        qf.UseCentroid = bool(use_centroid)
+        qf.RunAndWaitForCompletion()
+    finally:
+        qf.Close()
 
     # Get resulting image surface distance
     last_lens_idx = sys.LDE.NumberOfSurfaces - 2
@@ -286,18 +304,22 @@ def zemax_run_optimization(
         }
 
     # 2. Check variables
-    opt = sys.Tools.OpenLocalOptimization()
+    # Keep the enum locally: ZOS-API tool objects are invalid (RemotingException) after Close()
     if "od" in algorithm.lower() or "orthogonal" in algorithm.lower():
-        opt.Algorithm = zos.Tools.Optimization.OptimizationAlgorithm.OrthogonalDescent
+        algo_enum = zos.Tools.Optimization.OptimizationAlgorithm.OrthogonalDescent
     else:
-        opt.Algorithm = zos.Tools.Optimization.OptimizationAlgorithm.DampedLeastSquares
+        algo_enum = zos.Tools.Optimization.OptimizationAlgorithm.DampedLeastSquares
 
-    opt.NumberOfCores = int(cores)
-    num_vars = int(opt.Variables)
-    num_targets = int(opt.Targets)
-    init_mf = float(opt.InitialMeritFunction)
-    algo_name = str(opt.Algorithm)
-    opt.Close()
+    opt = session.open_tool("OpenLocalOptimization")
+    try:
+        opt.Algorithm = algo_enum
+        opt.NumberOfCores = int(cores)
+        num_vars = int(opt.Variables)
+        num_targets = int(opt.Targets)
+        init_mf = float(opt.InitialMeritFunction)
+        algo_name = str(algo_enum)
+    finally:
+        opt.Close()
 
     if num_vars == 0:
         return {
@@ -314,13 +336,15 @@ def zemax_run_optimization(
     if cycles_clean in ["automatic", "auto"]:
         best_mf = init_mf
         for r in range(1, max_rounds + 1):
-            sub_opt = sys.Tools.OpenLocalOptimization()
-            sub_opt.Algorithm = opt.Algorithm
-            sub_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
-            sub_opt.NumberOfCores = int(cores)
-            sub_opt.RunAndWaitForCompletion()
-            new_mf = float(sub_opt.CurrentMeritFunction)
-            sub_opt.Close()
+            sub_opt = session.open_tool("OpenLocalOptimization")
+            try:
+                sub_opt.Algorithm = algo_enum
+                sub_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
+                sub_opt.NumberOfCores = int(cores)
+                sub_opt.RunAndWaitForCompletion()
+                new_mf = float(sub_opt.CurrentMeritFunction)
+            finally:
+                sub_opt.Close()
 
             rel_imp = (best_mf - new_mf) / best_mf if best_mf > 0 else 0.0
             history.append({
@@ -339,23 +363,23 @@ def zemax_run_optimization(
 
         final_mf = best_mf
     else:
-        fixed_opt = sys.Tools.OpenLocalOptimization()
-        fixed_opt.Algorithm = opt.Algorithm
-        fixed_opt.NumberOfCores = int(cores)
-        if cycles_clean == "1":
-            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle
-        elif cycles_clean == "5":
-            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
-        elif cycles_clean == "10":
-            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
-        elif cycles_clean == "50":
-            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles
-        else:
-            fixed_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
-
-        fixed_opt.RunAndWaitForCompletion()
-        final_mf = float(fixed_opt.CurrentMeritFunction)
-        fixed_opt.Close()
+        cycle_map = {
+            "1": zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle,
+            "5": zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles,
+            "10": zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles,
+            "50": zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles,
+        }
+        fixed_opt = session.open_tool("OpenLocalOptimization")
+        try:
+            fixed_opt.Algorithm = algo_enum
+            fixed_opt.NumberOfCores = int(cores)
+            fixed_opt.Cycles = cycle_map.get(
+                cycles_clean, zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
+            )
+            fixed_opt.RunAndWaitForCompletion()
+            final_mf = float(fixed_opt.CurrentMeritFunction)
+        finally:
+            fixed_opt.Close()
 
     improvement_pct = 0.0
     if init_mf > 0:
@@ -384,12 +408,14 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> Dict[str, Any]:
     sys = session.system
     zos = session.ZOSAPI
 
-    hammer = sys.Tools.OpenHammerOptimization()
-    hammer.RunAndWaitWithTimeout(timeout_seconds)
-    hammer.Cancel()
-    hammer.WaitForCompletion()
-    final_mf = float(hammer.CurrentMeritFunction)
-    hammer.Close()
+    hammer = session.open_tool("OpenHammerOptimization")
+    try:
+        hammer.RunAndWaitWithTimeout(timeout_seconds)
+        hammer.Cancel()
+        hammer.WaitForCompletion()
+        final_mf = float(hammer.CurrentMeritFunction)
+    finally:
+        hammer.Close()
 
     return {
         "status": "success",

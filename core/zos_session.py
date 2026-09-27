@@ -173,6 +173,24 @@ class ZOSSession:
         else:
             raise ValueError("Filepath must be provided for unsaved new designs.")
 
+    def open_tool(self, opener_name: str):
+        """
+        Open a ZOS-API tool (e.g. 'OpenLocalOptimization') safely.
+        ZOS-API allows only one open tool at a time; a tool leaked by an earlier
+        failure makes every Open*() return None, so close it first.
+        """
+        tools = self.system.Tools
+        current = tools.CurrentTool
+        if current is not None:
+            try:
+                current.Close()
+            except Exception:
+                pass
+        tool = getattr(tools, opener_name)()
+        if tool is None:
+            raise RuntimeError(f"ZOS-API {opener_name}() returned None (another tool may still be running).")
+        return tool
+
     def close(self):
         """Close connection and clean up application."""
         if self.application is not None and self.mode == "Standalone":

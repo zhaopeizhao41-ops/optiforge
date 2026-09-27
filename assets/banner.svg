@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" width="960" height="240" role="img" aria-label="Zemax OpticStudio MCP">
+  <title>Zemax OpticStudio MCP: AI-native optical design over ZOS-API</title>
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081629"/>
+      <stop offset="1" stop-color="#133563"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A1A33"/>
+      <stop offset="1" stop-color="#15396B"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7FDBFF" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#C9F1FF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7FDBFF" stop-opacity="0.55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#FFF6D6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFF6D6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4DA3FF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#4DA3FF" stop-opacity="0.22"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="240" rx="28" fill="url(#card)"/>
+
+  <!-- faint background ray fan on the right -->
+  <g fill="none" stroke="url(#fade)" stroke-width="2">
+    <path d="M560 20 L940 120"/>
+    <path d="M560 60 L940 120"/>
+    <path d="M560 100 L940 120"/>
+    <path d="M560 140 L940 120"/>
+    <path d="M560 180 L940 120"/>
+    <path d="M560 220 L940 120"/>
+  </g>
+
+  <!-- icon (same artwork as logo.svg) -->
+  <g transform="translate(28 28) scale(0.72)">
+    <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
+    <line x1="22" y1="128" x2="234" y2="128" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2" stroke-dasharray="6 6"/>
+    <g fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M26 66 L100 66 L198 128" stroke="#4DA3FF"/>
+      <path d="M26 190 L100 190 L198 128" stroke="#4DA3FF"/>
+      <path d="M26 90 L100 90 L198 128" stroke="#3DDC97"/>
+      <path d="M26 166 L100 166 L198 128" stroke="#3DDC97"/>
+      <path d="M26 112 L100 112 L198 128" stroke="#FF6B6B"/>
+      <path d="M26 144 L100 144 L198 128" stroke="#FF6B6B"/>
+    </g>
+    <path d="M100 44 Q130 128 100 212 Q70 128 100 44 Z" fill="url(#glass)" stroke="#E6FAFF" stroke-width="3"/>
+    <circle cx="198" cy="128" r="26" fill="url(#glow)"/>
+    <circle cx="198" cy="128" r="17" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="2"/>
+    <circle cx="198" cy="128" r="11" fill="none" stroke="#FFFFFF" stroke-opacity="0.6" stroke-width="2"/>
+    <circle cx="198" cy="128" r="5.5" fill="#FFFFFF"/>
+  </g>
+
+  <!-- wordmark -->
+  <g font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <text x="256" y="104" font-size="50" font-weight="700" fill="#FFFFFF">Zemax OpticStudio <tspan fill="#7FDBFF">MCP</tspan></text>
+    <text x="258" y="146" font-size="21" fill="#A9C7E8">AI-native optical design, optimization &amp; CAD export over ZOS-API</text>
+    <g font-size="15" font-weight="600" fill="#DDEBFA">
+      <rect x="258" y="166" width="96" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="306" y="186" text-anchor="middle">35 tools</text>
+      <rect x="364" y="166" width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="439" y="186" text-anchor="middle">DLS · Hammer</text>
+      <rect x="524" y="166" width="170" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="609" y="186" text-anchor="middle">Airy-disk analysis</text>
+      <rect x="704" y="166" width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="779" y="186" text-anchor="middle">STEP · DXF</text>
+    </g>
+  </g>
+</svg>

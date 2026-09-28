@@ -72,6 +72,9 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
 
     spot = sys.Analyses.New_StandardSpot()
     try:
+        settings = _settings(spot)
+        settings.Field.UseAllFields()
+        settings.Wavelength.UseAllWavelengths()
         spot.ApplyAndWaitForCompletion()
         res = spot.GetResults()
 
@@ -80,7 +83,7 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
             return {"status": "error", "message": "Failed to acquire SpotData."}
 
         num_fields = int(spot_data.NumberOfFields)
-        num_waves = int(spot_data.NumberOfWavelengths)
+        num_waves = int(sys.SystemData.Wavelengths.NumberOfWavelengths)
 
         # Calculate Airy disk radius for comparison
         primary_wave_um = _primary_wavelength_um(sys)
@@ -98,14 +101,6 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
             rms_poly = float(spot_data.GetRMSSpotSizeFor(f_idx, 0))  # 0 is polychromatic
             geo_poly = float(spot_data.GetGeoSpotSizeFor(f_idx, 0))
 
-            wave_breakdown = []
-            for w_idx in range(1, num_waves + 1):
-                wave_breakdown.append({
-                    "wave_index": w_idx,
-                    "rms_spot_um": round(float(spot_data.GetRMSSpotSizeFor(f_idx, w_idx)), 4),
-                    "geo_spot_um": round(float(spot_data.GetGeoSpotSizeFor(f_idx, w_idx)), 4),
-                })
-
             is_diffraction_limited = (rms_poly <= airy_disk_radius_um) if airy_disk_radius_um > 0 else False
 
             field_results.append({
@@ -114,8 +109,25 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
                 "polychromatic_geo_spot_um": round(geo_poly, 4),
                 "airy_disk_radius_um": round(airy_disk_radius_um, 4),
                 "is_diffraction_limited": is_diffraction_limited,
-                "wavelengths": wave_breakdown,
+                "wavelengths": [],
             })
+
+        # In an all-wavelength analysis some API versions return aggregate data
+        # even for a nonzero waveN. Recompute each selected wavelength, copying
+        # native values before the next Apply invalidates the previous results.
+        for w_idx in range(1, num_waves + 1):
+            settings.Wavelength.SetWavelengthNumber(w_idx)
+            spot.ApplyAndWaitForCompletion()
+            mono_data = spot.GetResults().SpotData
+            if not mono_data:
+                return {"status": "error", "message": f"Failed to acquire SpotData for wavelength {w_idx}."}
+            for field in field_results:
+                f_idx = field["field_index"]
+                field["wavelengths"].append({
+                    "wave_index": w_idx,
+                    "rms_spot_um": round(float(mono_data.GetRMSSpotSizeFor(f_idx, 1)), 4),
+                    "geo_spot_um": round(float(mono_data.GetGeoSpotSizeFor(f_idx, 1)), 4),
+                })
     finally:
         spot.Close()
 

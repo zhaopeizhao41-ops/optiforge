@@ -7,6 +7,7 @@ providing direct optomechanical linkage with SolidWorks MCP.
 import json
 import math
 import os
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib
 matplotlib.use("Agg")
@@ -333,6 +334,84 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
     return elements
 
 
+def _system_drawing_metadata(sys, zos, elements) -> Dict[str, Any]:
+    """Read shared optical facts once; distances are not interchangeable."""
+    waves = sys.SystemData.Wavelengths
+    wavelengths_nm = [float(waves.GetWavelength(i).Wavelength) * 1000.0
+                      for i in range(1, int(waves.NumberOfWavelengths) + 1)]
+    first = elements[0]["surface_start"]
+    rear = elements[-1]["surface_end"]
+    image = int(sys.LDE.NumberOfSurfaces) - 1
+
+    def thickness_sum(start, end):
+        values = [float(sys.LDE.GetSurfaceAt(i).Thickness) for i in range(start, end)]
+        return sum(values) if all(math.isfinite(v) and abs(v) < 1e10 for v in values) else None
+
+    # A thickness sum is a physical axial separation only in a centered,
+    # forward-going system. Do not label folds/decenters as mechanical distances.
+    centered = True
+    for i in range(image):
+        surface = sys.LDE.GetSurfaceAt(i)
+        td = surface.TiltDecenterData
+        transforms = [float(getattr(td, f"{side}Surface{kind}{axis}"))
+                      for side in ("Before", "After")
+                      for kind, axes in (("Decenter", "XY"), ("Tilt", "XYZ"))
+                      for axis in axes]
+        thickness = float(surface.Thickness)
+        if (str(surface.Type) not in {"Standard", "EvenAspheric", "OddAspheric"}
+                or str(surface.Material).upper() == "MIRROR"
+                or any(v != 0 for v in transforms) or thickness < 0
+                or (i > 0 and not math.isfinite(thickness))):
+            centered = False
+
+    stack = thickness_sum(first, rear) if centered else None
+    rear_gap = thickness_sum(rear, image) if centered else None
+    object_t = float(sys.LDE.GetSurfaceAt(0).Thickness)
+    infinite_object = object_t > 1e10
+    wd = thickness_sum(0, first) if centered and not infinite_object else None
+    wd_str = "Infinity (object at infinity)" if infinite_object else f"{wd:.4f}" if wd is not None else "Not determined"
+    track = float(sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.TOTR, 0, 0, 0, 0, 0, 0, 0, 0))
+    track = track if math.isfinite(track) else None
+    return {
+        "drawing_date": date.today().strftime("%Y/%m/%d"),
+        "wavelengths_nm": wavelengths_nm,
+        "design_wavelengths": ", ".join(f"{w:g}" for w in wavelengths_nm) + " nm",
+        "spectral_range": f"{min(wavelengths_nm):g} ~ {max(wavelengths_nm):g} nm" if wavelengths_nm else "Not specified",
+        "total_track_length_mm": track,
+        "lens_stack_length_mm": stack,
+        "rear_image_gap_mm": rear_gap,
+        "object_working_distance_mm": wd,
+        "object_at_infinity": infinite_object,
+        "distance_basis": "Centered sequential axial distances" if centered else "Mechanical distances not determined for this geometry",
+        "totr_str": f"{track:.4f}" if track is not None else "Not determined",
+        "stack_str": f"{stack:.4f}" if stack is not None else "Not determined",
+        "rear_gap_str": f"{rear_gap:.4f}" if rear_gap is not None else "Not determined",
+        "wd_str": wd_str,
+    }
+
+
+def _element_coating(sys, element) -> str:
+    surfaces = range(element["surface_start"], element["surface_end"] + 1)
+    return "; ".join(f"S{i}: {str(sys.LDE.GetSurfaceAt(i).Coating).strip() or 'Not specified'}"
+                     for i in surfaces)
+
+
+def _ring_dimensions(clear_aperture: float, outer_diameter: float) -> Dict[str, float]:
+    """Conservative aperture envelope, with 0.1 radial clearance and 0.5 wall.
+
+    This only checks aperture/fit geometry, not the traced beam through a finite
+    thickness ring. Never enlarge the OD beyond its mating lens/bore to force fit.
+    """
+    if not all(math.isfinite(v) and v > 0 for v in (clear_aperture, outer_diameter)):
+        raise ValueError("Ring aperture and OD must be finite and positive.")
+    inner = math.ceil((clear_aperture + 0.2) * 100.0 - 1e-9) / 100.0
+    wall = (outer_diameter - inner) / 2.0
+    if wall < 0.5:
+        raise ValueError(f"No supported ring fits: aperture={clear_aperture:g}, OD={outer_diameter:g}, required ID={inner:g} mm and radial wall >= 0.5 mm.")
+    return {"inner_diameter_mm": inner, "outer_diameter_mm": outer_diameter,
+            "aperture_envelope_mm": clear_aperture, "radial_wall_mm": round(wall, 4)}
+
+
 def _calculate_sag(radius: float, conic: float, y: float) -> float:
     """Calculate exact surface sag z(y)."""
     if radius == 0.0 or abs(radius) > 1e10:
@@ -448,7 +527,7 @@ def _render_gbt13323_element_drawing(
         "1、材料采用指定牌号优质光学玻璃；",
         "2、未注倒角均为 0.2~0.3×45°，棱边不得崩边；",
         "3、胶合面胶合层厚度 0.01~0.02mm，采用光学胶；",
-        "4、光学表面镀宽带增透膜，透过率 ≥ 99.0%；",
+        "4、镀膜要求未指定，须确认；",
         "5、基准设计波长见系统设计要求。"
     ])
     line_y = notes_y_start
@@ -761,20 +840,22 @@ def _render_gbt13323_assembly_drawing(
     rows = [
         {"type": "header", "label": "(图样代号) (存储代号)", "val": ""},
         {"type": "section", "label": "系统主要技术参数", "val": ""},
-        {"type": "data", "label": "工作波段", "val": drawing_data.get("spectral_range", "785~850nm")},
-        {"type": "data", "label": "数值孔径 NA", "val": drawing_data.get("na_str", "0.90")},
-        {"type": "data", "label": "有效焦距 f'", "val": drawing_data.get("efl_str", "4.75")},
-        {"type": "data", "label": "物方工作距离 WD", "val": drawing_data.get("wd_str", "0.78")},
-        {"type": "data", "label": "扫描视场", "val": drawing_data.get("fov_str", "0.5×0.5mm")},
-        {"type": "data", "label": "出射光瞳直径", "val": drawing_data.get("pupil_str", "\u03a6 8.55")},
-        {"type": "data", "label": "浸没介质折射率", "val": drawing_data.get("immersion_str", "1.329 (水)")},
-        {"type": "data", "label": "盖玻片厚度", "val": drawing_data.get("coverglass_str", "0.17 (N-K5)")},
+        {"type": "data", "label": "工作波段", "val": drawing_data.get("spectral_range", "-")},
+        {"type": "data", "label": "物方数值孔径 NA", "val": drawing_data.get("na_str", "-")},
+        {"type": "data", "label": "有效焦距 f'", "val": drawing_data.get("efl_str", "-")},
+        {"type": "data", "label": "物方工作距离 WD", "val": "∞" if drawing_data.get("object_at_infinity") else drawing_data.get("wd_str", "-")},
+        {"type": "data", "label": "扫描视场", "val": drawing_data.get("fov_str", "-")},
+        {"type": "data", "label": "出射光瞳直径", "val": drawing_data.get("pupil_str", "-")},
+        {"type": "data", "label": "物方介质", "val": drawing_data.get("immersion_str", "-")},
+        {"type": "data", "label": "盖玻片厚度", "val": drawing_data.get("coverglass_str", "-")},
         {"type": "section", "label": "像质与装配要求", "val": ""},
-        {"type": "data", "label": "波像差 RMS", "val": drawing_data.get("rms_wavefront", "< 0.05 λ")},
-        {"type": "data", "label": "轴向色差", "val": drawing_data.get("axial_color", "< 2.5 μm")},
-        {"type": "data", "label": "装配同轴度", "val": drawing_data.get("concentricity", "< 0.003")},
-        {"type": "data", "label": "外圆配合公差", "val": drawing_data.get("barrel_fit", "g6/H7")},
-        {"type": "data", "label": "光学总长", "val": drawing_data.get("totr_str", "35.39")},
+        {"type": "data", "label": "波像差 RMS", "val": drawing_data.get("rms_wavefront", "-")},
+        {"type": "data", "label": "轴向色差", "val": drawing_data.get("axial_color", "-")},
+        {"type": "data", "label": "装配同轴度", "val": drawing_data.get("concentricity", "-")},
+        {"type": "data", "label": "外圆配合公差", "val": drawing_data.get("barrel_fit", "-")},
+        {"type": "data", "label": "光学总长 TOTR", "val": drawing_data.get("totr_str", "-")},
+        {"type": "data", "label": "镜组轴向长度", "val": drawing_data.get("stack_str", "-")},
+        {"type": "data", "label": "后表面至像面", "val": drawing_data.get("rear_gap_str", "-")},
     ]
 
     total_tbl_h = len(rows) * row_h
@@ -986,7 +1067,7 @@ def _render_gbt13323_assembly_drawing(
     ax.plot([sys_z_start, sys_z_start], [axis_y - (max_sys_od/2.0)*scale, tot_dim_y - 6], color="#333333", linestyle="-", linewidth=0.7)
     ax.plot([sys_z_end, sys_z_end], [axis_y - (max_sys_od/2.0)*scale, tot_dim_y - 6], color="#333333", linestyle="-", linewidth=0.7)
     ax.annotate("", xy=(sys_z_start, tot_dim_y), xytext=(sys_z_end, tot_dim_y), arrowprops=dict(arrowstyle="<->", color="black", lw=1.0))
-    ax.text((sys_z_start + sys_z_end) / 2.0, tot_dim_y + 3, f"光学总长 {total_axial_len:.2f}", fontsize=9.2, fontweight="bold", ha="center", va="bottom")
+    ax.text((sys_z_start + sys_z_end) / 2.0, tot_dim_y + 3, f"镜组轴向长度 {total_axial_len:.2f}", fontsize=9.2, fontweight="bold", ha="center", va="bottom")
 
     plt.savefig(output_png, bbox_inches="tight", dpi=220)
     plt.close(fig)
@@ -1011,6 +1092,8 @@ def _write_gbt13323_element_markdown(dwg_data: Dict[str, Any], filepath: str):
 - **机械外径 (OD)**: `Ø {dwg_data['od']:.2f} {dwg_data['od_tolerance']}`
 - **有效通光孔径 (CA)**: `Ø {dwg_data['ca']:.2f}`
 - **图纸比例**: `{dwg_data['drawing_scale']}`
+- **设计波长**: `{dwg_data.get('design_wavelengths', '-')}`
+- **镀膜**: `{dwg_data.get('coating', 'Not specified')}`
 
 ---
 
@@ -1021,7 +1104,7 @@ def _write_gbt13323_element_markdown(dwg_data: Dict[str, Any], filepath: str):
 | **Δnd** | 折射率允差 | `{dwg_data.get('delta_nd', '2C')}` | GB/T 903-2019 |
 | **Δ(nF - nC)** | 色散系数允差 | `{dwg_data.get('delta_nf_nc', '2C')}` | GB/T 903-2019 |
 | **光学均匀性** | 均匀性级别 | `{dwg_data.get('homogeneity', '2')}` 级 | GB/T 903-2019 |
-| **应力双折射** | 光程差 | `{dwg_data.get('stress_biref', '1')}` 级 (≤ 5 nm/cm) | GB/T 903-2019 |
+| **应力双折射** | 光程差 | `{dwg_data.get('stress_biref', '1')}` 级 | GB/T 903-2019 |
 | **条纹度** | 无条纹级别 | `{dwg_data.get('striae', '1')}` 级 | GB/T 903-2019 |
 | **气泡度** | 气泡度类别 | `{dwg_data.get('bubbles', '1')}` 级 | GB/T 903-2019 |
 | **N** | 光圈数 (球面度偏差) | `{dwg_data.get('N', '3')}` | GB/T 2831-2009 |
@@ -1066,8 +1149,12 @@ def _write_assembly_markdown_drawing(dwg_data: Dict[str, Any], filepath: str):
 - **有效焦距**: `{dwg_data.get('efl_str', '-')}` mm
 - **数值孔径 NA**: `{dwg_data.get('na_str', '-')}`
 - **工作谱段**: `{dwg_data.get('spectral_range', '-')}`
+- **设计波长**: `{dwg_data.get('design_wavelengths', '-')}`
 - **工作距离 WD**: `{dwg_data.get('wd_str', '-')}` mm
-- **光学总长**: `{dwg_data.get('totr_str', '-')}` mm
+- **光学总长 TOTR (第一面至像面)**: `{dwg_data.get('totr_str', '-')}` mm
+- **镜组轴向长度 (第一片前面至末片后面)**: `{dwg_data.get('stack_str', '-')}` mm
+- **末片后表面至像面**: `{dwg_data.get('rear_gap_str', '-')}` mm
+- **距离定义**: `{dwg_data.get('distance_basis', '-')}`
 
 ---
 
@@ -1110,6 +1197,7 @@ def _write_element_markdown_drawing(spec: Dict[str, Any], filepath: str):
 - **设计图号 / 表面范围**: `{spec['surfaces']}`
 - **玻璃材质牌号**: `{spec['material']}`
 - **图纸公差等级**: `{spec['diameter_tolerance']}`
+- **设计波长**: `{spec.get('design_wavelengths', '-')}`
 
 ---
 
@@ -1282,7 +1370,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     msp.add_text("ZEMAX", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_d1 + x_d2) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    date_str = data.get("drawing_date", "2026/09/24")
+    date_str = data.get("drawing_date", date.today().strftime("%Y/%m/%d"))
     msp.add_text(date_str, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_d2 + x_mid) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
     )
@@ -1291,10 +1379,10 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     msp.add_text("APPROVAL", dxfattribs={"height": 1.8, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((tb_x0 + x_d1) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text("OPT-AI", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(data.get("approved_by", "-"), dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_d1 + x_d2) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    msp.add_text(date_str, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
+    msp.add_text(data.get("approval_date", "-"), dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_d2 + x_mid) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
@@ -1314,15 +1402,15 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     )
 
     # Tier 2 (Y: 27.0 to 38.0): Description / Title
-    od = float(data.get("od", 25.4))
+    od = float(data["od"])
     if is_assembly:
-        line1 = f"\u03a6 {od:.1f}mm WATER IMMERSION OBJECTIVE"
-        line2 = f"NA={data.get('na_str', '0.90')}, f={data.get('efl_str', '4.75')}mm, -BBAR COAT"
+        line1 = f"\u03a6 {od:.1f}mm OPTICAL ASSEMBLY"
+        line2 = f"f={data.get('efl_str', '-')}mm; {data.get('spectral_range', '-')}"
     else:
         dwg_raw = data.get("drawing_name", "OPTICAL ELEMENT").replace("\n", " ")
         line1 = f"\u03a6 {od:.1f}mm {dwg_raw}"
-        mat_clean = data.get('material', 'N-BK7').replace('\n', ' / ')
-        line2 = f"MAT: {mat_clean}, -BBAR COAT"
+        mat_clean = data.get('material', '-').replace('\n', ' / ')
+        line2 = f"MAT: {mat_clean}"
 
     h_line1 = 2.3 if len(line1) <= 34 else 1.9
     h_line2 = 2.0 if len(line2) <= 34 else 1.7
@@ -1377,7 +1465,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     msp.add_text("ITEM#", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         (x_mid + 2.0, 13.5), align=TextEntityAlignment.MIDDLE_LEFT
     )
-    item_code = data.get("drawing_code", "OPT-WATER-01")
+    item_code = data.get("drawing_code", "OPT-00")
     msp.add_text(item_code, dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_mid + x_r3) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
@@ -1385,7 +1473,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
     msp.add_text("APPROX WEIGHT", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r3 + tb_x1) / 2.0, 13.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
-    wt_str = data.get("weight_str", "0.02 Kg" if is_assembly else "0.005 Kg")
+    wt_str = data.get("weight_str", "TBD")
     msp.add_text(wt_str, dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
         ((x_r3 + tb_x1) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
     )
@@ -1594,7 +1682,7 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.
         ("Optical Striae", data.get("striae", "1"), "Centration χ", data.get("wedge_chi", "< 1'")),
         ("Bubbles", data.get("bubbles", "1"), "Clear Aperture D0", ca_str),
         ("Annealing", "Fine", "Ref Focal Length f'", data.get("efl_str", "-")),
-        ("Transmittance", "≥ 99.0%", "Ref Back Focus S'F", data.get("bfl_str", "-")),
+        ("Transmittance", data.get("transmittance", "TBD"), "Ref Back Focus S'F", data.get("bfl_str", "-")),
     ]
 
     cur_y = y_h2
@@ -1642,7 +1730,7 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15
     barrel_idx = len(items) + 1
     ring_idx = len(items) + 2
     items.append((str(barrel_idx), "LENS BARREL & SPACERS", "6061-T6 AL BLACK", "1"))
-    items.append((str(ring_idx), "SM1 RETAINING RING", "BRASS / BLACK", "1"))
+    items.append((str(ring_idx), "RETAINING RING (TBD)", "TBD", "1"))
 
     total_h = header_h + len(items) * row_h
     y_bottom = y_top - total_h
@@ -1744,15 +1832,15 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     # Draw Bottom-Left Notes / Specifications
     notes_list = [
         "NOTES/SPECIFICATIONS:",
-        f"1. DESIGN WAVELENGTHS: {drawing_data.get('spectral_range', '785 nm, 810 nm, 850 nm')}",
-        f"2. FOCAL LENGTH: {drawing_data.get('efl_str', '4.75')} mm \u00b11%",
+        f"1. DESIGN WAVELENGTHS: {drawing_data.get('design_wavelengths', 'Not specified')}",
+        f"2. FOCAL LENGTH (REF): {drawing_data.get('efl_str', '-')} mm",
         f"3. BACK FOCAL LENGTH (REF): {drawing_data.get('bfl_str', '-')} mm",
         f"4. LENS DIAMETER: \u03a6 {od:.2f} +0.00/{od_tol} mm",
-        f"5. LENS CENTER THICKNESS: {total_thickness:.2f} \u00b10.02 mm",
-        f"6. CLEAR APERTURE: >90% OF LENS DIAMETER (\u03a6 {ca:.1f} mm)",
-        "7. SURFACE QUALITY: 40-20 SCRATCH-DIG",
-        "8. CENTRATION: < 3 arcmin",
-        "9. COATING: BBAR Ravg < 0.5% FROM 780-860nm, 0\u00b0 AOI, ON BOTH OPTICAL SURFACES",
+        f"5. LENS CENTER THICKNESS: {total_thickness:.2f} mm; COMPONENT TOLERANCES AS DIMENSIONED",
+        f"6. CLEAR APERTURE: \u03a6 {ca:.2f} mm",
+        f"7. SURFACE QUALITY: {drawing_data.get('surface_quality', 'Not specified')}",
+        f"8. CENTRATION: {drawing_data.get('wedge_chi', 'Not specified')}",
+        f"9. COATING: {drawing_data.get('coating', 'Not specified')}",
         "10. PROTECTIVE CHAMFER: 0.3\u00d745\u00b0 AROUND ALL EDGES, NO CHIPPING",
         "",
         "FOR INFORMATION ONLY NOT FOR MANUFACTURING PURPOSES"
@@ -1927,13 +2015,13 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
     # Draw Bottom-Left Notes
     notes_list = [
         "NOTES/SPECIFICATIONS:",
-        f"1. DESIGN WAVELENGTHS: {drawing_data.get('spectral_range', '785 ~ 850 nm')}",
-        f"2. EFFECTIVE FOCAL LENGTH: {drawing_data.get('efl_str', '4.75')} mm \u00b11%",
-        f"3. NUMERICAL APERTURE: NA={drawing_data.get('na_str', '-')} (OBJECT SPACE: {drawing_data.get('immersion_str', 'AIR')})",
-        f"4. WORKING DISTANCE: {drawing_data.get('wd_str', '0.78')} mm",
-        f"5. FIELD OF VIEW: {drawing_data.get('fov_str', '\u03a6 0.71 mm')}",
-        f"6. TOTAL OPTICAL TRACK: {total_track:.2f} mm",
-        "7. ASSEMBLY ALIGNMENT: ELEMENT CENTERING ERROR \u2264 0.003 mm",
+        f"1. DESIGN WAVELENGTHS: {drawing_data.get('design_wavelengths', 'Not specified')}",
+        f"2. EFFECTIVE FOCAL LENGTH (REF): {drawing_data.get('efl_str', '-')} mm",
+        f"3. OBJECT SPACE NA={drawing_data.get('na_str', '-')} (MEDIUM: {drawing_data.get('immersion_str', 'AIR')})",
+        f"4. OBJECT WORKING DISTANCE: {drawing_data.get('wd_str', '-')} mm",
+        f"5. FIELD OF VIEW: {drawing_data.get('fov_str', '-')}",
+        f"6. TOTAL OPTICAL TRACK: {drawing_data.get('totr_str', '-')} mm; REAR IMAGE GAP: {drawing_data.get('rear_gap_str', '-')} mm",
+        f"7. LENS STACK: {drawing_data.get('stack_str', '-')} mm; ASSEMBLY CENTERING \u2264 0.003 mm",
         "8. SPACING RINGS: FLATNESS & PARALLELISM \u2264 0.002 mm",
         "9. OPERATING TEMPERATURE: 20\u2103 \u00b1 2\u2103",
         "",
@@ -2017,7 +2105,7 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
     tot_z0 = x_origin
     tot_z1 = cur_z
     tot_dim_y = -max_od * scale / 2.0 - 22.0
-    tot_txt = f"TOTAL TRACK {total_track:.2f}"
+    tot_txt = f"LENS STACK {total_track:.2f}"
     _draw_dxf_linear_dimension(msp, (tot_z0, axis_y), (tot_z1, axis_y), tot_dim_y, tot_txt, orientation="horizontal")
 
     doc.saveas(filepath)
@@ -2070,6 +2158,10 @@ def zemax_export_optical_drawing(
     elements = _extract_lens_elements(sys)
     if not elements:
         return {"status": "error", "message": "No optical lens elements found in the current system."}
+
+    metadata = _system_drawing_metadata(sys, session.ZOSAPI, elements)
+    if metadata["lens_stack_length_mm"] is None:
+        return {"status": "error", "message": "Axial drawings require a centered, forward-going sequential system; this geometry needs a separate mechanical layout."}
 
     tolerance_presets = {
         "commercial": {
@@ -2171,6 +2263,7 @@ def zemax_export_optical_drawing(
         cn_type = type_names.get(e_type, "透镜元件")
 
         dwg_data = {
+            **metadata,
             "element_index": e_idx,
             "drawing_name": f"光学元件-{cn_type} {e_idx}",
             "drawing_code": f"OPT-{active_proj.upper()[:6]}-E{e_idx:02d}",
@@ -2190,6 +2283,8 @@ def zemax_export_optical_drawing(
             "delta_R": tols["delta_R"],
             "B": tols["B"],
             "wedge_chi": tols["wedge_chi"],
+            "surface_quality": tols["iso_5"],
+            "coating": _element_coating(sys, elem),
             "efl_str": "-",
             "bfl_str": "-",
             "ca_str": f"{max_ca:.1f}",
@@ -2197,8 +2292,8 @@ def zemax_export_optical_drawing(
                 f"1、材料采用指定牌号优质光学玻璃（{mat_str.replace(chr(10), '、')}）；",
                 "2、未注倒角均为 0.2~0.3×45°，棱边不得崩边；",
                 "3、胶合面胶合层厚度 0.01~0.02mm，采用光学胶；" if len(components) > 1 else "3、机械外圆磨砂加工，表面粗糙度 1.6；",
-                "4、光学表面镀宽带增透膜，透过率 ≥ 99.0%；",
-                "5、基准设计波长见系统设计要求。"
+                f"4、镀膜：{_element_coating(sys, elem)}；未指定的表面须确认。",
+                f"5、设计波长：{metadata['design_wavelengths']}。"
             ],
             "elements": elem_slices,
         }
@@ -2208,12 +2303,11 @@ def zemax_export_optical_drawing(
         gbt_md_filepath = os.path.join(output_dir, f"gbt13323_drawing_element_{e_idx}.md")
         iso_md_filepath = os.path.join(output_dir, f"iso10110_drawing_element_{e_idx}.md")
 
-        _write_gbt13323_element_markdown(dwg_data, gbt_md_filepath)
-
         # Also write ISO 10110 spec for compatibility
         c0 = components[0]
         c_last = components[-1]
         iso_spec = {
+            "design_wavelengths": metadata["design_wavelengths"],
             "element_index": e_idx,
             "element_type": e_type,
             "surfaces": f"S{elem['surface_start']} - S{elem['surface_end']}",
@@ -2248,7 +2342,7 @@ def zemax_export_optical_drawing(
                 "bubbles_iso1": tols["iso_1"],
                 "inhomogeneity_iso2": tols["iso_2"],
             },
-            "coating": "BBAR (400 - 700 nm, R_avg < 0.5%)",
+            "coating": dwg_data["coating"],
         }
         _write_element_markdown_drawing(iso_spec, iso_md_filepath)
 
@@ -2268,6 +2362,8 @@ def zemax_export_optical_drawing(
         if generate_2d_plot and not png_rendered:
             _render_gbt13323_element_drawing(dwg_data, png_filepath)
 
+        # DXF export sets the actual drawing scale; keep the specification in sync.
+        _write_gbt13323_element_markdown(dwg_data, gbt_md_filepath)
         dwg_data["gbt_markdown_file"] = gbt_md_filepath
         dwg_data["iso_markdown_file"] = iso_md_filepath
         dwg_data["drawing_image_file"] = png_filepath
@@ -2282,10 +2378,10 @@ def zemax_export_optical_drawing(
             s_end = elem["surface_end"]
             air_after = 0.0
             if e_i < len(elements) - 1 and s_end < num_surfs:
-                surf_end_obj = sys.LDE.GetSurfaceAt(s_end)
-                t_val = float(surf_end_obj.Thickness)
-                if not math.isinf(t_val) and abs(t_val) < 1e4:
-                    air_after = t_val
+                for gap_index in range(s_end, elements[e_i + 1]["surface_start"]):
+                    t_val = float(sys.LDE.GetSurfaceAt(gap_index).Thickness)
+                    if math.isfinite(t_val) and abs(t_val) < 1e4:
+                        air_after += t_val
 
             comps = []
             for comp in elem["components"]:
@@ -2318,20 +2414,19 @@ def zemax_export_optical_drawing(
                 "air_after": round(air_after, 4)
             })
 
-        total_track = sum(e["ct"] + e["air_after"] for e in assembly_elements)
-
         # Extract first-order optical data for assembly drawing
         efl_str = "-"
         na_str = "-"
-        spectral_str = "-"
-        wd_str = "-"
         fov_str = "-"
         pupil_str = "-"
         immersion_str = "空气 (n=1.000)"
         axial_color_str = "-"
         try:
             zos = session.ZOSAPI
-            efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 1, 0, 0, 0, 0, 0, 0, 0)
+            waves = sys.SystemData.Wavelengths
+            primary_wave = next((i for i in range(1, int(waves.NumberOfWavelengths) + 1)
+                                 if waves.GetWavelength(i).IsPrimary), 1)
+            efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 0, primary_wave, 0, 0, 0, 0, 0, 0)
             if abs(efl_num) > 0.001 and abs(efl_num) < 1e5:
                 efl_str = f"{efl_num:.2f}"
         except Exception:
@@ -2341,25 +2436,8 @@ def zemax_export_optical_drawing(
             sd = sys.SystemData
             ap_type = str(sd.Aperture.ApertureType)
             ap_val = float(sd.Aperture.ApertureValue)
-            if "NumericalAperture" in ap_type or "NA" in ap_type:
+            if ap_type == "ObjectSpaceNA":
                 na_str = f"{ap_val:.2f}"
-            elif efl_str != "-" and float(efl_str) > 0:
-                na_str = f"{(ap_val / (2.0 * float(efl_str))):.2f}"
-        except Exception:
-            pass
-
-        try:
-            first_t = float(sys.LDE.GetSurfaceAt(1).Thickness)
-            if 0.05 <= first_t <= 50.0:
-                wd_str = f"{first_t:.2f}"
-        except Exception:
-            pass
-
-        try:
-            num_w = int(sys.SystemData.Wavelengths.NumberOfWavelengths)
-            w_vals = [float(sys.SystemData.Wavelengths.GetWavelength(i + 1).Wavelength) * 1000.0 for i in range(num_w)]
-            if w_vals:
-                spectral_str = f"{min(w_vals):.0f} ~ {max(w_vals):.0f} nm"
         except Exception:
             pass
 
@@ -2395,19 +2473,16 @@ def zemax_export_optical_drawing(
             pass
 
         proj_clean = active_proj.replace('_', ' ').title()
-        if "Water" in proj_clean and "Objective" in proj_clean:
-            dwg_name_title = "高数值孔径水浸显微物镜\n光学系统总装配合图"
-        else:
-            dwg_name_title = f"{proj_clean}\n光学系统总装配合图"
+        dwg_name_title = f"{proj_clean}\n光学系统总装配合图"
 
         asm_dwg_data = {
+            **metadata,
             "drawing_name": dwg_name_title,
             "drawing_code": f"ASM-{active_proj.upper()[:8]}-00",
             "drawing_scale": "2:1",
-            "spectral_range": spectral_str,
+            "od": max(e["od"] for e in assembly_elements),
             "na_str": na_str,
             "efl_str": efl_str,
-            "wd_str": wd_str,
             "fov_str": fov_str,
             "pupil_str": pupil_str,
             "immersion_str": immersion_str,
@@ -2416,13 +2491,12 @@ def zemax_export_optical_drawing(
             "axial_color": axial_color_str,
             "concentricity": "< 0.003",
             "barrel_fit": "g6/H7",
-            "totr_str": f"{total_track:.2f}",
             "assembly_elements": assembly_elements,
             "technical_notes": [
                 "1、本图为光学系统总装配合图，各元件具体公差见对应零件图样；",
                 "2、装配基准：以镜筒内孔定位基准面为准，各透镜同轴度允差 ≤ 0.003mm；",
                 "3、空气间隔由精密金属隔圈保证，隔圈端面平行度 ≤ 0.002mm；",
-                "4、胶合件在装配前须进行同轴对中胶合检验，偏角差 χ ≤ 1'；",
+                f"4、胶合件在装配前须进行同轴对中胶合检验，偏角差 χ ≤ {tols['wedge_chi']}；",
                 "5、全系统在参考工作温度 20℃ ± 2℃ 下总装校验。"
             ]
         }
@@ -2450,7 +2524,12 @@ def zemax_export_optical_drawing(
             "assembly_markdown_file": asm_md_path,
             "assembly_image_file": asm_png_path,
             "assembly_dxf_file": asm_dxf_path,
-            "total_track_length": total_track,
+            "total_track_length": metadata["total_track_length_mm"],
+            "lens_stack_length_mm": metadata["lens_stack_length_mm"],
+            "rear_image_gap_mm": metadata["rear_image_gap_mm"],
+            "object_working_distance_mm": metadata["object_working_distance_mm"],
+            "object_at_infinity": metadata["object_at_infinity"],
+            "distance_basis": metadata["distance_basis"],
             "elements_count": len(assembly_elements),
         }
 
@@ -2493,8 +2572,13 @@ def zemax_export_prescription_for_cad(
     else:
         try:
             margin_mm = float(margin_mm)
-        except Exception:
-            margin_mm = 2.0
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "margin_mm must be finite and positive."}
+
+    if not math.isfinite(margin_mm) or margin_mm <= 0:
+        return {"status": "error", "message": "margin_mm must be finite and positive."}
+    if not math.isfinite(barrel_radial_clearance_mm) or barrel_radial_clearance_mm < 0:
+        return {"status": "error", "message": "barrel_radial_clearance_mm must be finite and nonnegative."}
 
     session = ZOSSession.get_instance()
     sys = session.system
@@ -2525,6 +2609,11 @@ def zemax_export_prescription_for_cad(
 
     # 2. Extract discrete elements & compute air spacers
     elements = _extract_lens_elements(sys)
+    if not elements:
+        return {"status": "error", "message": "No optical lens elements found in the current system."}
+    geometry = _system_drawing_metadata(sys, session.ZOSAPI, elements)
+    if geometry["lens_stack_length_mm"] is None:
+        return {"status": "error", "message": "Ring recommendations require a centered, forward-going sequential system."}
 
     spacers = []
     lens_parts = []
@@ -2564,21 +2653,25 @@ def zemax_export_prescription_for_cad(
 
         od1 = lens_parts[idx]["recommended_od_mm"]
         od2 = lens_parts[idx + 1]["recommended_od_mm"]
-        ca1 = lens_parts[idx]["clear_aperture_mm"]
-        ca2 = lens_parts[idx + 1]["clear_aperture_mm"]
-
-        # Ensure spacer has clear aperture and positive wall thickness
-        beam_clearance = min(ca1, ca2)
-        spacer_id = round(beam_clearance * 0.95, 2)
-        spacer_od = round(min(od1, od2), 2)
-        if spacer_od < spacer_id + 1.5:
-            spacer_od = round(max(od1, od2), 2)
-        if spacer_od < spacer_id + 1.5:
-            spacer_od = round(spacer_id + 2.0, 2)
+        # Use the larger aperture and all intervening surfaces. The smaller
+        # mating OD limits support/fit; enlarging it would cause interference.
+        aperture_envelope = max(
+            2.0 * e1["max_semi_diameter"], 2.0 * e2["max_semi_diameter"],
+            *(2.0 * float(sys.LDE.GetSurfaceAt(s).SemiDiameter)
+              for s in range(gap_surf, e2["surface_start"] + 1)))
+        try:
+            dimensions = _ring_dimensions(aperture_envelope, min(od1, od2))
+        except ValueError as exc:
+            return {"status": "error", "message": f"Spacer {idx + 1}: {exc}"}
+        spacer_id = dimensions["inner_diameter_mm"]
+        spacer_od = dimensions["outer_diameter_mm"]
 
         spacer_len = round(air_gap_thickness, 3)
+        if spacer_len <= 0:
+            return {"status": "error", "message": f"Spacer {idx + 1} has no positive axial space."}
 
         spacers.append({
+            **dimensions,
             "spacer_index": idx + 1,
             "between_elements": f"Element {idx+1} -> Element {idx+2}",
             "inner_diameter_mm": spacer_id,
@@ -2595,16 +2688,22 @@ def zemax_export_prescription_for_cad(
         })
 
     # Recommended Retaining Ring
-    front_od = lens_parts[0]["recommended_od_mm"] if lens_parts else 25.4
+    front_od = lens_parts[0]["recommended_od_mm"]
+    try:
+        front_dimensions = _ring_dimensions(2.0 * elements[0]["max_semi_diameter"], front_od)
+    except ValueError as exc:
+        return {"status": "error", "message": f"Retaining ring: {exc}"}
+    front_id = front_dimensions["inner_diameter_mm"]
     retaining_ring = {
+        **front_dimensions,
         "outer_diameter_mm": front_od,
-        "inner_diameter_mm": round(max(front_od - 4.0, 1.0), 2),
+        "inner_diameter_mm": front_id,
         "thickness_mm": 2.5,
         "solidworks_mcp_command": {
             "tool": "create_3d_retaining_ring",
             "arguments": {
                 "outer_diameter": front_od,
-                "inner_diameter": round(max(front_od - 4.0, 1.0), 2),
+                "inner_diameter": front_id,
                 "thickness": 2.5,
             },
         },
@@ -2621,18 +2720,23 @@ def zemax_export_prescription_for_cad(
         for lp in lens_parts
     ]
 
-    total_track = 0.0
-    for s_idx in range(1, num_surfs):
-        th = float(sys.LDE.GetSurfaceAt(s_idx).Thickness)
-        if not math.isinf(th) and abs(th) < 1e9:
-            total_track += th
-
     payload = {
         "status": "success",
         "margin_mm": margin_mm,
-        "total_track_mm": round(total_track, 4),
+        "total_track_mm": round(geometry["total_track_length_mm"], 4) if geometry["total_track_length_mm"] is not None else None,
+        "lens_stack_length_mm": geometry["lens_stack_length_mm"],
+        "rear_image_gap_mm": geometry["rear_image_gap_mm"],
+        "object_working_distance_mm": geometry["object_working_distance_mm"],
+        "object_at_infinity": geometry["object_at_infinity"],
         "elements_count": len(lens_parts),
         "spacers_count": len(spacers),
+        "ring_validation": {
+            "basis": "Surface aperture envelope; centered coaxial placement",
+            "radial_aperture_clearance_mm": 0.1,
+            "minimum_radial_wall_mm": 0.5,
+            "status": "aperture_and_fit_checked",
+            "requires_verification": "Trace all fields/wavelengths through the final ring positions and thicknesses; confirm contact, threads and tolerances before manufacture.",
+        },
         "solidworks_build_system_payload": {
             "surfaces": surfaces_data,
             "margin_mm": margin_mm,

@@ -4,6 +4,7 @@ Handles Merit Function construction, custom operand management, Quick Focus,
 Local Optimization (DLS/OD), and Hammer global search.
 """
 
+import math
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 
@@ -33,9 +34,17 @@ def zemax_setup_merit_function(
     - RMS Spot or Wavefront criterion with Gaussian Quadrature pupil integration
     - Mechanical fabrication boundary constraints (MNCA/MXCA/MNEA for air, MNCG/MXCG/MNEG for glass)
     - Strict internal element-to-element air gap control (MXCA <= 12.0 mm) to prevent runaway spacing
-    - Optional lens barrel core stack length constraint (TTHI) to enforce compact packaging
-    - Optional first-order focal length (EFFL) and total track (TOTR) targets.
+    - Optional upper bounds on lens barrel core stack (TTHI) and total track (TOTR).
+      Lengths below these maxima incur no penalty.
+    - Optional first-order focal length equality target (EFFL).
     """
+    for name, limit, weight in (("max_totr", max_totr, totr_weight),
+                                ("max_barrel_length", max_barrel_length, barrel_weight)):
+        if limit is not None and (
+            not math.isfinite(float(limit)) or float(limit) <= 0
+            or not math.isfinite(float(weight)) or float(weight) <= 0
+        ):
+            return {"status": "error", "message": f"{name} and its weight must be finite and positive."}
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
@@ -122,17 +131,7 @@ def zemax_setup_merit_function(
                 op_air.Weight = 25.0
                 added_operands.append(f"MXCA (Surface {s_idx}) target={max_internal_air}mm, weight=25.0")
 
-        # 2. Enforce Lens Barrel Core Stack Length constraint (TTHI)
-        if max_barrel_length is not None:
-            op_barrel = mfe.InsertNewOperandAt(1)
-            op_barrel.ChangeType(zos.Editors.MFE.MeritOperandType.TTHI)
-            op_barrel.GetCellAt(2).IntegerValue = first_g
-            op_barrel.GetCellAt(3).IntegerValue = last_g
-            op_barrel.Target = float(max_barrel_length)
-            op_barrel.Weight = float(barrel_weight)
-            added_operands.append(f"TTHI (Surfaces {first_g}..{last_g}) target={max_barrel_length}mm, weight={barrel_weight}")
-
-    # 3. First-order targets (EFFL, TOTR)
+    # 2. First-order equality target (EFFL)
     if target_efl is not None:
         op_efl = mfe.InsertNewOperandAt(1)
         op_efl.ChangeType(zos.Editors.MFE.MeritOperandType.EFFL)
@@ -145,12 +144,28 @@ def zemax_setup_merit_function(
         op_efl.GetOperandCell(merit_col.Param2).IntegerValue = primary_wave  # EFFL: Param2 = Wave
         added_operands.append(f"EFFL target={target_efl}, weight={efl_weight}")
 
+    # Append after all row insertions so the OPLT references remain correct.
+    # Measurement operands have zero weight; OPLT equals its target below the
+    # bound and the measured value above it (verified with the native API).
+    def add_upper_bound(code, limit, weight, surface_range=None):
+        measurement = mfe.AddOperand()
+        measurement.ChangeType(getattr(zos.Editors.MFE.MeritOperandType, code))
+        measurement.Weight = 0.0
+        if surface_range:
+            measurement.GetOperandCell(merit_col.Param1).IntegerValue = surface_range[0]
+            measurement.GetOperandCell(merit_col.Param2).IntegerValue = surface_range[1]
+        measurement_row = int(mfe.NumberOfOperands)
+        bound = mfe.AddOperand()
+        bound.ChangeType(zos.Editors.MFE.MeritOperandType.OPLT)
+        bound.GetOperandCell(merit_col.Param1).IntegerValue = measurement_row
+        bound.Target = float(limit)
+        bound.Weight = float(weight)
+        added_operands.append(f"{code} <= {limit}mm via OPLT (row {measurement_row}), weight={weight}")
+
+    if max_barrel_length is not None and glass_surfs:
+        add_upper_bound("TTHI", max_barrel_length, barrel_weight, (glass_surfs[0], glass_surfs[-1]))
     if max_totr is not None:
-        op_totr = mfe.InsertNewOperandAt(1)
-        op_totr.ChangeType(zos.Editors.MFE.MeritOperandType.TOTR)
-        op_totr.Target = float(max_totr)
-        op_totr.Weight = float(totr_weight)
-        added_operands.append(f"TOTR target={max_totr}, weight={totr_weight}")
+        add_upper_bound("TOTR", max_totr, totr_weight)
 
     return {
         "status": "success",

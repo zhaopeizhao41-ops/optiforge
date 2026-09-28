@@ -444,8 +444,9 @@ def zemax_setup_merit_function(
     - Gaussian Quadrature pupil integration (rings, arms)
     - Fabrication boundary constraints (MNCA/MXCA/MNEA for air, MNCG/MXCG/MNEG for glass)
     - Strict internal element-to-element air gap constraint (MXCA <= 12.0 mm) preventing runaway air spaces
-    - Optional lens barrel core stack length constraint (TTHI) preventing oversized housings
-    - Optional first-order focal length (EFFL) and total track (TOTR) targets.
+    - Optional upper bounds max_barrel_length (TTHI) and max_totr (TOTR), enforced by OPLT.
+      Lengths below these maxima incur no penalty; bounds and their weights must be finite and positive.
+    - Optional first-order focal length equality target (EFFL).
     criterion: 'RMS_Spot' (for geometric aberrations) or 'RMS_Wavefront' (near diffraction limit).
     reference: 'Centroid' or 'ChiefRay'.
 

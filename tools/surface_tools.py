@@ -5,6 +5,7 @@ Handles surface modification, insertion, deletion, and solve configuration.
 
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
+from core.operation_guard import model_operation
 
 
 def zemax_surface_operations(
@@ -181,3 +182,7 @@ def zemax_set_solve(
         "cell": cell,
         "solve_type": str(target_cell.GetSolveData().Type),
     }
+
+
+for _name in ("zemax_surface_operations", "zemax_insert_surface", "zemax_delete_surface", "zemax_set_solve"):
+    globals()[_name] = model_operation(globals()[_name])

@@ -40,6 +40,19 @@ def run_tests():
     print("System Info:", info["status"], "| License:", info.get("license_status"))
     assert info["status"] == "success"
 
+    # Pre-register confirmed proposal for test project to satisfy proposal confirmation gate
+    from tools import zemax_set_project
+    zemax_set_project("test_doublet_lens")
+    zemax_register_design_proposal(
+        project_name="test_doublet_lens",
+        target_specs={"efl_mm": 100.0, "f_number": 5.0},
+        initial_structure_source="Fraunhofer doublet archetype",
+        optical_theory_analysis="Achromatization test",
+        glass_selection_rationale="N-BK7/N-SF2",
+        merit_function_strategy="RMS Spot",
+        user_confirmed_to_simulate=True,
+    )
+
     print("\n=== 2. Testing zemax_load_template ('achromat_doublet') ===")
     tmpl_res = zemax_load_template("achromat_doublet")
     print("Template load:", tmpl_res["status"], "| Surfaces:", tmpl_res["num_surfaces"])

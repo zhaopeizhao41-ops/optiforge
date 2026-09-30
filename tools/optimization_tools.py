@@ -7,6 +7,7 @@ Local Optimization (DLS/OD), and Hammer global search.
 import math
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
+from core.operation_guard import model_operation
 
 
 def zemax_setup_merit_function(
@@ -437,3 +438,7 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> Dict[str, Any]:
         "message": f"Hammer optimization completed after {timeout_seconds}s.",
         "final_merit_function": round(final_mf, 6),
     }
+
+
+for _name in ("zemax_setup_merit_function", "zemax_add_operand", "zemax_quick_focus", "zemax_run_optimization", "zemax_run_hammer"):
+    globals()[_name] = model_operation(globals()[_name])

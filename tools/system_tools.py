@@ -3,7 +3,11 @@ Zemax System Management Tools
 Handles system initialization, file I/O, templates, and high-level system inspection.
 """
 
+import datetime
+import json
+import math
 import os
+import re
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 from domain.design_templates import get_template, list_templates
@@ -16,17 +20,11 @@ from tools.project_manager import (
     resolve_project_file_path,
     list_projects,
     sanitize_project_name,
+    _atomic_json,
+    _atomic_text,
+    _within,
 )
-
-
-def _is_within(path: str, root: str) -> bool:
-    """True if path lies inside root (case-insensitive on Windows, no string-prefix false positives)."""
-    path_n = os.path.normcase(os.path.abspath(path))
-    root_n = os.path.normcase(os.path.abspath(root))
-    try:
-        return os.path.commonpath([path_n, root_n]) == root_n
-    except ValueError:  # different drives
-        return False
+from core.operation_guard import model_operation, serialized_operation
 
 
 def zemax_system_info() -> Dict[str, Any]:
@@ -116,6 +114,7 @@ def zemax_new_file(catalogs: Optional[List[str]] = None) -> Dict[str, Any]:
     return {
         "status": "success",
         "message": "Initialized clean sequential optical system.",
+        "recovery_file": session.last_recovery_file,
         "loaded_glass_catalogs": loaded,
         "num_surfaces": sys.LDE.NumberOfSurfaces,
     }
@@ -153,34 +152,69 @@ def zemax_list_projects() -> Dict[str, Any]:
     }
 
 
+def _rollback_model(session: ZOSSession, result: Dict[str, Any], previous_file, previous_project) -> None:
+    """Restore the model captured before a failed replacement and record the outcome."""
+    try:
+        session.restore_last_recovery()
+        session.current_filepath = previous_file
+        session.model_project = previous_project
+        result["rolled_back"] = True
+    except Exception as error:
+        session.last_recovery_error = str(error)
+        session.current_filepath = None
+        session.model_project = None
+        result.update(rolled_back=False, recovery_error=str(error))
+
+
 def zemax_load_file(filepath: str) -> Dict[str, Any]:
     """Load a Zemax .zos or .zmx optical design file."""
     session = ZOSSession.get_instance()
+    previous_active = get_active_project_name()
+    previous_file = session.current_filepath
+    previous_model_project = session.model_project
     abs_path = os.path.abspath(filepath)
     if not os.path.exists(abs_path):
         return {"status": "error", "message": f"File does not exist: {abs_path}"}
-    session.load_file(abs_path, save_changes=False)
-
-    # Automatically synchronize active project context
-    norm_path = os.path.normpath(abs_path)
+    # Validate the destination project before replacing the in-memory model.
     output_dir = os.path.normpath(get_output_base_dir())
-    if _is_within(norm_path, output_dir):
-        rel = os.path.relpath(norm_path, output_dir)
-        parts = rel.split(os.sep)
-        if len(parts) >= 2 and not parts[0].startswith("."):
-            set_active_project(parts[0])
-        else:
-            stem = os.path.splitext(os.path.basename(abs_path))[0]
-            set_active_project(stem)
-    else:
-        stem = os.path.splitext(os.path.basename(abs_path))[0]
-        set_active_project(stem)
+    parts = os.path.relpath(abs_path, output_dir).split(os.sep) if _within(abs_path, output_dir) else []
+    project = sanitize_project_name(parts[0] if len(parts) >= 2 else os.path.splitext(os.path.basename(abs_path))[0])
+    loaded = False
+    try:
+        session.load_file(abs_path, save_changes=False)
+        loaded = True
+        set_active_project(project)
+        session.model_project = project
+        prop_path = os.path.join(get_project_dir(project), "design_proposal.json")
+        if not os.path.exists(prop_path):
+            _atomic_json(prop_path, {
+                "project_name": project,
+                "user_confirmed_to_simulate": True,
+                "source": f"Loaded from file: {abs_path}",
+            })
+    except Exception as error:
+        # Loading can succeed while project metadata initialization fails. Keep
+        # the active project and in-memory model aligned in that case.
+        result = {"status": "error", "message": str(error), "recovery_file": session.last_recovery_file}
+        prior_error = getattr(session, "last_recovery_error", None)
+        if loaded:
+            _rollback_model(session, result, previous_file, previous_model_project)
+        # Restore project state independently, even if native model recovery failed.
+        try:
+            if get_active_project_name() != previous_active:
+                set_active_project(previous_active)
+        except Exception as project_error:
+            result.update(rolled_back=False, project_recovery_error=str(project_error))
+        if prior_error and "recovery_error" not in result:
+            result.update(rolled_back=False, recovery_error=prior_error)
+        return result
 
     return {
         "status": "success",
         "message": f"Successfully loaded design: {abs_path}",
         "surfaces_count": session.system.LDE.NumberOfSurfaces,
         "active_project": get_active_project_name(),
+        "recovery_file": session.last_recovery_file,
     }
 
 
@@ -196,33 +230,31 @@ def zemax_save_file(
     """
     session = ZOSSession.get_instance()
     try:
-        if project_name:
-            set_active_project(project_name)
-        active_proj = get_active_project_name()
+        active_proj = sanitize_project_name(project_name) if project_name else get_active_project_name()
 
         target_path = filepath
-        if not target_path:
-            if (
-                session.current_filepath
-                and os.path.isabs(session.current_filepath)
-                and _is_within(session.current_filepath, get_project_dir(active_proj))
-            ):
-                target_path = session.current_filepath
-            else:
-                target_path = resolve_project_file_path(
-                    None, default_filename=f"{active_proj}.zmx", project_name=active_proj
-                )
-        elif not os.path.isabs(target_path):
-            target_path = resolve_project_file_path(
-                target_path, default_filename=f"{active_proj}.zmx", project_name=active_proj
-            )
-
+        current = session.current_filepath
+        if not target_path and current and os.path.isabs(current) and _within(current, get_project_dir(active_proj)):
+            target_path = current
+        target_path = resolve_project_file_path(target_path, f"{active_proj}.zmx", project_name=active_proj)
         # If extension omitted, default to .zmx
-        _, ext = os.path.splitext(target_path)
-        if not ext:
-            target_path = target_path + ".zmx"
+        if not os.path.splitext(target_path)[1]:
+            target_path += ".zmx"
+        if os.path.splitext(target_path)[1].lower() not in (".zmx", ".zos"):
+            raise ValueError("Design files must use .zmx or .zos.")
+        if session.model_project and session.model_project != active_proj:
+            return {
+                "status": "error",
+                "code": "MODEL_PROJECT_MISMATCH",
+                "message": "The active model belongs to another project; load or create the target project's model before saving.",
+                "model_project": session.model_project,
+                "active_project": active_proj,
+            }
+        if project_name:
+            set_active_project(project_name)
 
         session.save_file(target_path)
+        session.model_project = active_proj
         return {
             "status": "success",
             "project_name": active_proj,
@@ -311,14 +343,8 @@ def zemax_get_system_data() -> Dict[str, Any]:
     }
 
 
-def zemax_load_template(template_id: str) -> Dict[str, Any]:
-    """
-    Instantiate a classic optical design template into Zemax:
-    Available templates: 'singlet_bk7', 'achromat_doublet', 'cooke_triplet'.
-    """
+def _build_template(template_id: str, tmpl: Dict[str, Any]) -> Dict[str, Any]:
     session = ZOSSession.get_instance()
-    tmpl = get_template(template_id)
-    session.new_system(save_changes=False)
     sys = session.system
     zos = session.ZOSAPI
 
@@ -395,12 +421,37 @@ def zemax_load_template(template_id: str) -> Dict[str, Any]:
     }
 
 
+def zemax_load_template(template_id: str) -> Dict[str, Any]:
+    """
+    Instantiate a classic optical design template into Zemax:
+    Available templates: 'singlet_bk7', 'achromat_doublet', 'cooke_triplet'.
+    """
+    session = ZOSSession.get_instance()
+    tmpl = get_template(template_id)
+    previous_file = session.current_filepath
+    previous_project = session.model_project
+    # new_system handles its own native failure and rollback. Only restore here
+    # if creating the blank model succeeded and filling the template then failed.
+    try:
+        session.new_system(save_changes=False)
+    except Exception as error:
+        result = {"status": "error", "message": str(error), "recovery_file": session.last_recovery_file}
+        if getattr(session, "last_recovery_error", None):
+            result.update(rolled_back=False, recovery_error=session.last_recovery_error)
+        return result
+    try:
+        result = _build_template(template_id, tmpl)
+        result["recovery_file"] = session.last_recovery_file
+        return result
+    except Exception as error:
+        result = {"status": "error", "message": str(error), "recovery_file": session.last_recovery_file}
+        _rollback_model(session, result, previous_file, previous_project)
+        return result
+
+
 # ==============================================================================
 # Optical Design Proposal & Confirmation Gate
 # ==============================================================================
-
-CURRENT_DESIGN_PROPOSAL: Dict[str, Any] = {}
-
 
 def zemax_register_design_proposal(
     project_name: str,
@@ -421,9 +472,6 @@ def zemax_register_design_proposal(
     3. Structured proposal formulation (including strict internal air spacing & compactness budget)
     4. Explicit user decision gate before simulation
     """
-    global CURRENT_DESIGN_PROPOSAL
-
-    import datetime
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     proposal_doc = f"""# 《光学设计与仿真提案报告》: {project_name}
@@ -480,14 +528,10 @@ def zemax_register_design_proposal(
     )
     p_dir = proj_info.get("project_directory", get_project_dir(project_name))
     proposal_report_path = os.path.join(p_dir, "reports", "design_proposal.md")
-    try:
-        with open(proposal_report_path, "w", encoding="utf-8") as f:
-            f.write(proposal_doc)
-    except Exception:
-        pass
+    _atomic_text(proposal_report_path, proposal_doc)
 
-    CURRENT_DESIGN_PROPOSAL = {
-        "project_name": project_name,
+    proposal = {
+        "project_name": proj_info["project_name"],
         "timestamp": now_str,
         "project_directory": p_dir,
         "proposal_report_file": proposal_report_path,
@@ -501,6 +545,7 @@ def zemax_register_design_proposal(
         "user_confirmed_to_simulate": user_confirmed_to_simulate,
         "formatted_proposal": proposal_doc,
     }
+    _atomic_json(os.path.join(p_dir, "design_proposal.json"), proposal)
 
     if not user_confirmed_to_simulate:
         next_step = (
@@ -526,8 +571,35 @@ def zemax_register_design_proposal(
 
 
 def get_current_design_proposal() -> Dict[str, Any]:
-    """Retrieve the currently registered design proposal in this session."""
-    return CURRENT_DESIGN_PROPOSAL or {"status": "none", "message": "No design proposal registered yet."}
+    """Retrieve the active project's persisted design proposal."""
+    p_dir = get_project_dir()
+    active = get_active_project_name()
+    path = os.path.join(p_dir, "design_proposal.json")
+    if os.path.exists(path) and _within(path, p_dir):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                proposal = json.load(f)
+            if proposal.get("project_name") == active:
+                return proposal
+        except (OSError, ValueError):
+            pass
+    # Fallback: check if reports/design_proposal.md exists
+    report_md = os.path.join(p_dir, "reports", "design_proposal.md")
+    if os.path.exists(report_md) and _within(report_md, p_dir):
+        try:
+            with open(report_md, "r", encoding="utf-8") as f:
+                content = f.read()
+            confirmed = "✅ 已获用户授权确认" in content or "user_confirmed_to_simulate" in content
+            proposal = {
+                "project_name": active,
+                "user_confirmed_to_simulate": confirmed,
+                "proposal_report_file": report_md,
+            }
+            _atomic_json(path, proposal)
+            return proposal
+        except Exception:
+            pass
+    return {"status": "none", "message": "No design proposal registered for the active project."}
 
 
 # ==============================================================================
@@ -820,6 +892,39 @@ def zemax_audit_requirements(
         Structured audit report detailing recognized specs, missing mandatory specs,
         missing recommended specs, interactive clarification questions, and readiness status.
     """
+    def _valid_requirement_value(key: str, value: Any) -> bool:
+        if value is None or isinstance(value, bool):
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        if key == "wavelength_range":
+            if isinstance(value, (list, tuple)):
+                return bool(value) and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and math.isfinite(float(v)) and float(v) > 0 for v in value
+                )
+            return bool(re.search(r"\d", str(value)))
+        if key in {"fov_or_sensor", "immersion_medium", "telecentricity_required"}:
+            if key == "fov_or_sensor" and isinstance(value, (int, float)):
+                return math.isfinite(float(value)) and float(value) > 0
+            return bool(str(value).strip())
+        positive_numeric = {
+            "f_number", "scan_angle_deg", "beam_diameter_mm", "wavelength_nm",
+            "magnification", "numerical_aperture_na", "clear_aperture_mm",
+            "field_number_fn_mm",
+        }
+        if key in positive_numeric or key.endswith("_mm"):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(number):
+                return False
+            if key == "efl_mm":
+                return number != 0.0
+            return number > 0.0
+        return True
+
     # Normalize system type
     type_key = system_type.lower().strip()
     if type_key not in SYSTEM_SPEC_TEMPLATES:
@@ -838,15 +943,14 @@ def zemax_audit_requirements(
 
     # If raw user_prompt is provided, do a basic keyword scan to extract potential specs
     if user_prompt:
-        import re
         prompt_lower = user_prompt.lower()
         # Scan for EFL e.g. "50mm", "f=50"
-        efl_m = re.search(r'(?:f\s*=\s*|efl\s*[:=]?\s*|焦距[:=]?\s*)(\d+(?:\.\d+)?)\s*mm', prompt_lower)
+        efl_m = re.search(r'(?:f\s*=\s*|efl\s*[:=]?\s*|焦距[:=]?\s*)([-+]?\d+(?:\.\d+)?)\s*mm', prompt_lower)
         if efl_m and "efl_mm" not in user_specs and "efl" not in user_specs:
             user_specs["efl_mm"] = float(efl_m.group(1))
 
         # Scan for F/# e.g. "f/2.8", "f2.8", "f/1.4"
-        fno_m = re.search(r'f\s*/\s*(\d+(?:\.\d+)?)', prompt_lower)
+        fno_m = re.search(r'f\s*/\s*([-+]?\d+(?:\.\d+)?)', prompt_lower)
         if fno_m and "f_number" not in user_specs and "fno" not in user_specs:
             user_specs["f_number"] = float(fno_m.group(1))
 
@@ -859,18 +963,18 @@ def zemax_audit_requirements(
     missing_mandatory: List[Dict[str, Any]] = []
     missing_recommended: List[Dict[str, Any]] = []
     interactive_questions: List[str] = []
+    invalid_specs: List[Dict[str, Any]] = []
 
-    # 1. Audit mandatory parameters
-    for item in tmpl["mandatory"]:
-        val = None
-        for alias in item["aliases"] + [item["key"]]:
-            if alias in user_specs:
-                val = user_specs[alias]
-                break
-        if val is not None and str(val).strip() != "":
-            recognized_specs[item["key"]] = val
-        else:
-            missing_mandatory.append({
+    # Audit mandatory then recommended parameters; only mandatory gaps produce questions.
+    for group, missing in (("mandatory", missing_mandatory), ("recommended", missing_recommended)):
+        for item in tmpl[group]:
+            val = next((user_specs[a] for a in item["aliases"] + [item["key"]] if a in user_specs), None)
+            if val is not None and _valid_requirement_value(item["key"], val):
+                recognized_specs[item["key"]] = val
+                continue
+            if val is not None:
+                invalid_specs.append({"key": item["key"], "value": val, "message": "Value is missing, non-finite, or outside the allowed range."})
+            missing.append({
                 "key": item["key"],
                 "name": item["name"],
                 "unit": item["unit"],
@@ -878,30 +982,12 @@ def zemax_audit_requirements(
                 "recommended_default": item["default"],
                 "question": item["question"],
             })
-            interactive_questions.append(
-                f"- **{item['name']}**: {item['question']}\n  *(行业推荐默认值: `{item['default']}`)*"
-            )
+            if group == "mandatory":
+                interactive_questions.append(
+                    f"- **{item['name']}**: {item['question']}\n  *(行业推荐默认值: `{item['default']}`)*"
+                )
 
-    # 2. Audit recommended parameters
-    for item in tmpl["recommended"]:
-        val = None
-        for alias in item["aliases"] + [item["key"]]:
-            if alias in user_specs:
-                val = user_specs[alias]
-                break
-        if val is not None and str(val).strip() != "":
-            recognized_specs[item["key"]] = val
-        else:
-            missing_recommended.append({
-                "key": item["key"],
-                "name": item["name"],
-                "unit": item["unit"],
-                "description": item["desc"],
-                "recommended_default": item["default"],
-                "question": item["question"],
-            })
-
-    is_complete = (len(missing_mandatory) == 0)
+    is_complete = (len(missing_mandatory) == 0 and not invalid_specs)
     status = "READY_FOR_DESIGN" if is_complete else "NEEDS_CLARIFICATION"
 
     # Build Markdown Report
@@ -916,13 +1002,18 @@ def zemax_audit_requirements(
     else:
         report += "- *(暂未识别到确定的光学参数)*\n"
 
+    if invalid_specs:
+        report += "\n#### 2. 已识别但非法的参数 (Invalid):\n"
+        for item in invalid_specs:
+            report += f"- **{item['key']}**: `{item['value']}` - {item['message']}\n"
+
     if missing_mandatory:
-        report += "\n#### 2. 必须向用户追问确认的核心缺失参数 (Mandatory):\n"
+        report += "\n#### 3. 必须向用户追问确认的核心缺失参数 (Mandatory):\n"
         for q in interactive_questions:
             report += f"{q}\n"
 
     if missing_recommended:
-        report += "\n#### 3. 建议进一步明确的工程/探测器参数 (Recommended):\n"
+        report += "\n#### 4. 建议进一步明确的工程/探测器参数 (Recommended):\n"
         for item in missing_recommended:
             report += f"- **{item['name']}**: {item['question']} *(若未指定，设计将默认采用 `{item['recommended_default']}`)*\n"
 
@@ -944,8 +1035,20 @@ def zemax_audit_requirements(
         "recognized_specs": recognized_specs,
         "missing_mandatory": missing_mandatory,
         "missing_recommended": missing_recommended,
+        "invalid_specs": invalid_specs,
         "interactive_questions": interactive_questions,
         "next_action": next_action,
         "audit_report": report,
     }
+
+
+# Apply the same workflow boundary to direct Python calls and MCP wrappers.
+for _name in ("zemax_new_file", "zemax_load_template"):
+    globals()[_name] = model_operation(globals()[_name])
+for _name in (
+    "zemax_system_info", "zemax_set_project", "zemax_get_project", "zemax_save_file",
+    "zemax_list_projects", "zemax_load_file", "zemax_get_system_data",
+    "zemax_register_design_proposal", "zemax_audit_requirements", "get_current_design_proposal",
+):
+    globals()[_name] = serialized_operation(globals()[_name])
 

@@ -484,12 +484,16 @@ def zemax_add_operand(
     param3: int = 0,
     param4: int = 0,
     position: Optional[int] = None,
+    params: Optional[Dict[str, float]] = None,
 ) -> str:
     """
     Insert a custom optimization operand into the Merit Function Editor (MFE).
-    type_code: Zemax operand code (e.g. 'EFFL', 'TOTR', 'MNCA', 'MNCG', 'SPHA', 'COMA', 'ASTI', 'MTFT').
+    type_code: Zemax operand code (e.g. 'EFFL', 'TOTR', 'MNCA', 'MNCG', 'SPHA', 'COMA', 'ASTI', 'MTFT', 'REAY', 'FICL', 'CONF').
     target: Target numerical value.
     weight: Optimization penalty weight.
+    param1..param4: Legacy integer shortcuts for the first four columns (written only when non-zero).
+    params: Any of Param1..Param8 by name ('param5') or column header ('Hx', 'Hy', 'Px', 'Py');
+            floats allowed, e.g. REAY {"param1": 12, "param2": 1, "Hy": 1.0, "Py": 0.7}.
     """
     res = _add_operand(
         type_code=type_code,
@@ -500,6 +504,7 @@ def zemax_add_operand(
         param3=param3,
         param4=param4,
         position=position,
+        params=params,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
@@ -562,13 +567,14 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> str:
 # ==============================================================================
 
 @app.tool()
-def zemax_run_spot_diagram(field_index: Optional[int] = None) -> str:
+def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[int] = None) -> str:
     """
     Run Standard Spot Diagram analysis across fields and wavelengths.
     Returns RMS spot radius, GEO maximum radius, Airy disk radius, and diffraction limit diagnosis.
     field_index: Optional 1-based field index (if omitted, reports all fields).
+    config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_spot_diagram(field_index=field_index)
+    res = _run_spot_diagram(field_index=field_index, config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
@@ -576,58 +582,66 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> str:
 def zemax_run_fft_mtf(
     max_frequency: float = 100.0,
     sample_size: str = "256x256",
+    config: Optional[int] = None,
 ) -> str:
     """
     Run Fast Fourier Transform Modulation Transfer Function (FFT MTF) analysis.
     Returns spatial frequency response and tangential/sagittal MTF values.
     max_frequency: Maximum spatial frequency in cycles/mm.
     sample_size: Pupil sampling density ('128x128', '256x256', '512x512').
+    config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_fft_mtf(max_frequency=max_frequency, sample_size=sample_size)
+    res = _run_fft_mtf(max_frequency=max_frequency, sample_size=sample_size, config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 @app.tool()
-def zemax_run_ray_fan(field_index: Optional[int] = None) -> str:
+def zemax_run_ray_fan(field_index: Optional[int] = None, config: Optional[int] = None) -> str:
     """
     Run Ray Fan analysis (transverse ray aberrations Ey vs Py and Ex vs Px).
     Examines spherical aberration, coma, and astigmatism signatures.
     field_index: 1-based field to evaluate; omit to evaluate all fields.
+    config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_ray_fan(field_index=field_index)
+    res = _run_ray_fan(field_index=field_index, config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 @app.tool()
-def zemax_run_wavefront_map(field_index: int = 1) -> str:
+def zemax_run_wavefront_map(field_index: int = 1, config: Optional[int] = None) -> str:
     """
     Run Wavefront Map analysis to evaluate optical path difference (OPD).
     Returns Peak-to-Valley (PV) error, RMS wavefront error (in waves), and estimated Strehl ratio.
     field_index: 1-based field to evaluate.
+    config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_wavefront_map(field_index=field_index)
+    res = _run_wavefront_map(field_index=field_index, config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 @app.tool()
-def zemax_run_field_curvature_distortion() -> str:
+def zemax_run_field_curvature_distortion(config: Optional[int] = None) -> str:
     """
     Run Field Curvature and Distortion analysis.
     Evaluates tangential/sagittal focal shifts and percentage distortion across the field.
+    config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_field_curvature_distortion()
+    res = _run_field_curvature_distortion(config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 @app.tool()
-def zemax_export_spot_diagram_plot(rings: int = 12, filename: str = "spot_diagram.png") -> str:
+def zemax_export_spot_diagram_plot(
+    rings: int = 12, filename: str = "spot_diagram.png", config: Optional[int] = None
+) -> str:
     """
     Render a Zemax-style spot diagram PNG (all fields x wavelengths, Airy disk circle,
     chief-ray reference) from a Batch Ray Trace into the active project's reports/ folder.
     rings: Hexapolar pupil rings (ring k holds 6k rays; default 12 -> 469 rays per wavelength).
     filename: Output PNG file name.
+    config: Optional 1-based multi-configuration index to trace (restored afterwards).
     """
-    res = _export_spot_diagram_plot(rings=rings, filename=filename)
+    res = _export_spot_diagram_plot(rings=rings, filename=filename, config=config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

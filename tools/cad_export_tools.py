@@ -7,6 +7,7 @@ providing direct optomechanical linkage with SolidWorks MCP.
 import json
 import math
 import os
+import re
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib
@@ -20,8 +21,10 @@ plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "sans-
 plt.rcParams["axes.unicode_minus"] = False
 
 from core.zos_session import ZOSSession
+from core.operation_guard import serialized_operation
 from tools.project_manager import (
     get_project_dir,
+    resolve_project_directory_path,
     resolve_project_file_path,
     get_active_project_name,
     set_active_project,
@@ -91,8 +94,9 @@ def zemax_export_cad(
         project_name: Optional target project name to associate with this export.
         file_type: CAD format ('STEP', 'IGES', 'SAT', 'STL'). Default is 'STEP' (ISO 10303).
         surfaces_as_solids: If True, exports closed volumes as solid bodies (required for SolidWorks assembly).
-        first_surface: First surface to export (1-based). Default is 1.
-        last_surface: Last surface to export. Default is the image surface.
+        first_surface: First surface to export (1-based). Default is the first glass surface.
+        last_surface: Last surface to export. Default is the image surface, or the surface where
+            an immersion medium (water/oil) starts, so the liquid is not exported as a solid.
         export_dummy_surfaces: Whether to export zero-thickness dummy surfaces / stops.
         dummy_thickness: Virtual thickness assigned to dummy surfaces if exported.
         export_rays: If True, traces and exports marginal/chief ray geometry into the CAD file.
@@ -106,13 +110,19 @@ def zemax_export_cad(
     sys = session.system
     zos = session.ZOSAPI
 
+    num_surfs = sys.LDE.NumberOfSurfaces
+    if num_surfs < 4:
+        return {
+            "status": "error",
+            "message": "Optical system too simple for export (need at least one lens). Load a valid design with zemax_load_file.",
+        }
+
     if project_name:
         set_active_project(project_name)
     active_proj = get_active_project_name()
-
-    num_surfs = sys.LDE.NumberOfSurfaces
-    f_surf = int(first_surface) if first_surface is not None else 1
-    l_surf = int(last_surface) if last_surface is not None else (num_surfs - 1)
+    default_first, default_last = _default_cad_surface_range(sys)
+    f_surf = int(first_surface) if first_surface is not None else default_first
+    l_surf = int(last_surface) if last_surface is not None else default_last
 
     f_surf = max(1, min(f_surf, num_surfs))
     l_surf = max(f_surf, min(l_surf, num_surfs))
@@ -210,6 +220,22 @@ def zemax_export_cad(
             "target_path": target_path,
         }
 
+    cad_bodies = None
+    if target_ext == ".step":
+        cad_bodies = _postprocess_step(target_path, _cad_part_names(sys), base_name)
+        geometry_count = cad_bodies["solids"] if surfaces_as_solids else cad_bodies["faces"]
+        if geometry_count == 0:
+            os.remove(target_path)
+            return {
+                "status": "error",
+                "message": (
+                    f"CAD export produced no {'solid bodies' if surfaces_as_solids else 'faces'} "
+                    f"for surfaces {f_surf}-{l_surf}; the empty file was removed. "
+                    "Check that the design is loaded and the surface range covers lens elements."
+                ),
+                "target_path": target_path,
+            }
+
     file_size = os.path.getsize(target_path)
 
     # Prepare SolidWorks MCP linkage advice
@@ -217,7 +243,7 @@ def zemax_export_cad(
         "action": "open_solidworks_document",
         "arguments": {
             "file_path": target_path,
-            "doc_type": "part" if surfaces_as_solids else "assembly",
+            "doc_type": "assembly",
         },
     }
 
@@ -229,6 +255,7 @@ def zemax_export_cad(
         "surfaces_exported": {"first_surface": f_surf, "last_surface": l_surf},
         "surfaces_as_solids": surfaces_as_solids,
         "rays_included": export_rays,
+        "cad_bodies": cad_bodies,
         "solidworks_mcp_linkage": {
             "recommended_tool": "open_solidworks_document",
             "example_call": solidworks_command,
@@ -332,6 +359,117 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
             i += 1
 
     return elements
+
+
+IMMERSION_MEDIA = NON_GLASS_MEDIA - {"", "air", "vacuum", "none"}
+
+
+def _default_cad_surface_range(sys) -> Tuple[int, int]:
+    """First glass surface up to the start of an immersion medium (else the image).
+
+    A water/oil gap exported as a solid clutters the CAD assembly and hides the
+    working distance, so it is excluded unless last_surface is given explicitly.
+    """
+    num_surfs = int(sys.LDE.NumberOfSurfaces)
+    materials = [str(sys.LDE.GetSurfaceAt(i).Material).strip().lower() for i in range(num_surfs)]
+    first = next((i for i in range(1, num_surfs - 1) if materials[i] not in NON_GLASS_MEDIA), 1)
+    last = next((i for i in range(first + 1, num_surfs - 1) if materials[i] in IMMERSION_MEDIA),
+                num_surfs - 1)
+    return first, last
+
+
+def _step_name(text: str) -> str:
+    """ASCII name without quotes, safe inside a STEP string and as a CAD file name."""
+    return re.sub(r"[^A-Za-z0-9_.\-]+", "_", text).strip("_") or "part"
+
+
+def _cad_part_names(sys) -> Dict[Tuple[int, int], str]:
+    """Map the ZOS-API 'surfaces a,b' CAD bodies to lens-based part names."""
+    names = {}
+    for elem in _extract_lens_elements(sys):
+        comps = elem["components"]
+        tag = f"L{elem['element_index']:02d}"
+        start, end = elem["surface_start"], elem["surface_end"]
+        names[(start, end)] = f"{tag}_{'_'.join(c['material'] for c in comps)}_S{start}-{end}"
+        if len(comps) > 1:
+            for n, c in enumerate(comps):
+                front, rear = c["surface_front"], c["surface_rear"]
+                names[(front, rear)] = f"{tag}{chr(ord('a') + n)}_{c['material']}_S{front}-{rear}"
+    for i in range(1, int(sys.LDE.NumberOfSurfaces) - 1):
+        mat = str(sys.LDE.GetSurfaceAt(i).Material).strip()
+        if mat.lower() in IMMERSION_MEDIA:
+            names[(i, i + 1)] = f"MEDIUM_{mat.upper()}_S{i}-{i + 1}"
+    return {key: _step_name(name) for key, name in names.items()}
+
+
+_STEP_ENTITY = re.compile(r"^#(\d+)\s*=\s*([A-Z0-9_]+)\s*\((.*)\)\s*;\s*$")
+_STEP_REF = re.compile(r"#(\d+)")
+_STEP_SURFACES = re.compile(r"surfaces\s+(\d+)\s*,\s*(\d+)", re.IGNORECASE)
+_STEP_PRODUCT_NAMES = re.compile(r"^(#\d+\s*=\s*PRODUCT\s*\()'(?:[^']|'')*'\s*,\s*'(?:[^']|'')*'")
+
+
+def _postprocess_step(path: str, part_names: Dict[Tuple[int, int], str], base_name: str) -> Dict[str, Any]:
+    """Count the exported geometry and name the anonymous ZOS-API products.
+
+    ZOS-API writes every PRODUCT as '0', which SolidWorks shows as components
+    0-1, 0-2, ... Each body is found via NAUO -> PRODUCT_DEFINITION ->
+    formation -> PRODUCT and renamed after its lens element.
+    """
+    with open(path, "r", encoding="latin-1", newline="") as fh:
+        lines = fh.read().splitlines(keepends=True)
+
+    text = "".join(lines)
+    solids = len(re.findall(r"\b(?:MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\s*\(", text))
+    faces = len(re.findall(r"\b(?:ADVANCED_FACE|FACE_SURFACE)\s*\(", text))
+
+    entities = {}  # id -> (line index, entity type, argument text)
+    for idx, line in enumerate(lines):
+        m = _STEP_ENTITY.match(line)
+        if m:
+            entities[m.group(1)] = (idx, m.group(2), m.group(3))
+
+    def product_of(pd_id):
+        for _ in range(2):  # PRODUCT_DEFINITION -> formation -> PRODUCT
+            ent = entities.get(pd_id)
+            ref = _STEP_REF.search(ent[2]) if ent else None
+            if not ref:
+                return None
+            pd_id = ref.group(1)
+        return pd_id if entities.get(pd_id, (0, ""))[1] == "PRODUCT" else None
+
+    renames, parts = {}, []
+    relating, related = set(), set()
+    for _, etype, args in entities.values():
+        refs = _STEP_REF.findall(args)
+        if etype != "NEXT_ASSEMBLY_USAGE_OCCURRENCE" or len(refs) < 2:
+            continue
+        relating.add(refs[0])
+        related.add(refs[1])
+        surfaces = _STEP_SURFACES.search(args)
+        product = product_of(refs[1])
+        if surfaces and product and product not in renames:
+            a, b = int(surfaces.group(1)), int(surfaces.group(2))
+            renames[product] = part_names.get((a, b), f"S{a}-{b}")
+            parts.append(renames[product])
+    root_name = _step_name(base_name)
+    for pd_id in relating - related:
+        product = product_of(pd_id)
+        if product and product not in renames:
+            renames[product] = root_name
+    # ZOS inserts a sub-assembly named after the .zmx file between root and lenses
+    for pd_id in relating & related:
+        product = product_of(pd_id)
+        if product and product not in renames:
+            renames[product] = f"{root_name}_lenses"
+
+    for product, name in renames.items():
+        idx = entities[product][0]
+        lines[idx] = _STEP_PRODUCT_NAMES.sub(
+            lambda m: f"{m.group(1)}'{name}','{name}'", lines[idx], count=1)
+    if renames:
+        with open(path, "w", encoding="latin-1", newline="") as fh:
+            fh.writelines(lines)
+    return {"solids": solids, "faces": faces, "part_names": parts}
 
 
 def _system_drawing_metadata(sys, zos, elements) -> Dict[str, Any]:
@@ -2147,13 +2285,20 @@ def zemax_export_optical_drawing(
     session = ZOSSession.get_instance()
     sys = session.system
 
+    num_surfs = sys.LDE.NumberOfSurfaces
+    if num_surfs < 4:
+        return {
+            "status": "error",
+            "message": "Optical system too simple for export (need at least one lens). Load a valid design with zemax_load_file.",
+        }
+
     if project_name:
         set_active_project(project_name)
     active_proj = get_active_project_name()
 
-    if not output_dir:
-        output_dir = get_project_dir(project_name=active_proj, subfolder="drawings")
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = resolve_project_directory_path(
+        output_dir, subfolder="drawings", project_name=active_proj
+    )
 
     elements = _extract_lens_elements(sys)
     if not elements:
@@ -2583,11 +2728,17 @@ def zemax_export_prescription_for_cad(
     session = ZOSSession.get_instance()
     sys = session.system
 
+    num_surfs = sys.LDE.NumberOfSurfaces
+    if num_surfs < 4:
+        return {
+            "status": "error",
+            "message": "Optical system too simple for export (need at least one lens). Load a valid design with zemax_load_file.",
+        }
+
     if project_name:
         set_active_project(project_name)
     active_proj = get_active_project_name()
 
-    num_surfs = sys.LDE.NumberOfSurfaces
     surfaces_data = []
 
     # 1. Extract raw surfaces compatible with build_system_from_prescription
@@ -2766,3 +2917,7 @@ def zemax_export_prescription_for_cad(
 
     payload["saved_json_filepath"] = target_path
     return payload
+
+
+for _name in ("zemax_export_cad", "zemax_export_optical_drawing", "zemax_export_prescription_for_cad"):
+    globals()[_name] = serialized_operation(globals()[_name])

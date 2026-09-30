@@ -8,6 +8,7 @@ import math
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 from core.operation_guard import model_operation
+from core.editor_cells import write_cell
 
 
 def zemax_setup_merit_function(
@@ -197,16 +198,7 @@ def _operand_param_cells(op) -> Dict[str, int]:
 
 def _write_operand_cell(op, col: int, value: float) -> float:
     cell = op.GetCellAt(col)
-    kind = str(cell.DataType)
-    if kind == "Integer":
-        if float(value) != int(value):
-            raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) needs an integer, got {value}.")
-        cell.IntegerValue = int(value)
-        return int(value)
-    if kind == "Double":
-        cell.DoubleValue = float(value)
-        return float(value)
-    raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) holds {kind} data and cannot be set numerically.")
+    return write_cell(cell, value, f"Column '{str(cell.Header).strip()}' (Param{col - 1})")
 
 
 def zemax_add_operand(

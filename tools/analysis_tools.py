@@ -8,6 +8,7 @@ import math
 import re
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
+from core.operation_guard import serialized_operation
 from domain.zemax_rules import OpticalRuleCheck
 
 # Header line such as "Peak to valley = 0.1234 waves, RMS = 0.0321 waves."
@@ -555,3 +556,11 @@ def zemax_export_spot_diagram_plot(
         "all_fields_inside_airy": all(fr["all_rays_inside_airy"] for fr in field_results),
         "fields": field_results,
     }
+
+
+for _name in (
+    "zemax_run_spot_diagram", "zemax_run_fft_mtf", "zemax_run_ray_fan",
+    "zemax_run_wavefront_map", "zemax_run_field_curvature_distortion",
+    "zemax_export_spot_diagram_plot",
+):
+    globals()[_name] = serialized_operation(globals()[_name])

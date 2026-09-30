@@ -5,6 +5,7 @@ Handles aperture, fields of view, wavelengths, ray aiming, and environmental par
 
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
+from core.operation_guard import model_operation
 
 
 def zemax_set_aperture(aperture_type: str, aperture_value: float) -> Dict[str, Any]:
@@ -166,3 +167,7 @@ def zemax_set_ray_aiming(method: str = "Off") -> Dict[str, Any]:
         "status": "success",
         "ray_aiming": str(sys.SystemData.RayAiming.RayAiming),
     }
+
+
+for _name in ("zemax_set_aperture", "zemax_set_fields", "zemax_set_wavelengths", "zemax_set_ray_aiming"):
+    globals()[_name] = model_operation(globals()[_name])

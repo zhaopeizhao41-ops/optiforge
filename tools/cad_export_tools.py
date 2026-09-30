@@ -268,6 +268,13 @@ NON_GLASS_MEDIA = {
     "", "air", "water", "h2o", "pure_water", "oil", "immersion_oil",
     "glycerol", "glycerin", "vacuum", "none"
 }
+# A reflective surface is not a refractive medium: it never starts or joins a lens element.
+MIRROR_MEDIA = {"mirror"}
+
+
+def _is_lens_medium(material: str) -> bool:
+    key = material.strip().lower()
+    return key not in NON_GLASS_MEDIA and key not in MIRROR_MEDIA
 
 
 def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
@@ -282,7 +289,7 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
         mat = str(surf.Material).strip()
 
         # If current surface has glass material, it is the front of an optical element
-        if mat and mat.lower() not in NON_GLASS_MEDIA:
+        if _is_lens_medium(mat):
             s_start = i
             # Look ahead for cemented interfaces or rear surface
             components = []
@@ -324,7 +331,7 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
                 })
 
                 # If next surface has another glass, it's a cemented doublet/triplet
-                if m_next and m_next.lower() not in NON_GLASS_MEDIA and next_s < num_surfs:
+                if _is_lens_medium(m_next) and next_s < num_surfs:
                     cur_s = next_s
                 else:
                     s_end = next_s

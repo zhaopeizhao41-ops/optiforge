@@ -19,9 +19,11 @@ from unittest.mock import Mock, patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core import analysis_runner as runner
 from core.zos_session import ZOSSession
 from tools import analysis_tools as analysis
 from tools import cad_export_tools as cad
+from tools import optimization_tools as optimization
 from tools import project_manager as projects
 from tools import surface_tools as surfaces
 from tools import system_tools as system
@@ -113,6 +115,92 @@ class FakeSession:
 
     def _restore_recovery(self, path):
         self.restore_calls.append(path)
+
+
+class FakeAnalysis:
+    """Asynchronous IA_ stand-in: IsRunning() is True for `running_polls` polls (None = never finishes)."""
+    def __init__(self, running_polls=0, results=None):
+        self.running_polls = running_polls
+        self.results = results
+        self.GetAnalysisName = "FakeAnalysis"
+        self.terminated = False
+        self.closed = False
+
+    def Apply(self):
+        pass
+
+    def IsRunning(self):
+        if self.terminated:
+            return False
+        if self.running_polls is None:
+            return True
+        self.running_polls -= 1
+        return self.running_polls >= 0
+
+    def Terminate(self):
+        self.terminated = True
+
+    def WaitForCompletion(self):
+        pass
+
+    def GetResults(self):
+        return self.results
+
+    def Close(self):
+        self.closed = True
+
+
+class FakeMCE:
+    def __init__(self, total=3, current=1):
+        self.NumberOfConfigurations = total
+        self.CurrentConfiguration = current
+        self.history = []
+
+    def SetCurrentConfiguration(self, n):
+        self.history.append(n)
+        self.CurrentConfiguration = n
+        return True
+
+
+class FakeOperandCell:
+    def __init__(self, header, data_type):
+        self.Header = header
+        self.DataType = data_type
+        self.IntegerValue = 0
+        self.DoubleValue = 0.0
+
+
+class FakeOperand:
+    """REAY layout as reported by a localized OpticStudio: cells 2..9 = 面, 波, Hx, Hy, Px, Py, blank, blank."""
+    def __init__(self):
+        layout = [("面", "Integer"), ("波", "Integer"), ("Hx", "Double"), ("Hy", "Double"),
+                  ("Px", "Double"), ("Py", "Double"), (" ", "Double"), (" ", "Double")]
+        self.cells = {col: FakeOperandCell(h, t) for col, (h, t) in enumerate(layout, start=2)}
+        self.Target = 0.0
+        self.Weight = 0.0
+        self.Value = 0.0
+        self.RowIndex = 0
+
+    def ChangeType(self, _type):
+        pass
+
+    def GetCellAt(self, col):
+        return self.cells[col]
+
+
+class FakeMFE:
+    NumberOfOperands = 0
+
+    def __init__(self):
+        self.operands = []
+
+    def AddOperand(self):
+        op = FakeOperand()
+        self.operands.append(op)
+        return op
+
+    def CalculateMeritFunction(self):
+        return 0.0
 
 
 class StageTwoRegression(unittest.TestCase):
@@ -509,6 +597,85 @@ class StageTwoRegression(unittest.TestCase):
             projects.resolve_project_directory_path("..\\outside", project_name="model")
         with self.assertRaises(ValueError):
             projects.resolve_project_directory_path("output\\..\\outside", project_name="model")
+
+    def test_run_analysis_terminates_on_timeout(self):
+        stuck = FakeAnalysis(running_polls=None)
+        with patch.object(runner, "_POLL_S", 0.001), self.assertRaises(TimeoutError):
+            runner.run_analysis(stuck, timeout_s=0.02)
+        self.assertTrue(stuck.terminated)
+
+        done = FakeAnalysis(running_polls=2, results="results")
+        self.assertEqual(runner.run_analysis(done, timeout_s=5), "results")
+        self.assertFalse(done.terminated)
+
+    def test_configuration_is_restored_and_validated(self):
+        system_ = SimpleNamespace(MCE=FakeMCE(total=3, current=1))
+        with self.assertRaises(RuntimeError), runner.configuration(system_, 2):
+            self.assertEqual(system_.MCE.CurrentConfiguration, 2)
+            raise RuntimeError("analysis failed")
+        self.assertEqual(system_.MCE.CurrentConfiguration, 1)
+        with self.assertRaises(ValueError), runner.configuration(system_, 4):
+            pass
+        self.assertEqual(system_.MCE.history, [2, 1])
+
+    def test_analysis_config_is_validated_applied_and_restored(self):
+        public = (
+            "zemax_run_spot_diagram", "zemax_run_fft_mtf", "zemax_run_ray_fan",
+            "zemax_run_wavefront_map", "zemax_run_field_curvature_distortion",
+            "zemax_export_spot_diagram_plot",
+        )
+        for name in public:
+            with self.subTest(name=name):
+                self.assertIn("config", inspect.signature(getattr(analysis, name)).parameters)
+
+        with patch.object(analysis.ZOSSession, "get_instance", side_effect=AssertionError("session accessed")):
+            result = analysis.zemax_run_field_curvature_distortion(config=0)
+        self.assertEqual(result["status"], "error")
+
+        fcd = FakeAnalysis(results=SimpleNamespace(NumberOfDataSeries=0))
+        mce = FakeMCE(total=3, current=1)
+        fake = SimpleNamespace(system=SimpleNamespace(
+            MCE=mce, Analyses=SimpleNamespace(New_FieldCurvatureAndDistortion=lambda: fcd)))
+        with patch.object(analysis.ZOSSession, "get_instance", return_value=fake):
+            result = analysis.zemax_run_field_curvature_distortion(config=2)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["config"], 2)
+        self.assertEqual(mce.history, [2, 1])
+        self.assertTrue(fcd.closed)
+
+    def test_add_operand_writes_named_double_columns_and_rejects_bad_cells(self):
+        self._proposal("model")
+        fake = FakeSession(project="model", snapshot=FakeSnapshot())
+        fake.system.MFE = FakeMFE()
+        fake.ZOSAPI = SimpleNamespace(Editors=SimpleNamespace(
+            MFE=SimpleNamespace(MeritOperandType=SimpleNamespace(REAY="REAY"))))
+        with patch.object(optimization.ZOSSession, "get_instance", return_value=fake):
+            ok = optimization.zemax_add_operand(
+                "REAY", 0.0, 1.0, param1=12, params={"param2": 1, "Hy": 1.0, "py": 0.7})
+            self.assertEqual(ok["status"], "success")
+            cells = fake.system.MFE.operands[0].cells
+            self.assertEqual((cells[2].IntegerValue, cells[3].IntegerValue), (12, 1))
+            self.assertEqual((cells[5].DoubleValue, cells[7].DoubleValue), (1.0, 0.7))
+            self.assertEqual(ok["parameters"], {"param1": 12, "param2": 1, "param4": 1.0, "param6": 0.7})
+
+            bad = optimization.zemax_add_operand("REAY", 0.0, 1.0, params={"param2": 1.5})
+            self.assertEqual(bad["status"], "error")
+            self.assertTrue(bad["rolled_back"])
+            unknown = optimization.zemax_add_operand("REAY", 0.0, 1.0, params={"Qx": 1})
+            self.assertIn("Unknown column", unknown["message"])
+
+        with patch.object(optimization.ZOSSession, "get_instance", side_effect=AssertionError("session accessed")):
+            invalid = optimization.zemax_add_operand("REAY", 0.0, 1.0, params=[1, 2])
+        self.assertEqual(invalid["status"], "error")
+
+    def test_mirror_surfaces_are_not_lens_elements(self):
+        # Lens S1-S2 whose rear face is a back-surface mirror, then a standalone fold mirror at S4.
+        rows = [("", 0, 10), ("N-BK7", 20, 3), ("MIRROR", -40, -3), ("", 0, -10), ("MIRROR", 0, 10), ("", 0, 0)]
+        items = [SimpleNamespace(Material=m, Radius=r, Thickness=t, SemiDiameter=4.0, Conic=0.0, Type="Standard")
+                 for m, r, t in rows]
+        fake_sys = SimpleNamespace(LDE=SimpleNamespace(NumberOfSurfaces=len(items), GetSurfaceAt=lambda i: items[i]))
+        elements = cad._extract_lens_elements(fake_sys)
+        self.assertEqual([(e["surface_start"], e["surface_end"]) for e in elements], [(1, 2)])
 
 
 if __name__ == "__main__":

@@ -27,6 +27,19 @@ from tools.surface_tools import (
     zemax_insert_surface,
     zemax_delete_surface,
     zemax_set_solve,
+    zemax_set_surface_type,
+    zemax_set_surface_params,
+    zemax_add_fold_mirror,
+    zemax_add_scan_mirror,
+)
+from tools.config_tools import (
+    zemax_mce_setup,
+    zemax_mce_set_operand,
+    zemax_mce_get,
+)
+from tools.confocal_tools import (
+    zemax_setup_tissue_stack,
+    zemax_get_envelope,
 )
 from tools.optimization_tools import (
     zemax_setup_merit_function,
@@ -74,6 +87,15 @@ __all__ = [
     "zemax_insert_surface",
     "zemax_delete_surface",
     "zemax_set_solve",
+    "zemax_set_surface_type",
+    "zemax_set_surface_params",
+    "zemax_add_fold_mirror",
+    "zemax_add_scan_mirror",
+    "zemax_mce_setup",
+    "zemax_mce_set_operand",
+    "zemax_mce_get",
+    "zemax_setup_tissue_stack",
+    "zemax_get_envelope",
     "zemax_setup_merit_function",
     "zemax_add_operand",
     "zemax_quick_focus",

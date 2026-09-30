@@ -34,6 +34,15 @@ from tools import (
     zemax_insert_surface as _insert_surface,
     zemax_delete_surface as _delete_surface,
     zemax_set_solve as _set_solve,
+    zemax_set_surface_type as _set_surface_type,
+    zemax_set_surface_params as _set_surface_params,
+    zemax_add_fold_mirror as _add_fold_mirror,
+    zemax_add_scan_mirror as _add_scan_mirror,
+    zemax_mce_setup as _mce_setup,
+    zemax_mce_set_operand as _mce_set_operand,
+    zemax_mce_get as _mce_get,
+    zemax_setup_tissue_stack as _setup_tissue_stack,
+    zemax_get_envelope as _get_envelope,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -411,6 +420,127 @@ def zemax_set_solve(
     params: Optional dict of solve parameters (e.g. {"f_number": 5.0} or {"source_surface": 1, "scale": 1.0}).
     """
     res = _set_solve(surface_index, cell, solve_type, params)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_set_surface_type(surface_index: int, surface_type: str) -> str:
+    """
+    Change a surface type by ZOSAPI SurfaceType name: Standard, EvenAspheric, OddAsphere,
+    CoordinateBreak, Toroidal, Paraxial, ... (case-insensitive).
+    """
+    return json.dumps(_set_surface_type(surface_index, surface_type), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> str:
+    """
+    Write LDE parameter columns. Keys: par1..par12, or aliases for the surface type:
+    CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
+    EvenAspheric: a2, a4, ..., a16. Example: {"tilt_x": 45, "order": 0}.
+    """
+    return json.dumps(_set_surface_params(surface_index, params), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_add_fold_mirror(surface_index: int, reflect_angle_deg: float = 90.0, axis: str = "x") -> str:
+    """
+    Turn a flat, air-spaced Standard dummy surface (not the stop) into a fold mirror: CB, MIRROR, CB.
+    reflect_angle_deg: total beam deflection. axis: 'x' or 'y' (tilt axis). Adds 2 surfaces.
+    """
+    return json.dumps(_add_fold_mirror(surface_index, reflect_angle_deg, axis), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_add_scan_mirror(
+    surface_index: int,
+    scan_angles_deg: List[Any],
+    reflect_angle_deg: float = 90.0,
+    axis: str = "x",
+) -> str:
+    """
+    Galvo / MEMS scan mirror: a fold mirror whose mechanical tilt changes per configuration.
+    scan_angles_deg: one mechanical angle per configuration about the fold axis, e.g. [-0.5, 0, 0.5],
+    or [fold, cross] pairs for a 2-axis MEMS, e.g. [[-0.5, 0], [0, 0.5]]. The beam moves ~2x the angle.
+    A single-configuration system is expanded to one configuration per angle. Downstream optics keep
+    the nominal fold axis (CB2 picks up CB1 with scale -1, offset 2*theta0).
+    """
+    res = _add_scan_mirror(surface_index, scan_angles_deg, reflect_angle_deg, axis)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Multi-Configuration & Confocal
+# ==============================================================================
+
+@app.tool()
+def zemax_mce_setup(n_configs: int, reset: bool = False) -> str:
+    """
+    Set the number of configurations (new ones copy the last). reset=True first clears all MCE rows
+    and collapses to one configuration.
+    """
+    return json.dumps(_mce_setup(n_configs, reset), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_mce_set_operand(
+    operand_type: str,
+    values: List[Any],
+    param1: int = 0,
+    param2: int = 0,
+    param3: int = 0,
+    row: Optional[int] = None,
+    variable: bool = False,
+) -> str:
+    """
+    Write one MCE row. operand_type: THIC, CRVT, PRAM, GLSS, WAVE, APER, SDIA, XFIE, YFIE, ...
+    param1..3: e.g. THIC param1=surface; PRAM param1=surface, param2=parameter column.
+    values: one per configuration (GLSS takes glass names). Without row, a row with the same type and
+    params is updated, otherwise a new one is added. variable=True makes every cell a variable.
+    """
+    res = _mce_set_operand(operand_type, values, param1, param2, param3, row, variable)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_mce_get() -> str:
+    """Read every MCE row with its value in each configuration."""
+    return json.dumps(_mce_get(), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_setup_tissue_stack(
+    gap_surface: int,
+    tissue_layers: List[Dict[str, Any]],
+    depths_um: List[float],
+    cover_layers: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """
+    RCM sample stack: insert cover (window, gel) and tissue layers after the immersion gap and make
+    one configuration per focus depth; the gap thickness is re-solved per depth (paraxial focus).
+    gap_surface: immersion medium just before the image surface.
+    Layer: {"n": 1.40, "vd": 55, "thickness_um": 15} or {"material": "N-BK7", "thickness_um": 170};
+    n is the index at the primary wavelength and must come from the user (skin reference:
+    Ding et al. 2006, Phys. Med. Biol. 51:1479). The last tissue layer may omit thickness_um.
+    depths_um: focus depths below the tissue surface, e.g. [0, 50, 100, 200].
+    """
+    res = _setup_tissue_stack(gap_surface, tissue_layers, depths_um, cover_layers)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_get_envelope(
+    first_surface: Optional[int] = None,
+    last_surface: Optional[int] = None,
+    frame_surface: Optional[int] = None,
+    rim_points: int = 36,
+) -> str:
+    """
+    Optical-train envelope for handpiece / Blender design: bounding box, max clear diameter, axial path
+    length and per-surface vertex + axis. Uses vertices plus rim points with sag; skips coordinate
+    breaks. Default surfaces 1..image-1; coordinates global or in frame_surface's local frame.
+    """
+    res = _get_envelope(first_surface, last_surface, frame_surface, rim_points)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

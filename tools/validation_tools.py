@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from domain.operand_kb import get_operand_info, search_operands
 from domain.zemax_rules import OpticalRuleCheck
 from tools.system_tools import zemax_get_system_data
+from core.operation_guard import serialized_operation
 
 
 def zemax_validate_design_rules() -> Dict[str, Any]:
@@ -23,6 +24,8 @@ def zemax_validate_design_rules() -> Dict[str, Any]:
     - High-field / large NA Ray Aiming requirement
     """
     system_summary = zemax_get_system_data()
+    if system_summary.get("status") == "error":
+        return system_summary
     checker = OpticalRuleCheck()
     validation_report = checker.validate_system(system_summary)
     
@@ -56,3 +59,7 @@ def zemax_lookup_manual(query: str) -> Dict[str, Any]:
         "matching_operands_count": len(results),
         "results": results[:10],
     }
+
+
+zemax_validate_design_rules = serialized_operation(zemax_validate_design_rules)
+zemax_lookup_manual = serialized_operation(zemax_lookup_manual)

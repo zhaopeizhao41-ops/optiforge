@@ -20,7 +20,7 @@ from tools import analysis_tools as analysis
 from tools import cad_export_tools as cad
 from tools import optimization_tools as optimization
 from tools import project_manager as projects
-from tools.system_tools import zemax_load_template
+from tools.system_tools import zemax_load_template, zemax_register_design_proposal
 
 
 class StageOneRegression(unittest.TestCase):
@@ -41,11 +41,27 @@ class StageOneRegression(unittest.TestCase):
         projects.OUTPUT_BASE_DIR, projects.ACTIVE_PROJECT_FILE = cls.old_project_paths
 
     def setUp(self):
+        # Stage-two modeling operations require an explicit proposal gate for the
+        # active project. Register a small fixture proposal before loading a model.
+        projects.set_active_project("stage_one_regression")
+        proposal = projects.get_project_dir("stage_one_regression")
+        if not (Path(proposal) / "design_proposal.json").exists():
+            confirmed = zemax_register_design_proposal(
+                project_name="stage_one_regression",
+                target_specs={"fixture": "native regression"},
+                initial_structure_source="fixture",
+                optical_theory_analysis="fixture",
+                glass_selection_rationale="fixture",
+                merit_function_strategy="fixture",
+                user_confirmed_to_simulate=True,
+            )
+            self.assertEqual(confirmed["status"], "success")
         if self.case:
             self.session.load_file(self.case)
+            self.session.model_project = "stage_one_regression"
         else:
             zemax_load_template("achromat_doublet")
-        projects.set_active_project("stage_one_regression")
+            self.session.model_project = "stage_one_regression"
         self.system = self.session.system
         self.zos = self.session.ZOSAPI
 

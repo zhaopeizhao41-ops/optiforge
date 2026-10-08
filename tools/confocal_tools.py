@@ -402,3 +402,69 @@ def zemax_confocal_response(session, defocus_range_um, num_steps=21, field=1, wa
 
 zemax_confocal_response = serialized_operation(zemax_confocal_response)
 
+
+def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, wavelength=1, config=None):
+    """Compute fiber coupling efficiency from PSF overlap integral.
+
+    Args:
+        fiber_diameter_um: Fiber core diameter in microns.
+        fiber_na: Fiber numerical aperture.
+        field: 1-based field number (default 1).
+        wavelength: 1-based wavelength number (default 1).
+        config: Optional 1-based configuration number.
+
+    Returns:
+        {"status": "success", "coupling_efficiency": <0-1>, "fiber_diameter_um": ..., "fiber_na": ...}
+    """
+    from core.analysis_runner import run_analysis, configuration
+    import numpy as np
+
+    system = session.system
+    with configuration(system, config):
+        # Run Huygens PSF
+        hps = system.Analyses.New_HuygensPsf()
+        run_analysis(hps, timeout_s=120)
+        results = hps.GetResults()
+        dg = results.DataGrids[0]
+        vals = dg.Values
+        nx, ny = vals.GetLength(0), vals.GetLength(1)
+        dx_um, dy_um = dg.Dx, dg.Dy
+
+        # Create coordinate grids
+        x = np.arange(nx) * dx_um - (nx - 1) * dx_um / 2
+        y = np.arange(ny) * dy_um - (ny - 1) * dy_um / 2
+        X, Y = np.meshgrid(y, x)
+        R = np.sqrt(X**2 + Y**2)
+
+        # Extract PSF values
+        psf = np.zeros((nx, ny))
+        for i in range(nx):
+            for j in range(ny):
+                psf[i, j] = vals[i, j]
+
+        # Fiber aperture (circular, uniform transmission within radius)
+        fiber_radius_um = fiber_diameter_um / 2
+        fiber_aperture = (R <= fiber_radius_um).astype(float)
+
+        # Coupling efficiency: overlap integral
+        # η = ∫∫ PSF(x,y) * Fiber(x,y) dx dy / ∫∫ PSF(x,y) dx dy
+        coupled_power = np.sum(psf * fiber_aperture) * dx_um * dy_um
+        total_power = np.sum(psf) * dx_um * dy_um
+        coupling_efficiency = coupled_power / total_power if total_power > 0 else 0.0
+
+        hps.Close()
+        result = {
+            "status": "success",
+            "coupling_efficiency": round(coupling_efficiency, 6),
+            "fiber_diameter_um": fiber_diameter_um,
+            "fiber_na": fiber_na,
+            "field": field,
+            "wavelength_nm": round(float(system.SystemData.Wavelengths.GetWavelength(wavelength).Wavelength) * 1000, 1),
+        }
+        if config is not None:
+            result["config"] = config
+        return result
+
+
+zemax_fiber_coupling = serialized_operation(zemax_fiber_coupling)
+

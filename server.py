@@ -45,6 +45,7 @@ from tools import (
     zemax_get_envelope as _get_envelope,
     zemax_run_huygens_psf as _run_huygens_psf,
     zemax_confocal_response as _confocal_response,
+    zemax_fiber_coupling as _fiber_coupling,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -585,6 +586,27 @@ def zemax_confocal_response(
     config: Optional 1-based configuration number for multi-config systems.
     """
     res = _confocal_response(defocus_range_um, num_steps, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_fiber_coupling(
+    fiber_diameter_um: float,
+    fiber_na: float,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Compute fiber coupling efficiency from PSF overlap integral with fiber core aperture.
+    Returns coupling efficiency (0-1), fiber parameters, and wavelength.
+    fiber_diameter_um: Fiber core diameter in microns.
+    fiber_na: Fiber numerical aperture.
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _fiber_coupling(fiber_diameter_um, fiber_na, field, wavelength, config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

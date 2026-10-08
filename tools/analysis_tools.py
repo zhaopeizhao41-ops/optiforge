@@ -9,6 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 from core.operation_guard import serialized_operation
+from core.analysis_runner import run_analysis, with_configuration
 from domain.zemax_rules import OpticalRuleCheck
 
 # Header line such as "Peak to valley = 0.1234 waves, RMS = 0.0321 waves."
@@ -57,10 +58,11 @@ def _primary_wavelength_um(sys) -> float:
     return 0.55
 
 
-def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
+def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[int] = None) -> Dict[str, Any]:
     """
     Run Standard Spot Diagram analysis across fields and wavelengths.
     Returns RMS spot radius, GEO maximum radius, Airy disk radius, and diffraction limit diagnosis.
+    config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
     sys = session.system
@@ -76,8 +78,7 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
         settings = _settings(spot)
         settings.Field.UseAllFields()
         settings.Wavelength.UseAllWavelengths()
-        spot.ApplyAndWaitForCompletion()
-        res = spot.GetResults()
+        res = run_analysis(spot)
 
         spot_data = res.SpotData
         if not spot_data:
@@ -118,8 +119,7 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
         # native values before the next Apply invalidates the previous results.
         for w_idx in range(1, num_waves + 1):
             settings.Wavelength.SetWavelengthNumber(w_idx)
-            spot.ApplyAndWaitForCompletion()
-            mono_data = spot.GetResults().SpotData
+            mono_data = run_analysis(spot).SpotData
             if not mono_data:
                 return {"status": "error", "message": f"Failed to acquire SpotData for wavelength {w_idx}."}
             for field in field_results:
@@ -145,11 +145,13 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None) -> Dict[str, Any]:
 def zemax_run_fft_mtf(
     max_frequency: float = 100.0,
     sample_size: str = "256x256",
+    config: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Run Fast Fourier Transform Modulation Transfer Function (FFT MTF) analysis.
     max_frequency: Maximum spatial frequency in cycles/mm.
     sample_size: Pupil sampling density ('128x128', '256x256', '512x512').
+    config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
     sys = session.system
@@ -168,8 +170,7 @@ def zemax_run_fft_mtf(
         if sample_size in sample_map:
             settings.SampleSize = sample_map[sample_size]
 
-        mtf.ApplyAndWaitForCompletion()
-        res = mtf.GetResults()
+        res = run_analysis(mtf)
 
         series_data = []
         num_series = int(res.NumberOfDataSeries)
@@ -211,11 +212,12 @@ def zemax_run_fft_mtf(
     }
 
 
-def zemax_run_ray_fan(field_index: Optional[int] = None) -> Dict[str, Any]:
+def zemax_run_ray_fan(field_index: Optional[int] = None, config: Optional[int] = None) -> Dict[str, Any]:
     """
     Run Ray Fan analysis (transverse ray aberrations Ey vs Py and Ex vs Px).
     Examines spherical aberration, coma, and astigmatism signatures.
     field_index: 1-based field to evaluate; None evaluates all fields.
+    config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
     sys = session.system
@@ -230,8 +232,7 @@ def zemax_run_ray_fan(field_index: Optional[int] = None) -> Dict[str, Any]:
         except ValueError as e:
             return {"status": "error", "message": str(e)}
 
-        fan.ApplyAndWaitForCompletion()
-        res = fan.GetResults()
+        res = run_analysis(fan)
 
         num_series = int(res.NumberOfDataSeries)
         series_info = []
@@ -265,11 +266,12 @@ def zemax_run_ray_fan(field_index: Optional[int] = None) -> Dict[str, Any]:
     }
 
 
-def zemax_run_wavefront_map(field_index: int = 1) -> Dict[str, Any]:
+def zemax_run_wavefront_map(field_index: int = 1, config: Optional[int] = None) -> Dict[str, Any]:
     """
     Run Wavefront Map analysis to evaluate optical path difference (OPD).
     Returns Peak-to-Valley (PV) error, RMS wavefront error (waves), and estimated Strehl ratio.
     field_index: 1-based field to evaluate.
+    config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
     sys = session.system
@@ -283,8 +285,7 @@ def zemax_run_wavefront_map(field_index: int = 1) -> Dict[str, Any]:
         except ValueError as e:
             return {"status": "error", "message": str(e)}
 
-        wf.ApplyAndWaitForCompletion()
-        res = wf.GetResults()
+        res = run_analysis(wf)
 
         pv_waves = None
         rms_waves = None
@@ -337,18 +338,18 @@ def zemax_run_wavefront_map(field_index: int = 1) -> Dict[str, Any]:
     }
 
 
-def zemax_run_field_curvature_distortion() -> Dict[str, Any]:
+def zemax_run_field_curvature_distortion(config: Optional[int] = None) -> Dict[str, Any]:
     """
     Run Field Curvature and Distortion analysis.
     Evaluates tangential/sagittal focal shifts and percentage distortion across the field.
+    config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
     sys = session.system
 
     fcd = sys.Analyses.New_FieldCurvatureAndDistortion()
     try:
-        fcd.ApplyAndWaitForCompletion()
-        res = fcd.GetResults()
+        res = run_analysis(fcd)
 
         series_data = []
         num_series = int(res.NumberOfDataSeries)
@@ -416,6 +417,7 @@ def _hexapolar_pupil(rings: int) -> List[tuple]:
 def zemax_export_spot_diagram_plot(
     rings: int = 12,
     filename: str = "spot_diagram.png",
+    config: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Trace a hexapolar pupil grid for every field and wavelength (Batch Ray Trace) and render
@@ -423,6 +425,7 @@ def zemax_export_spot_diagram_plot(
     wavelength chief ray. Saved into the active project's reports/ folder.
     rings: Number of hexapolar pupil rings (ring k holds 6k rays).
     filename: Output PNG file name (or path relative to reports/).
+    config: Optional 1-based MCE configuration to trace (restored afterwards).
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -563,4 +566,4 @@ for _name in (
     "zemax_run_wavefront_map", "zemax_run_field_curvature_distortion",
     "zemax_export_spot_diagram_plot",
 ):
-    globals()[_name] = serialized_operation(globals()[_name])
+    globals()[_name] = serialized_operation(with_configuration(globals()[_name]))

@@ -43,6 +43,8 @@ def choice(value, name, options):
 
 def validate_arguments(name, args):
     """No session access: malformed requests must not even open OpticStudio."""
+    if args.get("config") is not None:
+        integer(args["config"], "config")
     if name == "zemax_load_file":
         _validate_path_argument(args.get("filepath"), "filepath")
     elif name == "zemax_save_file":
@@ -167,3 +169,11 @@ def validate_arguments(name, args):
             integer(args[key], key, minimum=None)
         if args["position"] is not None:
             integer(args["position"], "position")
+        params = args.get("params")
+        if params is not None:
+            if not isinstance(params, dict):
+                raise ValueError("params must be an object mapping column names to numbers.")
+            for key, value in params.items():
+                if not isinstance(key, str) or not key.strip():
+                    raise ValueError("params keys must be non-empty column names.")
+                number(value, f"params.{key}")

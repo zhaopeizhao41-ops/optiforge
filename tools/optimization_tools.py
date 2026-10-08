@@ -180,6 +180,35 @@ def zemax_setup_merit_function(
     }
 
 
+# MFE cells 2..9 hold Param1..Param8; their headers are localized (e.g. Hx, Hy, Px, Py, or 面/波).
+_PARAM_CELLS = range(2, 10)
+
+
+def _operand_param_cells(op) -> Dict[str, int]:
+    """Map 'param1'..'param8' and each non-blank lower-cased column header to its cell index."""
+    cells: Dict[str, int] = {}
+    for n, col in enumerate(_PARAM_CELLS, start=1):
+        cells[f"param{n}"] = col
+        header = str(op.GetCellAt(col).Header).strip().lower()
+        if header:
+            cells.setdefault(header, col)
+    return cells
+
+
+def _write_operand_cell(op, col: int, value: float) -> float:
+    cell = op.GetCellAt(col)
+    kind = str(cell.DataType)
+    if kind == "Integer":
+        if float(value) != int(value):
+            raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) needs an integer, got {value}.")
+        cell.IntegerValue = int(value)
+        return int(value)
+    if kind == "Double":
+        cell.DoubleValue = float(value)
+        return float(value)
+    raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) holds {kind} data and cannot be set numerically.")
+
+
 def zemax_add_operand(
     type_code: str,
     target: float,
@@ -189,10 +218,14 @@ def zemax_add_operand(
     param3: int = 0,
     param4: int = 0,
     position: Optional[int] = None,
+    params: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
     Insert a custom optimization operand into the Merit Function Editor (MFE).
     type_code: Zemax operand code (e.g. 'EFFL', 'TOTR', 'MNCA', 'MNCG', 'SPHA', 'COMA', 'ASTI', 'MTFT').
+    param1..param4: Legacy integer shortcuts for the first four columns (written only when non-zero).
+    params: Any of Param1..Param8 by name ('param5') or column header ('Hx', 'Py'); floats allowed.
+            Applied after the legacy shortcuts, so it wins on overlap.
     """
     session = ZOSSession.get_instance()
     sys = session.system
@@ -217,17 +250,23 @@ def zemax_add_operand(
     op.Target = float(target)
     op.Weight = float(weight)
 
-    # Set parameters if non-zero
-    for col_idx, val in enumerate([param1, param2, param3, param4], start=2):
+    written: Dict[str, float] = {}
+    for n, val in enumerate([param1, param2, param3, param4], start=1):
         if val != 0:
-            try:
-                op.GetCellAt(col_idx).IntegerValue = int(val)
-            except Exception:
-                try:
-                    op.GetCellAt(col_idx).DoubleValue = float(val)
-                except Exception:
-                    pass
+            written[f"param{n}"] = _write_operand_cell(op, _PARAM_CELLS[n - 1], val)
 
+    if params:
+        cells = _operand_param_cells(op)
+        for key, val in params.items():
+            col = cells.get(key.strip().lower())
+            if col is None:
+                names = [k for k in cells if not k.startswith("param")]
+                return {"status": "error",
+                        "message": f"Unknown column '{key}' for {code_upper}. Use param1..param8 or one of: {', '.join(names)}."}
+            written[f"param{col - 1}"] = _write_operand_cell(op, col, val)
+
+    # op.Value stays 0 until the merit function is recalculated.
+    mfe.CalculateMeritFunction()
     return {
         "status": "success",
         "operand": code_upper,
@@ -235,6 +274,7 @@ def zemax_add_operand(
         "weight": float(op.Weight),
         "current_value": float(op.Value),
         "row": int(op.RowIndex),
+        "parameters": written,
     }
 
 

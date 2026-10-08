@@ -49,6 +49,7 @@ from tools import (
     zemax_scan_pupil_check as _scan_pupil_check,
     zemax_run_tolerance_analysis as _run_tolerance_analysis,
     zemax_audit_retroreflection as _audit_retroreflection,
+    zemax_generate_folded_drawing as _generate_folded_drawing,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -669,6 +670,25 @@ def zemax_audit_retroreflection(
     threshold_percent: Report surfaces with >threshold% retroreflection (default 0.1%).
     """
     res = _audit_retroreflection(detector_surface, source_surface, threshold_percent)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_generate_folded_drawing(
+    output_path: str,
+    unfold: bool = True,
+    show_rays: bool = True,
+    num_rays: int = 5,
+) -> str:
+    """
+    Generate folded optical system drawing (layout with fold mirrors).
+    Returns output path, number of surfaces, and total optical path length.
+    output_path: Output file path (PNG, PDF, or EMF).
+    unfold: If True, generate unfolded (straightened) layout (default True).
+    show_rays: Show ray traces in drawing (default True).
+    num_rays: Number of rays to trace per field (default 5).
+    """
+    res = _generate_folded_drawing(output_path, unfold, show_rays, num_rays)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

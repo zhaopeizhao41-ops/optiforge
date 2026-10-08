@@ -48,6 +48,7 @@ from tools.confocal_tools import (
 from tools.tolerance_tools import (
     zemax_run_tolerance_analysis,
     zemax_audit_retroreflection,
+    zemax_generate_folded_drawing,
 )
 from tools.optimization_tools import (
     zemax_setup_merit_function,
@@ -110,6 +111,7 @@ __all__ = [
     "zemax_scan_pupil_check",
     "zemax_run_tolerance_analysis",
     "zemax_audit_retroreflection",
+    "zemax_generate_folded_drawing",
     "zemax_setup_merit_function",
     "zemax_add_operand",
     "zemax_quick_focus",

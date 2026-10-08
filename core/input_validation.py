@@ -177,3 +177,53 @@ def validate_arguments(name, args):
                 if not isinstance(key, str) or not key.strip():
                     raise ValueError("params keys must be non-empty column names.")
                 number(value, f"params.{key}")
+    elif name == "zemax_set_surface_type":
+        integer(args["surface_index"], "surface_index", minimum=0)
+        if not isinstance(args["surface_type"], str) or not args["surface_type"].strip():
+            raise ValueError("surface_type must be a non-empty string.")
+    elif name == "zemax_set_surface_params":
+        integer(args["surface_index"], "surface_index", minimum=0)
+        if not isinstance(args["params"], dict):
+            raise ValueError("params must be an object.")
+        for key, value in args["params"].items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("params keys must be non-empty strings.")
+            number(value, key)
+    elif name in ("zemax_add_fold_mirror", "zemax_add_scan_mirror"):
+        integer(args["surface_index"], "surface_index", minimum=0)
+        number(args["reflect_angle_deg"], "reflect_angle_deg", positive=True)
+        choice(args["axis"], "axis", ("x", "y"))
+        if name == "zemax_add_scan_mirror":
+            if not isinstance(args["scan_angles_deg"], list) or not args["scan_angles_deg"]:
+                raise ValueError("scan_angles_deg must be a non-empty list.")
+    elif name == "zemax_mce_setup":
+        integer(args["n_configs"], "n_configs")
+        if not isinstance(args["reset"], bool):
+            raise ValueError("reset must be boolean.")
+    elif name == "zemax_mce_set_operand":
+        if not isinstance(args["operand_type"], str) or not args["operand_type"].strip():
+            raise ValueError("operand_type must be a non-empty string.")
+        if not isinstance(args["values"], list) or not args["values"]:
+            raise ValueError("values must be a non-empty list.")
+        for p in ("param1", "param2", "param3"):
+            integer(args[p], p, minimum=0)
+        if args["row"] is not None:
+            integer(args["row"], "row")
+        if not isinstance(args["variable"], bool):
+            raise ValueError("variable must be boolean.")
+    elif name == "zemax_setup_tissue_stack":
+        integer(args["gap_surface"], "gap_surface", minimum=0)
+        if not isinstance(args["tissue_layers"], list) or not args["tissue_layers"]:
+            raise ValueError("tissue_layers must be a non-empty list.")
+        for layer in args["tissue_layers"] + (args.get("cover_layers") or []):
+            if not isinstance(layer, dict):
+                raise ValueError("Each layer must be an object.")
+        if not isinstance(args["depths_um"], list) or not args["depths_um"]:
+            raise ValueError("depths_um must be a non-empty list.")
+        for d in args["depths_um"]:
+            number(d, "depth", minimum=0)
+    elif name == "zemax_get_envelope":
+        for key in ("first_surface", "last_surface", "frame_surface"):
+            if args[key] is not None:
+                integer(args[key], key, minimum=0)
+        integer(args["rim_points"], "rim_points", minimum=3)

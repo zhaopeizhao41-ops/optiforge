@@ -6,8 +6,23 @@ Local Optimization (DLS/OD), and Hammer global search.
 
 import math
 from typing import Any, Dict, List, Optional
+
 from core.zos_session import ZOSSession
+from core.operands import _operand
 from core.operation_guard import model_operation
+from core.editor_cells import write_cell
+from core.analysis_runner import run_analysis
+from domain.zemax_rules import OpticalRuleCheck
+
+# Spot operands the optimization wizard emits for each field. The wizard stamps each one with
+# the *normalized* field coordinate it scores (Hx/Hy), not a field index -- so a spot operand
+# can only be attributed to a field by comparing those coordinates against the Field Editor.
+_SPOT_OPERAND_CODES = ("TRAC", "RSCH", "RSCE", "TRCY", "TRCX", "RWCE", "RWCH")
+
+# Above this multiple of the diffraction limit, the on-axis RMS spot is large enough to
+# be worth diagnosing: is the design genuinely aberration-limited, or is the merit
+# function simply settling on a defocused compromise for the off-axis fields?
+_DIFFRACTION_LIMIT_FACTOR = 5.0
 
 
 def zemax_setup_merit_function(
@@ -28,6 +43,7 @@ def zemax_setup_merit_function(
     max_internal_air: float = 12.0,
     max_barrel_length: Optional[float] = None,
     barrel_weight: float = 20.0,
+    field_weights: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     """
     Build standard Merit Function in accordance with Zemax OpticStudio User Manual guidelines.
@@ -38,6 +54,12 @@ def zemax_setup_merit_function(
     - Optional upper bounds on lens barrel core stack (TTHI) and total track (TOTR).
       Lengths below these maxima incur no penalty.
     - Optional first-order focal length equality target (EFFL).
+
+    field_weights scales the per-field spot operands the wizard emitted, one weight per
+    field in field order (index 0 = the first field in the Field Editor). Omit for the
+    wizard's uniform weighting. This is the main defence against a wide, uncorrectable
+    off-axis field dominating the merit function and dragging the image plane to a
+    defocused compromise: give the fields the design must actually resolve more weight.
     """
     for name, limit, weight in (("max_totr", max_totr, totr_weight),
                                 ("max_barrel_length", max_barrel_length, barrel_weight)):
@@ -94,6 +116,76 @@ def zemax_setup_merit_function(
     wiz.Apply()
 
     added_operands = []
+
+    # Re-weight the per-field spot operands when the caller asked for it. The wizard
+    # weights every field equally, which is exactly wrong when one wide field is far
+    # worse than the rest: its terms then dominate the sum and pull the optimum off the
+    # axis. Match each operand's Param1 against the Field Editor index it refers to.
+    if field_weights is not None:
+        weights = [float(w) for w in field_weights]
+        if not weights or any(not math.isfinite(w) or w < 0 for w in weights):
+            return {"status": "error", "message": "field_weights must be finite and non-negative."}
+        n_fields = int(sys.SystemData.Fields.NumberOfFields)
+        if len(weights) != n_fields:
+            return {"status": "error",
+                    "message": f"field_weights has {len(weights)} entries but the system has {n_fields} fields."}
+        if not any(w > 0 for w in weights):
+            return {"status": "error", "message": "field_weights must leave at least one field weighted."}
+
+        # The wizard emits one block of spot operands per field and stamps each with the
+        # *normalized field coordinate* (Hx/Hy) it scores -- e.g. the 5 deg field of a
+        # 0/5/9 set carries Hy = 5/9. The field index itself lives only in the Field
+        # Editor, so normalise the fields the same way and match on the coordinates.
+        fields = sys.SystemData.Fields
+        ys = [float(fields.GetField(i).Y) for i in range(1, n_fields + 1)]
+        xs = [float(fields.GetField(i).X) for i in range(1, n_fields + 1)]
+        scale = max([abs(v) for v in ys + xs] + [1.0])
+        normalised = [(xs[i] / scale, ys[i] / scale) for i in range(n_fields)]
+
+        def _field_cells(op):
+            """Column indices of the Hx and Hy cells, located by header (they are Latin in
+            every locale, unlike Param1's 'Surf')."""
+            found = {}
+            for col in range(2, 10):
+                header = str(op.GetCellAt(col).Header).strip().lower()
+                if header in ("hx", "hy"):
+                    found[header] = col
+            return found.get("hx"), found.get("hy")
+
+        tuned = 0
+        unmatched = 0
+        for row in range(1, mfe.NumberOfOperands + 1):
+            op = mfe.GetOperandAt(row)
+            if str(op.Type).split(".")[-1] not in _SPOT_OPERAND_CODES:
+                continue
+            hx_col, hy_col = _field_cells(op)
+            try:
+                ox = float(op.GetCellAt(hx_col).DoubleValue) if hx_col else 0.0
+                oy = float(op.GetCellAt(hy_col).DoubleValue) if hy_col else 0.0
+            except Exception:
+                ox = oy = 0.0
+            f_idx, best = None, 1e9
+            for i, (nx, ny) in enumerate(normalised):
+                d = abs(ox - nx) + abs(oy - ny)
+                if d < best:
+                    best, f_idx = d, i + 1
+            if f_idx is None or best > 1e-3:
+                unmatched += 1
+                continue
+            op.Weight = weights[f_idx - 1]
+            tuned += 1
+
+        if tuned == 0:
+            return {"status": "error",
+                    "message": "field_weights was given but no per-field spot operands were found to re-weight; "
+                               "the wizard did not emit field-referenced spot terms for this criterion."}
+        if unmatched:
+            return {"status": "error",
+                    "message": f"{unmatched} spot operands carry field coordinates no editor field matches; "
+                               "refusing to re-weight an ambiguous merit function."}
+        added_operands.append(
+            f"per-field spot weights set for {n_fields} fields: {weights} ({tuned} operands)"
+        )
 
     # The wizard's air bounds cover every air space, including the image-space gap
     # (back focal distance). An MXCA there (e.g. <= 12 mm on a 95 mm BFD) dominates the
@@ -197,16 +289,7 @@ def _operand_param_cells(op) -> Dict[str, int]:
 
 def _write_operand_cell(op, col: int, value: float) -> float:
     cell = op.GetCellAt(col)
-    kind = str(cell.DataType)
-    if kind == "Integer":
-        if float(value) != int(value):
-            raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) needs an integer, got {value}.")
-        cell.IntegerValue = int(value)
-        return int(value)
-    if kind == "Double":
-        cell.DoubleValue = float(value)
-        return float(value)
-    raise ValueError(f"Column '{str(cell.Header).strip()}' (Param{col - 1}) holds {kind} data and cannot be set numerically.")
+    return write_cell(cell, value, f"Column '{str(cell.Header).strip()}' (Param{col - 1})")
 
 
 def zemax_add_operand(
@@ -441,7 +524,7 @@ def zemax_run_optimization(
     if init_mf > 0:
         improvement_pct = max(0.0, (init_mf - final_mf) / init_mf * 100.0)
 
-    return {
+    result: Dict[str, Any] = {
         "status": "success",
         "algorithm": algo_name,
         "variables_count": num_vars,
@@ -453,6 +536,121 @@ def zemax_run_optimization(
         "stagnation_guard_threshold_pct": stagnation_threshold * 100.0,
         "history": history,
     }
+
+    # A low merit function does not by itself prove a usable design. When the system
+    # carries a wide off-axis field the optimizer may minimise the sum at a defocused
+    # plane, trading the on-axis spot for a little off-axis relief. Measure that: the
+    # on-axis RMS spot here versus the best this prescription could reach with focus
+    # alone, on a private copy so the delivered model is never disturbed.
+    #
+    # The measurement must come from the spot diagram's RMS accessor. The RSCE operand is
+    # NOT an RMS figure in this build: on a singlet whose centroid RMS is 6.3 um it reads
+    # 35.3 um, which tracks the geometric (maximum) radius, not the root-mean-square one.
+    try:
+        on_axis_idx = 1
+        primary = next(
+            (w for w in range(1, sys.SystemData.Wavelengths.NumberOfWavelengths + 1)
+             if sys.SystemData.Wavelengths.GetWavelength(w).IsPrimary),
+            1,
+        )
+
+        def _on_axis_rms_um(system) -> Optional[float]:
+            """Centroid RMS spot radius (um) for field 1 at the primary wavelength."""
+            analysis = system.Analyses.New_StandardSpot()
+            try:
+                settings = analysis.GetSettings()
+                settings = getattr(settings, "__implementation__", settings)
+                settings.Field.UseAllFields()
+                settings.Wavelength.UseAllWavelengths()
+                data = run_analysis(analysis).SpotData
+                if data is None:
+                    return None
+                return abs(float(data.GetRMSSpotSizeFor(on_axis_idx, primary)))
+            finally:
+                analysis.Close()
+
+        achieved_um = _on_axis_rms_um(sys)
+
+        reachable_um = None
+        copy = sys.CopySystem()
+        try:
+            try:
+                qf = copy.Tools.OpenQuickFocus()
+                try:
+                    qf.Criterion = zos.Tools.General.QuickFocusCriterion.SpotSizeRadial
+                    qf.UseCentroid = True
+                    qf.RunAndWaitForCompletion()
+                finally:
+                    qf.Close()
+                reachable_um = _on_axis_rms_um(copy)
+            finally:
+                copy.Close(False)
+        except Exception:
+            reachable_um = None
+
+        fno = None
+        try:
+            ap = sys.SystemData.Aperture
+            if "pupil" in str(ap.ApertureType).lower():
+                fno = abs(_operand(session, "WFNO", 0, 0))
+        except Exception:
+            fno = None
+        wave_um = None
+        try:
+            wave_um = float(sys.SystemData.Wavelengths.GetWavelength(primary).Wavelength)
+        except Exception:
+            pass
+
+        airy_um = None
+        if fno and fno > 0 and wave_um:
+            airy_um = OpticalRuleCheck().calculate_airy_disk_radius_um(wave_um, fno)
+
+        diag: Dict[str, Any] = {
+            "on_axis_field": on_axis_idx,
+            "primary_wavelength_index": primary,
+            "on_axis_rms_spot_um": round(achieved_um, 3) if achieved_um is not None else None,
+        }
+        if airy_um:
+            diag["airy_radius_um"] = round(airy_um, 3)
+            if achieved_um:
+                diag["on_axis_times_diffraction_limit"] = round(achieved_um / airy_um, 2)
+        if reachable_um is not None and reachable_um > 0:
+            diag["best_focus_on_axis_rms_spot_um"] = round(reachable_um, 3)
+            if achieved_um:
+                diag["defocus_penalty_ratio"] = round(achieved_um / reachable_um, 2)
+
+        if achieved_um is None:
+            diag["verdict"] = "unavailable"
+        elif reachable_um is not None and reachable_um > 0 and achieved_um / reachable_um >= 3.0:
+            # The image plane the optimizer chose is grossly defocused (the on-axis spot is
+            # many times what focus alone gives) while the off-axis fields set the sum: say
+            # so, rather than reporting a healthy merit function for a defocused lens.
+            diag["verdict"] = "defocus_limited"
+            diag["message"] = (
+                f"Optimization converged, but the on-axis RMS spot is {achieved_um:.1f} um where "
+                f"refocusing alone reaches {reachable_um:.1f} um ({achieved_um / reachable_um:.1f}x worse). "
+                "The selected image plane is a defocused compromise for the off-axis fields, not an "
+                "on-axis solution. Re-run with field_weights that favour the fields the design must "
+                "actually resolve, or reduce the field extent the prescription can support."
+            )
+            result["warnings"] = [diag["message"]]
+        elif airy_um and achieved_um / airy_um > _DIFFRACTION_LIMIT_FACTOR:
+            diag["verdict"] = "aberration_limited"
+            diag["message"] = (
+                f"Focus is optimal, but the on-axis RMS spot ({achieved_um:.1f} um) is "
+                f"{achieved_um / airy_um:.1f}x the diffraction limit ({airy_um:.2f} um). The design is "
+                "limited by monochromatic aberration at this aperture, not by defocus: add degrees of "
+                "freedom (an aspheric term, a second element) or stop the aperture down."
+            )
+            result["warnings"] = [diag["message"]]
+        else:
+            diag["verdict"] = "focused"
+
+        result["focus_diagnostic"] = diag
+    except Exception as diag_error:
+        result["focus_diagnostic"] = {"verdict": "unavailable", "message": str(diag_error)}
+
+    return result
 
 
 def zemax_run_hammer(timeout_seconds: int = 10) -> Dict[str, Any]:

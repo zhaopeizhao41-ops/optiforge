@@ -677,6 +677,58 @@ class StageTwoRegression(unittest.TestCase):
         elements = cad._extract_lens_elements(fake_sys)
         self.assertEqual([(e["surface_start"], e["surface_end"]) for e in elements], [(1, 2)])
 
+    def test_mce_validation_rejects_bad_operand_type_and_mismatched_values(self):
+        from core.input_validation import validate_arguments
+        # operand_type must be non-empty string
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_mce_set_operand", {"operand_type": "", "values": [1], "param1": 1, "param2": 0, "param3": 0, "row": None, "variable": False})
+        # values must be non-empty list
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_mce_set_operand", {"operand_type": "THIC", "values": [], "param1": 1, "param2": 0, "param3": 0, "row": None, "variable": False})
+        # variable must be boolean
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_mce_set_operand", {"operand_type": "THIC", "values": [1.0], "param1": 1, "param2": 0, "param3": 0, "row": None, "variable": "yes"})
+
+    def test_surface_type_and_params_validation(self):
+        from core.input_validation import validate_arguments
+        # surface_type must be non-empty
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_set_surface_type", {"surface_index": 1, "surface_type": ""})
+        # params must be dict
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_set_surface_params", {"surface_index": 1, "params": [1, 2]})
+        # params keys must be strings
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_set_surface_params", {"surface_index": 1, "params": {"": 1.0}})
+
+    def test_fold_and_scan_mirror_validation(self):
+        from core.input_validation import validate_arguments
+        # axis must be x or y
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_add_fold_mirror", {"surface_index": 1, "reflect_angle_deg": 90, "axis": "z"})
+        # scan_angles_deg must be non-empty list
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_add_scan_mirror", {"surface_index": 1, "scan_angles_deg": [], "reflect_angle_deg": 90, "axis": "x"})
+
+    def test_tissue_stack_validation_rejects_bad_layers_and_depths(self):
+        from core.input_validation import validate_arguments
+        # tissue_layers must be non-empty list
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_setup_tissue_stack", {"gap_surface": 10, "tissue_layers": [], "depths_um": [0], "cover_layers": None})
+        # depths_um must be non-empty list
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_setup_tissue_stack", {"gap_surface": 10, "tissue_layers": [{"n": 1.4}], "depths_um": [], "cover_layers": None})
+        # layers must be dicts
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_setup_tissue_stack", {"gap_surface": 10, "tissue_layers": ["bad"], "depths_um": [0], "cover_layers": None})
+
+    def test_envelope_validation_checks_surface_indices(self):
+        from core.input_validation import validate_arguments
+        # rim_points must be >= 3
+        with self.assertRaises(ValueError):
+            validate_arguments("zemax_get_envelope", {"first_surface": None, "last_surface": None, "frame_surface": None, "rim_points": 2})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

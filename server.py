@@ -21,6 +21,7 @@ from tools import (
     zemax_get_system_data as _get_system_data,
     zemax_load_template as _load_template,
     zemax_register_design_proposal as _register_design_proposal,
+    zemax_confirm_design_proposal as _confirm_design_proposal,
     get_current_design_proposal as _get_current_design_proposal,
     zemax_audit_requirements as _audit_requirements,
     zemax_set_project as _set_project,
@@ -34,6 +35,25 @@ from tools import (
     zemax_insert_surface as _insert_surface,
     zemax_delete_surface as _delete_surface,
     zemax_set_solve as _set_solve,
+    zemax_set_surface_type as _set_surface_type,
+    zemax_set_surface_params as _set_surface_params,
+    zemax_add_fold_mirror as _add_fold_mirror,
+    zemax_add_scan_mirror as _add_scan_mirror,
+    zemax_mce_setup as _mce_setup,
+    zemax_mce_set_operand as _mce_set_operand,
+    zemax_mce_get as _mce_get,
+    zemax_setup_tissue_stack as _setup_tissue_stack,
+    zemax_get_envelope as _get_envelope,
+    zemax_run_huygens_psf as _run_huygens_psf,
+    zemax_confocal_response as _confocal_response,
+    zemax_fiber_coupling as _fiber_coupling,
+    zemax_scan_pupil_check as _scan_pupil_check,
+    zemax_run_tolerance_analysis as _run_tolerance_analysis,
+    zemax_audit_retroreflection as _audit_retroreflection,
+    zemax_generate_folded_drawing as _generate_folded_drawing,
+    zemax_generate_barrel_assembly as _generate_barrel_assembly,
+    zemax_compute_optomech_spacing as _compute_optomech_spacing,
+    zemax_generate_mount_interface as _generate_mount_interface,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -109,6 +129,8 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
 4. [STEP 4: USER CONFIRMATION GATE - HALT & ASK]
    - HALT and explicitly ask the user whether they approve starting simulation in Zemax.
    - STRICT PROHIBITION: DO NOT invoke `zemax_new_file`, `zemax_load_template`, `zemax_surface_operations`, `zemax_setup_merit_function`, `zemax_run_optimization`, or `zemax_run_hammer` until the user explicitly gives authorization.
+   - WHEN THE USER APPROVES: call `zemax_confirm_design_proposal(user_confirmed_to_simulate=True)` to release the gate, then proceed. Do NOT re-register the proposal. Every modeling tool returns `PROPOSAL_NOT_CONFIRMED` until this call is made, so a proposal registered in Step 3 alone will leave the workflow stalled.
+   - WHEN THE USER REQUESTS CHANGES: return to Step 2, revise, and call `zemax_register_design_proposal` again (which re-arms the gate).
 ======================================================================================
 """
 
@@ -182,6 +204,26 @@ def zemax_register_design_proposal(
         merit_function_strategy=merit_function_strategy,
         mechanical_constraints=mechanical_constraints,
         internal_air_spacing_budget=internal_air_spacing_budget,
+        user_confirmed_to_simulate=user_confirmed_to_simulate,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_confirm_design_proposal(
+    project_name: Optional[str] = None,
+    user_confirmed_to_simulate: bool = True,
+) -> str:
+    """
+    Open (or close) the Step 4 confirmation gate on an already-registered design proposal.
+
+    Call this ONLY after the user has reviewed the proposal and explicitly approved
+    ("同意" / "开始仿真" / "proceed"). This is the supported way to release the gate — the
+    proposal does not need to be re-registered. Pass user_confirmed_to_simulate=False to
+    revoke a previous approval.
+    """
+    res = _confirm_design_proposal(
+        project_name=project_name,
         user_confirmed_to_simulate=user_confirmed_to_simulate,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
@@ -411,6 +453,326 @@ def zemax_set_solve(
     params: Optional dict of solve parameters (e.g. {"f_number": 5.0} or {"source_surface": 1, "scale": 1.0}).
     """
     res = _set_solve(surface_index, cell, solve_type, params)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_set_surface_type(surface_index: int, surface_type: str) -> str:
+    """
+    Change a surface type by ZOSAPI SurfaceType name: Standard, EvenAspheric, OddAsphere,
+    CoordinateBreak, Toroidal, Paraxial, ... (case-insensitive).
+    """
+    return json.dumps(_set_surface_type(surface_index, surface_type), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> str:
+    """
+    Write LDE parameter columns. Keys: par1..par12, or aliases for the surface type:
+    CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
+    EvenAspheric: a2, a4, ..., a16. Example: {"tilt_x": 45, "order": 0}.
+    """
+    return json.dumps(_set_surface_params(surface_index, params), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_add_fold_mirror(surface_index: int, reflect_angle_deg: float = 90.0, axis: str = "x") -> str:
+    """
+    Turn a flat, air-spaced Standard dummy surface (not the stop) into a fold mirror: CB, MIRROR, CB.
+    reflect_angle_deg: total beam deflection. axis: 'x' or 'y' (tilt axis). Adds 2 surfaces.
+    """
+    return json.dumps(_add_fold_mirror(surface_index, reflect_angle_deg, axis), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_add_scan_mirror(
+    surface_index: int,
+    scan_angles_deg: List[Any],
+    reflect_angle_deg: float = 90.0,
+    axis: str = "x",
+) -> str:
+    """
+    Galvo / MEMS scan mirror: a fold mirror whose mechanical tilt changes per configuration.
+    scan_angles_deg: one mechanical angle per configuration about the fold axis, e.g. [-0.5, 0, 0.5],
+    or [fold, cross] pairs for a 2-axis MEMS, e.g. [[-0.5, 0], [0, 0.5]]. The beam moves ~2x the angle.
+    A single-configuration system is expanded to one configuration per angle. Downstream optics keep
+    the nominal fold axis (CB2 picks up CB1 with scale -1, offset 2*theta0).
+    """
+    res = _add_scan_mirror(surface_index, scan_angles_deg, reflect_angle_deg, axis)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Multi-Configuration & Confocal
+# ==============================================================================
+
+@app.tool()
+def zemax_mce_setup(n_configs: int, reset: bool = False) -> str:
+    """
+    Set the number of configurations (new ones copy the last). reset=True first clears all MCE rows
+    and collapses to one configuration.
+    """
+    return json.dumps(_mce_setup(n_configs, reset), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_mce_set_operand(
+    operand_type: str,
+    values: List[Any],
+    param1: int = 0,
+    param2: int = 0,
+    param3: int = 0,
+    row: Optional[int] = None,
+    variable: bool = False,
+) -> str:
+    """
+    Write one MCE row. operand_type: THIC, CRVT, PRAM, GLSS, WAVE, APER, SDIA, XFIE, YFIE, ...
+    param1..3: e.g. THIC param1=surface; PRAM param1=surface, param2=parameter column.
+    values: one per configuration (GLSS takes glass names). Without row, a row with the same type and
+    params is updated, otherwise a new one is added. variable=True makes every cell a variable.
+    """
+    res = _mce_set_operand(operand_type, values, param1, param2, param3, row, variable)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_mce_get() -> str:
+    """Read every MCE row with its value in each configuration."""
+    return json.dumps(_mce_get(), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_setup_tissue_stack(
+    gap_surface: int,
+    tissue_layers: List[Dict[str, Any]],
+    depths_um: List[float],
+    cover_layers: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """
+    RCM sample stack: insert cover (window, gel) and tissue layers after the immersion gap and make
+    one configuration per focus depth; the gap thickness is re-solved per depth (paraxial focus).
+    gap_surface: immersion medium just before the image surface.
+    Layer: {"n": 1.40, "vd": 55, "thickness_um": 15} or {"material": "N-BK7", "thickness_um": 170};
+    n is the index at the primary wavelength and must come from the user (skin reference:
+    Ding et al. 2006, Phys. Med. Biol. 51:1479). The last tissue layer may omit thickness_um.
+    depths_um: focus depths below the tissue surface, e.g. [0, 50, 100, 200].
+    """
+    res = _setup_tissue_stack(gap_surface, tissue_layers, depths_um, cover_layers)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_get_envelope(
+    first_surface: Optional[int] = None,
+    last_surface: Optional[int] = None,
+    frame_surface: Optional[int] = None,
+    rim_points: int = 36,
+) -> str:
+    """
+    Optical-train envelope for handpiece / Blender design: bounding box, max clear diameter, axial path
+    length and per-surface vertex + axis. Uses vertices plus rim points with sag; skips coordinate
+    breaks. Default surfaces 1..image-1; coordinates global or in frame_surface's local frame.
+    """
+    res = _get_envelope(first_surface, last_surface, frame_surface, rim_points)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Confocal Evaluation (Phase 2)
+# ==============================================================================
+
+@app.tool()
+def zemax_run_huygens_psf(
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Run Huygens PSF analysis and compute lateral FWHM and Strehl ratio.
+    Returns FWHM (μm), Strehl ratio, diffraction-limited Airy FWHM, wavelength, and NA.
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _run_huygens_psf(field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_confocal_response(
+    defocus_range_um: float,
+    num_steps: int = 21,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Compute confocal axial response by scanning defocus and measuring peak PSF intensity.
+    Returns defocus positions, intensity profile, and axial FWHM.
+    defocus_range_um: Total defocus range (e.g., 20 for ±10 μm scan).
+    num_steps: Number of defocus positions (default 21).
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _confocal_response(defocus_range_um, num_steps, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_fiber_coupling(
+    fiber_diameter_um: float,
+    fiber_na: float,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Compute fiber coupling efficiency from PSF overlap integral with fiber core aperture.
+    Returns coupling efficiency (0-1), fiber parameters, and wavelength.
+    fiber_diameter_um: Fiber core diameter in microns.
+    fiber_na: Fiber numerical aperture.
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _fiber_coupling(fiber_diameter_um, fiber_na, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_scan_pupil_check(
+    scan_surface: int,
+    pupil_surface: int,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Verify scan mirror images to entrance pupil (telecentric relay check).
+    Returns magnification, pupil position offset, chief ray angle, and telecentricity flag.
+    scan_surface: 1-based surface index of scan mirror.
+    pupil_surface: 1-based surface index of entrance pupil (stop or objective front).
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _scan_pupil_check(scan_surface, pupil_surface, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Tolerance & Manufacturability (Phase 3)
+# ==============================================================================
+
+@app.tool()
+def zemax_run_tolerance_analysis(
+    criterion: str = "RMS_Spot",
+    num_trials: int = 100,
+    compensators: Optional[List[int]] = None,
+) -> str:
+    """
+    Run inverse sensitivity tolerance analysis.
+    Returns nominal/mean/std performance, and per-tolerance sensitivity contributions.
+    criterion: Performance criterion ("RMS_Spot", "RMS_Wavefront", "MTF").
+    num_trials: Number of Monte Carlo trials (default 100).
+    compensators: Optional list of compensator surface indices.
+    """
+    res = _run_tolerance_analysis(criterion, num_trials, compensators)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_audit_retroreflection(
+    detector_surface: int,
+    source_surface: Optional[int] = None,
+    threshold_percent: float = 0.1,
+) -> str:
+    """
+    Audit retroreflection from surfaces back to source/detector (confocal pinhole leak).
+    Returns total retroreflection percentage and list of problem surfaces.
+    detector_surface: Surface index of detector/pinhole.
+    source_surface: Optional source surface (default: object surface).
+    threshold_percent: Report surfaces with >threshold% retroreflection (default 0.1%).
+    """
+    res = _audit_retroreflection(detector_surface, source_surface, threshold_percent)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_generate_folded_drawing(
+    output_path: str,
+    unfold: bool = True,
+    show_rays: bool = True,
+    num_rays: int = 5,
+) -> str:
+    """
+    Generate folded optical system drawing (layout with fold mirrors).
+    Returns output path, number of surfaces, and total optical path length.
+    output_path: Output file path (PNG, PDF, or EMF).
+    unfold: If True, generate unfolded (straightened) layout (default True).
+    show_rays: Show ray traces in drawing (default True).
+    num_rays: Number of rays to trace per field (default 5).
+    """
+    res = _generate_folded_drawing(output_path, unfold, show_rays, num_rays)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Mechanical Structure Generation (Phase 4)
+# ==============================================================================
+
+@app.tool()
+def zemax_generate_barrel_assembly(
+    first_surface: int = 1,
+    last_surface: Optional[int] = None,
+    barrel_od_mm: Optional[float] = None,
+    wall_thickness_mm: float = 3.0,
+    flange_thickness_mm: float = 5.0,
+) -> str:
+    """
+    Generate parametric barrel assembly for lens stack.
+    Returns barrel dimensions, element list with OD/thickness/spacer requirements.
+    first_surface: First lens surface (default 1).
+    last_surface: Last lens surface (default: image surface - 1).
+    barrel_od_mm: Barrel outer diameter (default: auto from max clear aperture).
+    wall_thickness_mm: Barrel wall thickness (default 3.0 mm).
+    flange_thickness_mm: Flange/spacer thickness (default 5.0 mm).
+    """
+    res = _generate_barrel_assembly(first_surface, last_surface, barrel_od_mm,
+                                     wall_thickness_mm, flange_thickness_mm)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_compute_optomech_spacing(
+    element_surfaces: List[int],
+    target_clearance_mm: float = 0.5,
+) -> str:
+    """
+    Compute optomechanical spacing requirements for lens elements.
+    Returns edge thickness, mounting clearance, and stress risk assessment per element.
+    element_surfaces: List of lens element surface indices.
+    target_clearance_mm: Target clearance between lens edge and barrel (default 0.5 mm).
+    """
+    res = _compute_optomech_spacing(element_surfaces, target_clearance_mm)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_generate_mount_interface(
+    mount_surface: int,
+    interface_type: str = "C-mount",
+    back_focal_distance_mm: Optional[float] = None,
+) -> str:
+    """
+    Generate standard mount interface specification (C-mount, SM1, SM2, RMS).
+    Returns thread spec, flange distance, mount OD, and back focal distance.
+    mount_surface: Surface where mount attaches.
+    interface_type: Mount standard ("C-mount", "SM1", "SM2", "RMS").
+    back_focal_distance_mm: Optional back focal distance constraint.
+    """
+    res = _generate_mount_interface(mount_surface, interface_type, back_focal_distance_mm)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

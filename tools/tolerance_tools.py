@@ -148,3 +148,74 @@ def zemax_audit_retroreflection(session, detector_surface, source_surface=None, 
 
 
 zemax_audit_retroreflection = serialized_operation(zemax_audit_retroreflection)
+
+
+def zemax_generate_folded_drawing(session, output_path, unfold=True, show_rays=True, num_rays=5):
+    """Generate folded optical system drawing (layout with fold mirrors).
+
+    Args:
+        output_path: Output file path (PNG, PDF, or EMF).
+        unfold: If True, generate unfolded (straightened) layout (default True).
+        show_rays: Show ray traces in drawing (default True).
+        num_rays: Number of rays to trace per field (default 5).
+
+    Returns:
+        {"status": "success", "output_path": ..., "num_surfaces": ..., "total_length_mm": ...}
+    """
+    from core.analysis_runner import run_analysis
+    import os
+
+    system = session.system
+
+    # Create layout analysis
+    if unfold:
+        layout = system.Analyses.New_SystemDrawing()
+    else:
+        layout = system.Analyses.New_SystemDrawing()  # Same API, configured differently
+
+    settings = layout.GetSettings()
+
+    # Configure drawing settings
+    if hasattr(settings, 'ShowRays'):
+        settings.ShowRays = show_rays
+    if hasattr(settings, 'NumberOfRays'):
+        settings.NumberOfRays = num_rays
+
+    # Run analysis
+    run_analysis(layout, timeout_s=60)
+
+    # Export drawing
+    output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Determine format from extension
+    ext = os.path.splitext(output_path)[1].lower()
+    if ext == '.png':
+        layout.GetResults().ExportAsPNG(output_path)
+    elif ext == '.pdf':
+        layout.GetResults().ExportAsPDF(output_path)
+    elif ext == '.emf':
+        layout.GetResults().ExportAsEMF(output_path)
+    else:
+        layout.Close()
+        return {"status": "error", "message": f"Unsupported format: {ext}. Use .png, .pdf, or .emf"}
+
+    # Get system metrics
+    num_surfaces = system.LDE.NumberOfSurfaces
+    total_length = 0.0
+    for i in range(num_surfaces - 1):
+        total_length += float(system.LDE.GetSurfaceAt(i).Thickness)
+
+    layout.Close()
+
+    return {
+        "status": "success",
+        "output_path": output_path,
+        "num_surfaces": num_surfaces,
+        "total_length_mm": round(total_length, 4),
+        "unfolded": unfold,
+    }
+
+
+zemax_generate_folded_drawing = serialized_operation(zemax_generate_folded_drawing)
+

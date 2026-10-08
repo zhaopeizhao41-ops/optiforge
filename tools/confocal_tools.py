@@ -468,3 +468,67 @@ def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, waveleng
 
 zemax_fiber_coupling = serialized_operation(zemax_fiber_coupling)
 
+
+def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavelength=1, config=None):
+    """Verify scan mirror images to entrance pupil (telecentric relay check).
+
+    Args:
+        scan_surface: 1-based surface index of scan mirror.
+        pupil_surface: 1-based surface index of entrance pupil (stop surface or objective front).
+        field: 1-based field number (default 1, on-axis).
+        wavelength: 1-based wavelength number (default 1).
+        config: Optional 1-based configuration number.
+
+    Returns:
+        {"status": "success", "magnification": <lateral mag>, "pupil_offset_mm": <axial position error>,
+         "chief_ray_angle_deg": <angle at pupil>, "is_telecentric": <bool>}
+    """
+    from core.analysis_runner import configuration
+
+    system = session.system
+    with configuration(system, config):
+        # Get paraxial data at scan and pupil surfaces
+        # Use merit function operands to extract ray data
+        scan_height = _operand(session, "REAY", scan_surface, 0, 0, field, wavelength, 0, 0, 0)
+        pupil_height = _operand(session, "REAY", pupil_surface, 0, 0, field, wavelength, 0, 0, 0)
+
+        # Chief ray angle at pupil (should be ~0 for telecentric)
+        chief_angle_rad = _operand(session, "REAA", pupil_surface, 0, 0, field, wavelength, 0, 0, 0)
+        chief_angle_deg = chief_angle_rad * 180 / 3.14159265
+
+        # Marginal ray heights for magnification
+        scan_marginal = _operand(session, "REAY", scan_surface, 1, 0, field, wavelength, 0, 0, 0)
+        pupil_marginal = _operand(session, "REAY", pupil_surface, 1, 0, field, wavelength, 0, 0, 0)
+
+        magnification = pupil_marginal / scan_marginal if abs(scan_marginal) > 1e-6 else 0.0
+
+        # Pupil position check: should be at stop surface
+        stop_surf = int(system.LDE.StopSurface)
+        pupil_offset_mm = 0.0
+        if pupil_surface != stop_surf:
+            # Compute axial distance between surfaces
+            for i in range(min(pupil_surface, stop_surf), max(pupil_surface, stop_surf)):
+                pupil_offset_mm += float(system.LDE.GetSurfaceAt(i).Thickness)
+            if stop_surf < pupil_surface:
+                pupil_offset_mm = -pupil_offset_mm
+
+        # Telecentric criterion: chief ray angle < 1 degree
+        is_telecentric = abs(chief_angle_deg) < 1.0
+
+        result = {
+            "status": "success",
+            "magnification": round(magnification, 4),
+            "pupil_offset_mm": round(pupil_offset_mm, 4),
+            "chief_ray_angle_deg": round(chief_angle_deg, 4),
+            "is_telecentric": is_telecentric,
+            "scan_surface": scan_surface,
+            "pupil_surface": pupil_surface,
+            "field": field,
+        }
+        if config is not None:
+            result["config"] = config
+        return result
+
+
+zemax_scan_pupil_check = serialized_operation(zemax_scan_pupil_check)
+

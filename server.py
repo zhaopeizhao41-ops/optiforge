@@ -46,6 +46,7 @@ from tools import (
     zemax_run_huygens_psf as _run_huygens_psf,
     zemax_confocal_response as _confocal_response,
     zemax_fiber_coupling as _fiber_coupling,
+    zemax_scan_pupil_check as _scan_pupil_check,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -607,6 +608,27 @@ def zemax_fiber_coupling(
     config: Optional 1-based configuration number for multi-config systems.
     """
     res = _fiber_coupling(fiber_diameter_um, fiber_na, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_scan_pupil_check(
+    scan_surface: int,
+    pupil_surface: int,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Verify scan mirror images to entrance pupil (telecentric relay check).
+    Returns magnification, pupil position offset, chief ray angle, and telecentricity flag.
+    scan_surface: 1-based surface index of scan mirror.
+    pupil_surface: 1-based surface index of entrance pupil (stop or objective front).
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _scan_pupil_check(scan_surface, pupil_surface, field, wavelength, config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

@@ -40,6 +40,14 @@ from tools.config_tools import (
 from tools.confocal_tools import (
     zemax_setup_tissue_stack,
     zemax_get_envelope,
+    zemax_run_huygens_psf,
+    zemax_confocal_response,
+    zemax_fiber_coupling,
+    zemax_scan_pupil_check,
+)
+from tools.tolerance_tools import (
+    zemax_run_tolerance_analysis,
+    zemax_audit_retroreflection,
 )
 from tools.optimization_tools import (
     zemax_setup_merit_function,
@@ -96,6 +104,12 @@ __all__ = [
     "zemax_mce_get",
     "zemax_setup_tissue_stack",
     "zemax_get_envelope",
+    "zemax_run_huygens_psf",
+    "zemax_confocal_response",
+    "zemax_fiber_coupling",
+    "zemax_scan_pupil_check",
+    "zemax_run_tolerance_analysis",
+    "zemax_audit_retroreflection",
     "zemax_setup_merit_function",
     "zemax_add_operand",
     "zemax_quick_focus",

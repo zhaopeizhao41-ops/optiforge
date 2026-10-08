@@ -47,6 +47,8 @@ from tools import (
     zemax_confocal_response as _confocal_response,
     zemax_fiber_coupling as _fiber_coupling,
     zemax_scan_pupil_check as _scan_pupil_check,
+    zemax_run_tolerance_analysis as _run_tolerance_analysis,
+    zemax_audit_retroreflection as _audit_retroreflection,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -629,6 +631,44 @@ def zemax_scan_pupil_check(
     config: Optional 1-based configuration number for multi-config systems.
     """
     res = _scan_pupil_check(scan_surface, pupil_surface, field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Tolerance & Manufacturability (Phase 3)
+# ==============================================================================
+
+@app.tool()
+def zemax_run_tolerance_analysis(
+    criterion: str = "RMS_Spot",
+    num_trials: int = 100,
+    compensators: Optional[List[int]] = None,
+) -> str:
+    """
+    Run inverse sensitivity tolerance analysis.
+    Returns nominal/mean/std performance, and per-tolerance sensitivity contributions.
+    criterion: Performance criterion ("RMS_Spot", "RMS_Wavefront", "MTF").
+    num_trials: Number of Monte Carlo trials (default 100).
+    compensators: Optional list of compensator surface indices.
+    """
+    res = _run_tolerance_analysis(criterion, num_trials, compensators)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_audit_retroreflection(
+    detector_surface: int,
+    source_surface: Optional[int] = None,
+    threshold_percent: float = 0.1,
+) -> str:
+    """
+    Audit retroreflection from surfaces back to source/detector (confocal pinhole leak).
+    Returns total retroreflection percentage and list of problem surfaces.
+    detector_surface: Surface index of detector/pinhole.
+    source_surface: Optional source surface (default: object surface).
+    threshold_percent: Report surfaces with >threshold% retroreflection (default 0.1%).
+    """
+    res = _audit_retroreflection(detector_surface, source_surface, threshold_percent)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

@@ -50,6 +50,11 @@ from tools.tolerance_tools import (
     zemax_audit_retroreflection,
     zemax_generate_folded_drawing,
 )
+from tools.mechanical_tools import (
+    zemax_generate_barrel_assembly,
+    zemax_compute_optomech_spacing,
+    zemax_generate_mount_interface,
+)
 from tools.optimization_tools import (
     zemax_setup_merit_function,
     zemax_add_operand,
@@ -112,6 +117,9 @@ __all__ = [
     "zemax_run_tolerance_analysis",
     "zemax_audit_retroreflection",
     "zemax_generate_folded_drawing",
+    "zemax_generate_barrel_assembly",
+    "zemax_compute_optomech_spacing",
+    "zemax_generate_mount_interface",
     "zemax_setup_merit_function",
     "zemax_add_operand",
     "zemax_quick_focus",

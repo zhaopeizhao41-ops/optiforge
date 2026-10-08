@@ -50,6 +50,9 @@ from tools import (
     zemax_run_tolerance_analysis as _run_tolerance_analysis,
     zemax_audit_retroreflection as _audit_retroreflection,
     zemax_generate_folded_drawing as _generate_folded_drawing,
+    zemax_generate_barrel_assembly as _generate_barrel_assembly,
+    zemax_compute_optomech_spacing as _compute_optomech_spacing,
+    zemax_generate_mount_interface as _generate_mount_interface,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -689,6 +692,64 @@ def zemax_generate_folded_drawing(
     num_rays: Number of rays to trace per field (default 5).
     """
     res = _generate_folded_drawing(output_path, unfold, show_rays, num_rays)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Mechanical Structure Generation (Phase 4)
+# ==============================================================================
+
+@app.tool()
+def zemax_generate_barrel_assembly(
+    first_surface: int = 1,
+    last_surface: Optional[int] = None,
+    barrel_od_mm: Optional[float] = None,
+    wall_thickness_mm: float = 3.0,
+    flange_thickness_mm: float = 5.0,
+) -> str:
+    """
+    Generate parametric barrel assembly for lens stack.
+    Returns barrel dimensions, element list with OD/thickness/spacer requirements.
+    first_surface: First lens surface (default 1).
+    last_surface: Last lens surface (default: image surface - 1).
+    barrel_od_mm: Barrel outer diameter (default: auto from max clear aperture).
+    wall_thickness_mm: Barrel wall thickness (default 3.0 mm).
+    flange_thickness_mm: Flange/spacer thickness (default 5.0 mm).
+    """
+    res = _generate_barrel_assembly(first_surface, last_surface, barrel_od_mm,
+                                     wall_thickness_mm, flange_thickness_mm)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_compute_optomech_spacing(
+    element_surfaces: List[int],
+    target_clearance_mm: float = 0.5,
+) -> str:
+    """
+    Compute optomechanical spacing requirements for lens elements.
+    Returns edge thickness, mounting clearance, and stress risk assessment per element.
+    element_surfaces: List of lens element surface indices.
+    target_clearance_mm: Target clearance between lens edge and barrel (default 0.5 mm).
+    """
+    res = _compute_optomech_spacing(element_surfaces, target_clearance_mm)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_generate_mount_interface(
+    mount_surface: int,
+    interface_type: str = "C-mount",
+    back_focal_distance_mm: Optional[float] = None,
+) -> str:
+    """
+    Generate standard mount interface specification (C-mount, SM1, SM2, RMS).
+    Returns thread spec, flange distance, mount OD, and back focal distance.
+    mount_surface: Surface where mount attaches.
+    interface_type: Mount standard ("C-mount", "SM1", "SM2", "RMS").
+    back_focal_distance_mm: Optional back focal distance constraint.
+    """
+    res = _generate_mount_interface(mount_surface, interface_type, back_focal_distance_mm)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

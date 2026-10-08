@@ -119,7 +119,8 @@ def zemax_set_solve(
     """
     Configure a solve on a surface cell.
     surface_index: Surface index.
-    cell: 'radius', 'thickness', or 'semidiameter'.
+    cell: 'radius', 'thickness', 'semidiameter', 'conic', or 'par1'..'par12' (the LDE
+      parameter columns; on an EvenAspheric surface par1..par8 are a2, a4, ... a16).
     solve_type: 'variable', 'fixed', 'fnumber', 'pickup', 'marginal_ray_angle', 'marginal_ray_height', 'edgethickness'.
     params: Optional dict of solve parameters (e.g. {"f_number": 5.0} or {"source_surface": 1, "scale": 1.0}).
     """
@@ -140,8 +141,19 @@ def zemax_set_solve(
         target_cell = surf.ThicknessCell
     elif cell_clean in ["semidiameter", "semi_diameter"]:
         target_cell = surf.SemiDiameterCell
+    elif cell_clean == "conic":
+        # The conic constant is a solve-capable LDE column, exposed through SurfaceColumn
+        # rather than a named cell property (radius/thickness are the only ones with one).
+        target_cell = surf.GetSurfaceCell(zos.Editors.LDE.SurfaceColumn.Conic)
+    elif cell_clean.startswith("par") and cell_clean[3:].isdigit() and 1 <= int(cell_clean[3:]) <= 12:
+        # Aspheric coefficients live in the ParN columns. Releasing these is the only way
+        # to give a spherical-aberration-limited design the extra freedom it needs.
+        target_cell = surf.GetSurfaceCell(
+            getattr(zos.Editors.LDE.SurfaceColumn, f"Par{int(cell_clean[3:])}"))
     else:
-        return {"status": "error", "message": f"Unknown cell '{cell}'. Must be 'radius', 'thickness', or 'semidiameter'."}
+        return {"status": "error",
+                "message": f"Unknown cell '{cell}'. Must be 'radius', 'thickness', 'semidiameter', "
+                           f"'conic', or 'par1'..'par12'."}
 
     st_clean = solve_type.lower().replace("_", "").strip()
     p = params or {}

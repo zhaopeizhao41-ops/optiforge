@@ -226,16 +226,41 @@ def zemax_load_file(filepath: str) -> Dict[str, Any]:
 def zemax_save_file(
     filepath: Optional[str] = None,
     project_name: Optional[str] = None,
+    skip_quality_gates: bool = False,
 ) -> Dict[str, Any]:
     """
     Save the active optical design to disk.
     If project_name is provided, ensures the project directory is initialized and active.
     If filepath is omitted, automatically saves as .zmx in 'output/<project_name>/<project_name>.zmx'.
     Supports both .zmx (classic ASCII format) and .zos (OpticStudio modern format).
+
+    Quality gates: By default, runs automated checks before saving to prevent "builds but
+    doesn't work" failures. Set skip_quality_gates=True to bypass (not recommended).
     """
     session = ZOSSession.get_instance()
     try:
         active_proj = sanitize_project_name(project_name) if project_name else get_active_project_name()
+
+        # QUALITY GATES: Run before save (unless explicitly skipped)
+        if not skip_quality_gates:
+            from core.quality_gates import run_quality_gates
+            gate_result = run_quality_gates(enforce_warnings=False)
+
+            if not gate_result["passed"]:
+                return {
+                    "status": "error",
+                    "code": "QUALITY_GATE_FAILURE",
+                    "message": f"Design failed {len(gate_result['issues'])} quality gate(s). "
+                              f"Fix issues before saving (or pass skip_quality_gates=True to override).",
+                    "issues": gate_result["issues"],
+                    "warnings": gate_result["warnings"],
+                    "gates_run": gate_result["gates_run"],
+                }
+
+            # If there are warnings, include them in the success response but allow save
+            quality_warnings = gate_result.get("warnings", [])
+        else:
+            quality_warnings = []
 
         target_path = filepath
         current = session.current_filepath
@@ -260,13 +285,20 @@ def zemax_save_file(
 
         session.save_file(target_path)
         session.model_project = active_proj
-        return {
+
+        result = {
             "status": "success",
             "project_name": active_proj,
             "project_directory": get_project_dir(active_proj),
-            "saved_to": session.current_filepath,
+            "file_path": session.current_filepath,
             "format": os.path.splitext(session.current_filepath)[1].lower(),
         }
+
+        if quality_warnings:
+            result["quality_warnings"] = quality_warnings
+            result["message"] = f"Saved with {len(quality_warnings)} quality warning(s)"
+
+        return result
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

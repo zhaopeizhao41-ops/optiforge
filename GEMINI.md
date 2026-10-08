@@ -72,7 +72,9 @@
 - **强制暂停**：呈报方案后，**必须停下来明确向用户询问**：
   > *"以上设计方案已根据文献检索与深度光学推演完成。请审阅该方案，是否同意以此方案启动 Zemax 仿真与自动优化？"*
 - **严禁擅自调用**：在用户明确输入“同意”、“确认”、“开始仿真”或类似确认指令之前，**严禁私自调用** `zemax_new_file`, `zemax_load_template`, `zemax_surface_operations`, `zemax_setup_merit_function`, `zemax_run_optimization`, `zemax_run_hammer`。
-- 若用户提出修改意见，返回 Step 2 调整方案并重新报审。
+- **用户确认后的放行动作（必需）**：Step 3 登记提案时门禁默认关闭（`user_confirmed_to_simulate=False`）。收到用户明确确认后，**必须调用** `zemax_confirm_design_proposal(user_confirmed_to_simulate=True)` 解除门禁，然后才能开始建模；**无需**重新登记提案。若跳过这一步，所有建模工具都会返回 `PROPOSAL_NOT_CONFIRMED`，流程会卡死在这一步。
+- 若用户提出修改意见，返回 Step 2 调整方案，并重新调用 `zemax_register_design_proposal` 登记（登记会重新关闭门禁）。
+- 注意：`zemax_load_file` 载入既有模型**不会**自动授权仿真；载入后仍需按上述流程确认。
 
 ---
 

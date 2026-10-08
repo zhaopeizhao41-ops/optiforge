@@ -32,6 +32,7 @@ from tools import (  # noqa: E402
     zemax_set_wavelengths,
     zemax_surface_operations,
     zemax_insert_surface,
+    zemax_set_solve,
     zemax_set_surface_params,
     zemax_setup_merit_function,
     zemax_run_optimization,
@@ -138,8 +139,13 @@ def main():
     stage("Gate now open: set aperture", zemax_set_aperture("EntrancePupilDiameter", 6.25))
     stage("Set wavelengths (633 nm)", zemax_set_wavelengths(
         [{"wavelength_um": 0.633, "weight": 1.0}], primary_index=1))
+    # Fields must fit the format the element can actually cover. At f=25 mm the image
+    # surface carries a 4 mm semi-diameter (~8 mm image circle), i.e. +-9 deg. A 24 deg
+    # field would put the paraxial image height at 11.1 mm, outside the format: the spot
+    # terms for it then dominate the merit function and buy their own improvement by
+    # dragging the image plane to a defocused compromise. Stay inside the format.
     stage("Set fields", zemax_set_fields("Angle", [
-        {"x": 0.0, "y": 0.0}, {"x": 0.0, "y": 17.0}, {"x": 0.0, "y": 24.0},
+        {"x": 0.0, "y": 0.0}, {"x": 0.0, "y": 5.0}, {"x": 0.0, "y": 9.0},
     ]))
 
     # A fresh file is OBJ / IMA only. Insert one surface so the singlet has a real rear
@@ -154,11 +160,33 @@ def main():
         comment="rear plane, BFL"))
 
     # ---------------------------------------------------------------- Optimize
+    # Optimization only moves cells that are marked variable in the LDE/MFE. A fresh
+    # surface carries fixed solves, so leaving them alone is why zemax_run_optimization
+    # previously reported `variables: 0` and returned without touching the model.
+    #
+    # Released variables, and the job each one does:
+    #   * surface 1 radius  -> element power and bending (the main design lever).
+    #   * surface 2 thickness -> back focal distance, i.e. defocus. Without this the
+    #     optimizer cannot null the focus term and the spot stays defocus-dominated.
+    # Deliberately NOT released:
+    #   * surface 2 radius -> the rear face stays plano. It is the flat the mechanical
+    #     stack seats against, so it must not drift during optimization.
+    stage("Release surface 1 radius (variable)",
+          zemax_set_solve(surface_index=1, cell="radius", solve_type="variable"))
+    stage("Release surface 2 thickness (variable)",
+          zemax_set_solve(surface_index=2, cell="thickness", solve_type="variable"))
+
+    # Weight the fields towards the axis. All three now sit inside the format, but the
+    # singlet's residual is dominated by on-axis spherical aberration, and the off-axis
+    # fields are the ones that would otherwise buy their own correction by pulling the
+    # image plane off the axis. Down-weighting them keeps focus where it belongs; the
+    # optimizer's focus_diagnostic reports the result.
     stage("Merit function with barriers", zemax_setup_merit_function(
         criterion="RMS_Spot", rings=4, arms=6,
         min_air_center=0.5, max_air_center=12.0, min_air_edge=0.8,
         min_glass_center=1.0, min_glass_edge=1.2,
         target_efl=25.0, efl_weight=100.0, max_totr=40.0,
+        field_weights=[1.0, 0.5, 0.25],
     ))
     stage("Quick focus / optimize", zemax_run_optimization(
         algorithm="DLS", cycles="Automatic", max_rounds=2))

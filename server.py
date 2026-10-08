@@ -44,6 +44,7 @@ from tools import (
     zemax_setup_tissue_stack as _setup_tissue_stack,
     zemax_get_envelope as _get_envelope,
     zemax_run_huygens_psf as _run_huygens_psf,
+    zemax_confocal_response as _confocal_response,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -563,6 +564,27 @@ def zemax_run_huygens_psf(
     config: Optional 1-based configuration number for multi-config systems.
     """
     res = _run_huygens_psf(field, wavelength, config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_confocal_response(
+    defocus_range_um: float,
+    num_steps: int = 21,
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Compute confocal axial response by scanning defocus and measuring peak PSF intensity.
+    Returns defocus positions, intensity profile, and axial FWHM.
+    defocus_range_um: Total defocus range (e.g., 20 for ±10 μm scan).
+    num_steps: Number of defocus positions (default 21).
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _confocal_response(defocus_range_um, num_steps, field, wavelength, config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

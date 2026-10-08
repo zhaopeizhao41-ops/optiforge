@@ -319,3 +319,86 @@ def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
 
 zemax_run_huygens_psf = serialized_operation(zemax_run_huygens_psf)
 
+
+def zemax_confocal_response(session, defocus_range_um, num_steps=21, field=1, wavelength=1, config=None):
+    """Compute confocal axial response by scanning defocus and measuring peak PSF intensity.
+
+    Args:
+        defocus_range_um: Total defocus range (e.g., 20 for ±10 μm).
+        num_steps: Number of defocus positions (default 21).
+        field: 1-based field number (default 1).
+        wavelength: 1-based wavelength number (default 1).
+        config: Optional 1-based configuration number.
+
+    Returns:
+        {"status": "success", "defocus_um": [...], "intensity": [...], "fwhm_axial_um": <axial FWHM>}
+    """
+    from core.analysis_runner import run_analysis, configuration
+    import numpy as np
+
+    system = session.system
+    with configuration(system, config):
+        # Generate defocus positions
+        defocus_positions = np.linspace(-defocus_range_um / 2, defocus_range_um / 2, num_steps)
+        intensities = []
+
+        # Get image surface
+        img_surf = system.LDE.NumberOfSurfaces - 1
+        orig_thickness = float(system.LDE.GetSurfaceAt(img_surf - 1).Thickness)
+
+        for defocus in defocus_positions:
+            # Apply defocus by shifting image surface
+            system.LDE.GetSurfaceAt(img_surf - 1).Thickness = orig_thickness - defocus / 1000.0  # mm
+
+            # Run Huygens PSF
+            hps = system.Analyses.New_HuygensPsf()
+            run_analysis(hps, timeout_s=60)
+            results = hps.GetResults()
+            dg = results.DataGrids[0]
+            vals = dg.Values
+            nx, ny = vals.GetLength(0), vals.GetLength(1)
+
+            # Find peak intensity
+            peak_val = 0.0
+            for i in range(nx):
+                for j in range(ny):
+                    v = vals[i, j]
+                    if v > peak_val:
+                        peak_val = v
+
+            intensities.append(peak_val)
+            hps.Close()
+
+        # Restore original thickness
+        system.LDE.GetSurfaceAt(img_surf - 1).Thickness = orig_thickness
+
+        # Compute axial FWHM
+        intensities = np.array(intensities)
+        peak_intensity = np.max(intensities)
+        half_max = peak_intensity / 2.0
+
+        # Find FWHM crossings
+        above_half = intensities >= half_max
+        fwhm_axial_um = 0.0
+        if np.any(above_half):
+            indices = np.where(above_half)[0]
+            if len(indices) > 1:
+                left_idx = indices[0]
+                right_idx = indices[-1]
+                fwhm_axial_um = abs(defocus_positions[right_idx] - defocus_positions[left_idx])
+
+        result = {
+            "status": "success",
+            "defocus_um": defocus_positions.tolist(),
+            "intensity": intensities.tolist(),
+            "fwhm_axial_um": round(fwhm_axial_um, 4),
+            "field": field,
+            "wavelength_nm": round(float(system.SystemData.Wavelengths.GetWavelength(wavelength).Wavelength) * 1000, 1),
+        }
+        if config is not None:
+            result["config"] = config
+        return result
+
+
+zemax_confocal_response = serialized_operation(zemax_confocal_response)
+

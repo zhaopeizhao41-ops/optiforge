@@ -21,6 +21,7 @@ from tools import (
     zemax_get_system_data as _get_system_data,
     zemax_load_template as _load_template,
     zemax_register_design_proposal as _register_design_proposal,
+    zemax_confirm_design_proposal as _confirm_design_proposal,
     get_current_design_proposal as _get_current_design_proposal,
     zemax_audit_requirements as _audit_requirements,
     zemax_set_project as _set_project,
@@ -128,6 +129,8 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
 4. [STEP 4: USER CONFIRMATION GATE - HALT & ASK]
    - HALT and explicitly ask the user whether they approve starting simulation in Zemax.
    - STRICT PROHIBITION: DO NOT invoke `zemax_new_file`, `zemax_load_template`, `zemax_surface_operations`, `zemax_setup_merit_function`, `zemax_run_optimization`, or `zemax_run_hammer` until the user explicitly gives authorization.
+   - WHEN THE USER APPROVES: call `zemax_confirm_design_proposal(user_confirmed_to_simulate=True)` to release the gate, then proceed. Do NOT re-register the proposal. Every modeling tool returns `PROPOSAL_NOT_CONFIRMED` until this call is made, so a proposal registered in Step 3 alone will leave the workflow stalled.
+   - WHEN THE USER REQUESTS CHANGES: return to Step 2, revise, and call `zemax_register_design_proposal` again (which re-arms the gate).
 ======================================================================================
 """
 
@@ -201,6 +204,26 @@ def zemax_register_design_proposal(
         merit_function_strategy=merit_function_strategy,
         mechanical_constraints=mechanical_constraints,
         internal_air_spacing_budget=internal_air_spacing_budget,
+        user_confirmed_to_simulate=user_confirmed_to_simulate,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_confirm_design_proposal(
+    project_name: Optional[str] = None,
+    user_confirmed_to_simulate: bool = True,
+) -> str:
+    """
+    Open (or close) the Step 4 confirmation gate on an already-registered design proposal.
+
+    Call this ONLY after the user has reviewed the proposal and explicitly approved
+    ("同意" / "开始仿真" / "proceed"). This is the supported way to release the gate — the
+    proposal does not need to be re-registered. Pass user_confirmed_to_simulate=False to
+    revoke a previous approval.
+    """
+    res = _confirm_design_proposal(
+        project_name=project_name,
         user_confirmed_to_simulate=user_confirmed_to_simulate,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)

@@ -9,6 +9,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional
 from core.zos_session import ZOSSession
 from core.operation_guard import model_operation, serialized_operation
+from core.operands import _operand
 from tools.config_tools import resize_configs, write_mce_row
 
 
@@ -25,13 +26,6 @@ def _secant(f: Callable[[float], float], x0: float, x1: float, tol: float = 1e-7
     if abs(f1) <= tol:
         return x1
     raise RuntimeError(f"Secant solve did not converge (residual {f1:.3g}).")
-
-
-def _operand(session, code: str, *params) -> float:
-    """Evaluate one merit-function operand without adding it to the MFE."""
-    op_type = getattr(session.ZOSAPI.Editors.MFE.MeritOperandType, code)
-    args = list(params) + [0] * (8 - len(params))
-    return float(session.system.MFE.GetOperandValue(op_type, *args))
 
 
 def _primary_wave(system) -> int:
@@ -228,7 +222,7 @@ zemax_setup_tissue_stack = model_operation(zemax_setup_tissue_stack)
 zemax_get_envelope = serialized_operation(zemax_get_envelope)
 
 
-def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
+def zemax_run_huygens_psf(field=1, wavelength=1, config=None):
     """Run Huygens PSF analysis and compute lateral FWHM and Strehl ratio.
 
     Args:
@@ -243,6 +237,7 @@ def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
     """
     from core.analysis_runner import run_analysis, configuration
 
+    session = ZOSSession.get_instance()
     system = session.system
     with configuration(system, config):
         # Get wavelength
@@ -306,7 +301,13 @@ def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
         fwhm_y = abs(top - bottom) * dy_um
 
         fwhm_um = (fwhm_x + fwhm_y) / 2.0
-        strehl = peak_val  # Peak is normalized Strehl
+        # The Huygens PSF grid is peak-normalized, so its maximum is always 1.0 and
+        # carries no aberration information. Query the STRH operand instead (it is the
+        # ratio of the aberrated peak to the diffraction-limited peak).
+        try:
+            strehl = _operand(session, "STRH", wavelength, field)
+        except Exception:
+            strehl = float("nan")
 
         hps.Close()
         result = {"status": "success", "fwhm_um": round(fwhm_um, 4), "strehl": round(strehl, 4),
@@ -320,7 +321,7 @@ def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
 zemax_run_huygens_psf = serialized_operation(zemax_run_huygens_psf)
 
 
-def zemax_confocal_response(session, defocus_range_um, num_steps=21, field=1, wavelength=1, config=None):
+def zemax_confocal_response(defocus_range_um, num_steps=21, field=1, wavelength=1, config=None):
     """Compute confocal axial response by scanning defocus and measuring peak PSF intensity.
 
     Args:
@@ -336,6 +337,7 @@ def zemax_confocal_response(session, defocus_range_um, num_steps=21, field=1, wa
     from core.analysis_runner import run_analysis, configuration
     import numpy as np
 
+    session = ZOSSession.get_instance()
     system = session.system
     with configuration(system, config):
         # Generate defocus positions
@@ -403,22 +405,44 @@ def zemax_confocal_response(session, defocus_range_um, num_steps=21, field=1, wa
 zemax_confocal_response = serialized_operation(zemax_confocal_response)
 
 
-def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, wavelength=1, config=None):
-    """Compute fiber coupling efficiency from PSF overlap integral.
+def _mode_field_radius_um(core_radius_um: float, fiber_na: float, lam_um: float) -> "tuple[float, float, bool]":
+    """(V-number, 1/e^2 mode field radius in um, is_single_mode) for a step-index fiber.
+
+    Single mode (V < 2.405) uses Marcuse's fit for the fundamental HE11 mode;
+    beyond cutoff the field is taken as uniformly confined to the core radius.
+    """
+    if lam_um <= 0 or core_radius_um <= 0 or fiber_na <= 0:
+        return 0.0, core_radius_um, False
+    v_number = 2.0 * math.pi * core_radius_um * fiber_na / lam_um
+    if v_number < 2.405:
+        w_um = core_radius_um * (0.65 + 1.619 * v_number ** -1.5 + 2.879 * v_number ** -6.0)
+        return v_number, w_um, True
+    return v_number, core_radius_um, False
+
+
+def zemax_fiber_coupling(fiber_diameter_um, fiber_na, field=1, wavelength=1, config=None):
+    """Compute fiber coupling efficiency from PSF overlap with the fiber's guided mode.
+
+    For a single-mode fiber the receiving mode is approximated by a Gaussian whose 1/e^2
+    radius w follows Marcuse's relation against the fiber V-number (V = 2*pi*a*NA/lambda).
+    Beyond V = 2.405 the fiber is multimode and a pure geometric aperture overlap is used,
+    which matches the measured behaviour of large-core fibers.
 
     Args:
         fiber_diameter_um: Fiber core diameter in microns.
-        fiber_na: Fiber numerical aperture.
+        fiber_na: Fiber numerical aperture (used to derive the mode field radius).
         field: 1-based field number (default 1).
         wavelength: 1-based wavelength number (default 1).
         config: Optional 1-based configuration number.
 
     Returns:
-        {"status": "success", "coupling_efficiency": <0-1>, "fiber_diameter_um": ..., "fiber_na": ...}
+        {"status": "success", "coupling_efficiency": <0-1>, "mode": "single"|"multimode",
+         "mode_field_radius_um": ..., "v_number": ..., "fiber_diameter_um": ..., "fiber_na": ...}
     """
     from core.analysis_runner import run_analysis, configuration
     import numpy as np
 
+    session = ZOSSession.get_instance()
     system = session.system
     with configuration(system, config):
         # Run Huygens PSF
@@ -430,7 +454,7 @@ def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, waveleng
         nx, ny = vals.GetLength(0), vals.GetLength(1)
         dx_um, dy_um = dg.Dx, dg.Dy
 
-        # Create coordinate grids
+        # Create coordinate grids (microns)
         x = np.arange(nx) * dx_um - (nx - 1) * dx_um / 2
         y = np.arange(ny) * dy_um - (ny - 1) * dy_um / 2
         X, Y = np.meshgrid(y, x)
@@ -442,24 +466,36 @@ def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, waveleng
             for j in range(ny):
                 psf[i, j] = vals[i, j]
 
-        # Fiber aperture (circular, uniform transmission within radius)
-        fiber_radius_um = fiber_diameter_um / 2
-        fiber_aperture = (R <= fiber_radius_um).astype(float)
+        lam_um = float(system.SystemData.Wavelengths.GetWavelength(wavelength).Wavelength)
+        core_radius_um = fiber_diameter_um / 2.0
 
-        # Coupling efficiency: overlap integral
-        # η = ∫∫ PSF(x,y) * Fiber(x,y) dx dy / ∫∫ PSF(x,y) dx dy
-        coupled_power = np.sum(psf * fiber_aperture) * dx_um * dy_um
-        total_power = np.sum(psf) * dx_um * dy_um
-        coupling_efficiency = coupled_power / total_power if total_power > 0 else 0.0
+        # V-number and mode field radius (Marcuse, single mode only)
+        v_number, w_um, single_mode = _mode_field_radius_um(core_radius_um, fiber_na, lam_um)
+        if single_mode:
+            mode = np.exp(-(R ** 2) / (w_um ** 2))
+        else:
+            # Multimode: the guided power is confined to the core by total internal reflection.
+            mode = (R <= core_radius_um).astype(float)
+
+        # Coupling efficiency between the (real, amplitude) PSF and the fiber mode:
+        #   eta = |integral psi_psf * psi_mode|^2 / (integral |psi_psf|^2 * integral |psi_mode|^2)
+        # The PSF grid is an intensity (|psi|^2), so its amplitude is sqrt(psf).
+        amp_psf = np.sqrt(np.clip(psf, 0.0, None))
+        num = np.abs(np.sum(amp_psf * mode)) ** 2
+        den = float(np.sum(amp_psf ** 2) * np.sum(mode ** 2))
+        coupling_efficiency = num / den if den > 0 else 0.0
 
         hps.Close()
         result = {
             "status": "success",
-            "coupling_efficiency": round(coupling_efficiency, 6),
+            "coupling_efficiency": round(float(coupling_efficiency), 6),
+            "mode": "single" if single_mode else "multimode",
+            "mode_field_radius_um": round(w_um, 4),
+            "v_number": round(v_number, 4),
             "fiber_diameter_um": fiber_diameter_um,
             "fiber_na": fiber_na,
             "field": field,
-            "wavelength_nm": round(float(system.SystemData.Wavelengths.GetWavelength(wavelength).Wavelength) * 1000, 1),
+            "wavelength_nm": round(lam_um * 1000, 1),
         }
         if config is not None:
             result["config"] = config
@@ -469,7 +505,8 @@ def zemax_fiber_coupling(session, fiber_diameter_um, fiber_na, field=1, waveleng
 zemax_fiber_coupling = serialized_operation(zemax_fiber_coupling)
 
 
-def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavelength=1, config=None):
+def zemax_scan_pupil_check(scan_surface, pupil_surface, field=1, wavelength=1, config=None,
+                           telecentric_tolerance_deg=0.5):
     """Verify scan mirror images to entrance pupil (telecentric relay check).
 
     Args:
@@ -478,6 +515,8 @@ def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavele
         field: 1-based field number (default 1, on-axis).
         wavelength: 1-based wavelength number (default 1).
         config: Optional 1-based configuration number.
+        telecentric_tolerance_deg: Acceptance limit on the chief ray angle at the pupil
+            (default 0.5 deg, per the double-telecentric interface contract).
 
     Returns:
         {"status": "success", "magnification": <lateral mag>, "pupil_offset_mm": <axial position error>,
@@ -485,6 +524,7 @@ def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavele
     """
     from core.analysis_runner import configuration
 
+    session = ZOSSession.get_instance()
     system = session.system
     with configuration(system, config):
         # Get paraxial data at scan and pupil surfaces
@@ -492,9 +532,10 @@ def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavele
         scan_height = _operand(session, "REAY", scan_surface, 0, 0, field, wavelength, 0, 0, 0)
         pupil_height = _operand(session, "REAY", pupil_surface, 0, 0, field, wavelength, 0, 0, 0)
 
-        # Chief ray angle at pupil (should be ~0 for telecentric)
-        chief_angle_rad = _operand(session, "REAA", pupil_surface, 0, 0, field, wavelength, 0, 0, 0)
-        chief_angle_deg = chief_angle_rad * 180 / 3.14159265
+        # Chief ray angle at pupil (should be ~0 for telecentric).
+        # REAA returns the angle in DEGREES directly (see the operand knowledge base);
+        # applying a rad->deg factor here would inflate it by ~57x.
+        chief_angle_deg = _operand(session, "REAA", pupil_surface, 0, 0, field, wavelength, 0, 0, 0)
 
         # Marginal ray heights for magnification
         scan_marginal = _operand(session, "REAY", scan_surface, 1, 0, field, wavelength, 0, 0, 0)
@@ -512,14 +553,14 @@ def zemax_scan_pupil_check(session, scan_surface, pupil_surface, field=1, wavele
             if stop_surf < pupil_surface:
                 pupil_offset_mm = -pupil_offset_mm
 
-        # Telecentric criterion: chief ray angle < 1 degree
-        is_telecentric = abs(chief_angle_deg) < 1.0
+        is_telecentric = abs(chief_angle_deg) <= telecentric_tolerance_deg
 
         result = {
             "status": "success",
             "magnification": round(magnification, 4),
             "pupil_offset_mm": round(pupil_offset_mm, 4),
             "chief_ray_angle_deg": round(chief_angle_deg, 4),
+            "telecentric_tolerance_deg": telecentric_tolerance_deg,
             "is_telecentric": is_telecentric,
             "scan_surface": scan_surface,
             "pupil_surface": pupil_surface,

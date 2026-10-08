@@ -187,10 +187,15 @@ def zemax_load_file(filepath: str) -> Dict[str, Any]:
         session.model_project = project
         prop_path = os.path.join(get_project_dir(project), "design_proposal.json")
         if not os.path.exists(prop_path):
+            # Loading a file does NOT authorize simulation: resuming someone else's model
+            # must not silently open the confirmation gate that Step 4 guards. Record the
+            # proposal as unconfirmed (the project is discoverable but still gated); the
+            # user confirms it through zemax_confirm_design_proposal after review.
             _atomic_json(prop_path, {
                 "project_name": project,
-                "user_confirmed_to_simulate": True,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "source": f"Loaded from file: {abs_path}",
+                "user_confirmed_to_simulate": False,
             })
     except Exception as error:
         # Loading can succeed while project metadata initialization fails. Keep
@@ -567,6 +572,72 @@ def zemax_register_design_proposal(
         "simulation_authorized": user_confirmed_to_simulate,
         "next_action": next_step,
         "formatted_proposal": proposal_doc,
+    }
+
+
+def zemax_confirm_design_proposal(project_name: Optional[str] = None,
+                                  user_confirmed_to_simulate: bool = True) -> Dict[str, Any]:
+    """Open or re-close the Step 4 confirmation gate on an already-registered proposal.
+
+    This is the ONLY supported way to release the gate. Call it after the user has been
+    shown the proposal and has explicitly approved (or, with
+    user_confirmed_to_simulate=False, to revoke a prior approval). Re-registering the
+    proposal is no longer required.
+
+    Args:
+        project_name: Project whose proposal is being confirmed (default: the active one).
+        user_confirmed_to_simulate: True to authorize simulation, False to revoke it.
+
+    Returns:
+        {"status": "success", "project_name": ..., "simulation_authorized": ...,
+         "proposal_report_file": ..., "next_action": ...}
+    """
+    from tools.project_manager import set_active_project
+
+    target = project_name.strip() if project_name else get_active_project_name()
+    if not target:
+        return {"status": "error", "message": "No active project; register a proposal first."}
+
+    p_dir = get_project_dir(target)
+    path = os.path.join(p_dir, "design_proposal.json")
+    if not (os.path.exists(path) and _within(path, p_dir)):
+        return {"status": "error",
+                "message": f"No design proposal is registered for '{target}'. "
+                           f"Call zemax_register_design_proposal first."}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            proposal = json.load(f)
+    except (OSError, ValueError) as error:
+        return {"status": "error", "message": f"Could not read the proposal: {error}"}
+
+    if proposal.get("project_name") not in (target, None):
+        return {"status": "error",
+                "message": f"Stored proposal belongs to '{proposal.get('project_name')}', not '{target}'."}
+
+    proposal["project_name"] = target
+    proposal["user_confirmed_to_simulate"] = bool(user_confirmed_to_simulate)
+    proposal["confirmed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _atomic_json(path, proposal)
+
+    # Confirmation opens the gate but does NOT bind the in-memory model to the project:
+    # that binding belongs to zemax_new_file / zemax_load_file, so that modeling can
+    # never silently edit another project's loaded model.
+    set_active_project(target)
+
+    if user_confirmed_to_simulate:
+        next_action = (
+            "【门禁放行】用户已确认授权仿真。现在可以调用 zemax_new_file、zemax_surface_operations、"
+            "zemax_setup_merit_function 及 zemax_run_optimization 开始实际建模与优化。"
+        )
+    else:
+        next_action = "【门禁已关闭】仿真授权已撤销；再次建模前需要重新获得用户确认。"
+
+    return {
+        "status": "success",
+        "project_name": target,
+        "simulation_authorized": bool(user_confirmed_to_simulate),
+        "proposal_report_file": proposal.get("proposal_report_file"),
+        "next_action": next_action,
     }
 
 
@@ -1049,6 +1120,7 @@ for _name in (
     "zemax_system_info", "zemax_set_project", "zemax_get_project", "zemax_save_file",
     "zemax_list_projects", "zemax_load_file", "zemax_get_system_data",
     "zemax_register_design_proposal", "zemax_audit_requirements", "get_current_design_proposal",
+    "zemax_confirm_design_proposal",
 ):
     globals()[_name] = serialized_operation(globals()[_name])
 

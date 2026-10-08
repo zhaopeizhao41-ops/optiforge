@@ -43,6 +43,7 @@ from tools import (
     zemax_mce_get as _mce_get,
     zemax_setup_tissue_stack as _setup_tissue_stack,
     zemax_get_envelope as _get_envelope,
+    zemax_run_huygens_psf as _run_huygens_psf,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
     zemax_quick_focus as _quick_focus,
@@ -541,6 +542,27 @@ def zemax_get_envelope(
     breaks. Default surfaces 1..image-1; coordinates global or in frame_surface's local frame.
     """
     res = _get_envelope(first_surface, last_surface, frame_surface, rim_points)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# MCP Tools - Confocal Evaluation (Phase 2)
+# ==============================================================================
+
+@app.tool()
+def zemax_run_huygens_psf(
+    field: int = 1,
+    wavelength: int = 1,
+    config: Optional[int] = None,
+) -> str:
+    """
+    Run Huygens PSF analysis and compute lateral FWHM and Strehl ratio.
+    Returns FWHM (μm), Strehl ratio, diffraction-limited Airy FWHM, wavelength, and NA.
+    field: 1-based field number (default 1, on-axis).
+    wavelength: 1-based wavelength number (default 1).
+    config: Optional 1-based configuration number for multi-config systems.
+    """
+    res = _run_huygens_psf(field, wavelength, config)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

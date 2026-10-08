@@ -226,3 +226,96 @@ def zemax_get_envelope(first_surface: Optional[int] = None, last_surface: Option
 
 zemax_setup_tissue_stack = model_operation(zemax_setup_tissue_stack)
 zemax_get_envelope = serialized_operation(zemax_get_envelope)
+
+
+def zemax_run_huygens_psf(session, field=1, wavelength=1, config=None):
+    """Run Huygens PSF analysis and compute lateral FWHM and Strehl ratio.
+
+    Args:
+        field: 1-based field number (default 1, on-axis).
+        wavelength: 1-based wavelength number (default 1).
+        config: Optional 1-based configuration number.
+
+    Returns:
+        {"status": "success", "fwhm_um": <lateral FWHM>, "strehl": <Strehl ratio>,
+         "airy_fwhm_um": <diffraction limit 0.51*lambda/NA>, "field": <field>,
+         "wavelength_nm": <wavelength>, "na": <numerical aperture>}
+    """
+    from core.analysis_runner import run_analysis, configuration
+
+    system = session.system
+    with configuration(system, config):
+        # Get wavelength
+        wave_um = system.SystemData.Wavelengths.GetWavelength(wavelength).Wavelength
+
+        # Get NA from system aperture (if ImageSpaceNA type)
+        sysa = system.SystemData.Aperture
+        img_space_na = 0.0
+        try:
+            if sysa.ApertureType.ToString() == "ImageSpaceNA":
+                img_space_na = float(sysa.ApertureValue)
+        except:
+            pass
+
+        # Compute Airy FWHM if NA available
+        airy_fwhm_um = 0.51 * wave_um / img_space_na if img_space_na > 0 else 0
+
+        hps = system.Analyses.New_HuygensPsf()
+        run_analysis(hps, timeout_s=120)
+        results = hps.GetResults()
+        dg = results.DataGrids[0]
+        vals = dg.Values
+        nx, ny = vals.GetLength(0), vals.GetLength(1)
+        dx_um, dy_um = dg.Dx, dg.Dy
+
+        # Find peak
+        peak_val = 0.0
+        peak_i, peak_j = nx // 2, ny // 2
+        for i in range(nx):
+            for j in range(ny):
+                v = vals[i, j]
+                if v > peak_val:
+                    peak_val, peak_i, peak_j = v, i, j
+
+        # FWHM: find half-max crossings along x and y
+        half = peak_val / 2.0
+        fwhm_x = fwhm_y = 0.0
+
+        # X direction (j varies)
+        left = right = peak_j
+        for j in range(peak_j, -1, -1):
+            if vals[peak_i, j] < half:
+                left = j
+                break
+        for j in range(peak_j, ny):
+            if vals[peak_i, j] < half:
+                right = j
+                break
+        fwhm_x = abs(right - left) * dx_um
+
+        # Y direction (i varies)
+        bottom = top = peak_i
+        for i in range(peak_i, -1, -1):
+            if vals[i, peak_j] < half:
+                bottom = i
+                break
+        for i in range(peak_i, nx):
+            if vals[i, peak_j] < half:
+                top = i
+                break
+        fwhm_y = abs(top - bottom) * dy_um
+
+        fwhm_um = (fwhm_x + fwhm_y) / 2.0
+        strehl = peak_val  # Peak is normalized Strehl
+
+        hps.Close()
+        result = {"status": "success", "fwhm_um": round(fwhm_um, 4), "strehl": round(strehl, 4),
+                  "airy_fwhm_um": round(airy_fwhm_um, 4), "field": field,
+                  "wavelength_nm": round(wave_um * 1000, 1), "na": round(img_space_na, 3)}
+        if config is not None:
+            result["config"] = config
+        return result
+
+
+zemax_run_huygens_psf = serialized_operation(zemax_run_huygens_psf)
+

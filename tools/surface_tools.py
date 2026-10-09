@@ -203,6 +203,9 @@ def zemax_set_solve(
 _PARAM_ALIASES = {
     "CoordinateBreak": {"decenter_x": 1, "decenter_y": 2, "tilt_x": 3, "tilt_y": 4, "tilt_z": 5, "order": 6},
     "EvenAspheric": {f"a{2 * k}": k for k in range(1, 9)},
+    # A grating only disperses when its Type is DiffractionGrating and Par1 (lines/um) is
+    # non-zero; a Standard surface with "grating" in the Comment is a plain flat.
+    "DiffractionGrating": {"lines_per_um": 1, "order": 2},
 }
 
 
@@ -227,7 +230,9 @@ def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> Dict
     """
     Write LDE parameter columns. Keys are par1..par12, or aliases for the current surface type:
     CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
-    EvenAspheric: a2, a4, ..., a16.
+    EvenAspheric: a2, a4, ..., a16;
+    DiffractionGrating: lines_per_um (Par1), order (Par2) -- set both, and the surface Material
+    to MIRROR for a reflection grating. Grating efficiency is not modelled by OpticStudio.
     """
     session = ZOSSession.get_instance()
     lde = session.system.LDE

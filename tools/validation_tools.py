@@ -21,7 +21,12 @@ def zemax_validate_design_rules() -> Dict[str, Any]:
     - Minimum glass edge thickness (mounting & beveling feasibility)
     - Minimum center & edge air clearance (element collision risk)
     - Element aspect ratio (rigidity check)
+    - Diameter:center-thickness ratio (thin-blank polishing cost)
+    - Karow centering factor |D1/R1 + D2/R2| (bell-chuck centering feasibility)
+    - Concentric radii margin (centering feasibility for same-sign radii)
+    - Hemispheric and near-flat surface forms (unmakeable / untestable shapes)
     - High-field / large NA Ray Aiming requirement
+    - Ray aiming when a CoordinateBreak sits at or before the stop
     """
     system_summary = zemax_get_system_data()
     if system_summary.get("status") == "error":

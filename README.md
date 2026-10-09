@@ -1,10 +1,12 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="Zemax OpticStudio MCP" width="100%">
+<img src="assets/banner.svg" alt="OptiForge" width="100%">
 
-**Let an AI agent drive Ansys Zemax OpticStudio: from a one-line spec to a diffraction-limited lens, a STEP model and manufacturing drawings.**
+<img src="assets/intro.gif" alt="OptiForge in 20 seconds: a spec is audited, a topology is reasoned, quality gates fire, deliverables are produced" width="100%">
 
-**让 AI 智能体直接驱动 Zemax OpticStudio：从一句需求，到衍射极限镜头、STEP 三维模型与加工图纸。**
+**OptiForge — an AI-native optical engineering platform over the Zemax ZOS-API: from a one-line spec to a diffraction-limited lens, a tolerance budget, a STEP model and manufacturing drawings.**
+
+**OptiForge · 光匠 —— 基于 Zemax ZOS-API 的 AI 原生光学工程平台：从一句需求，到衍射极限镜头、公差预算、STEP 三维模型与加工图纸。**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![OpticStudio](https://img.shields.io/badge/OpticStudio-ZOS--API-C8102E.svg)](https://www.ansys.com/products/optics/ansys-zemax-opticstudio)
@@ -24,7 +26,15 @@
 
 ### What is it?
 
-**Zemax OpticStudio MCP Server** exposes Ansys Zemax OpticStudio to AI agents (Claude, Gemini, Antigravity, or any other MCP client) through the **Model Context Protocol**. It is built on the **ZOS-API** via `pythonnet` and wraps rules from the *OpticStudio User Manual* for optical engineering and manufacturability.
+**OptiForge** is an AI-native optical engineering platform. It is not a thin MCP wrapper around OpticStudio: the optics is in the platform. OptiForge drives Ansys Zemax OpticStudio through the **ZOS-API** (via `pythonnet`) and layers on top of it everything the optical software itself will not tell you — a mandatory design SOP with a human approval gate, fabrication rules encoded as executable gates, an aberration and first-order reasoning layer, and a tolerance / CAD / optomechanical delivery path.
+
+That whole platform is then exposed over the **Model Context Protocol**, so any MCP-compliant agent — Claude, Gemini, Antigravity, Codex, or your own client — can drive a real design end to end.
+
+Three things make it a platform rather than a tool collection:
+
+1. **It refuses to guess.** A spec-completeness audit (`zemax_audit_requirements`) halts the agent and asks for the missing parameters, with industry defaults attached, before a single surface is created.
+2. **It encodes manufacturing reality.** Centering feasibility (Karow), edge thickness at the clear aperture, test-plate steepness, hemispheric and near-flat bans, internal air-gap limits — checked outside the software, because OpticStudio will cheerfully save a design that cannot be made.
+3. **It learns from failure.** Every "builds but doesn't work" incident becomes a registered gate in `core/quality_gates.py` plus an offline regression. Learn once, enforce forever.
 
 The agent can take a design through the whole loop:
 
@@ -333,6 +343,10 @@ Across the $0 \sim 500\,\text{lp/mm}$ spatial frequency range, on-axis and mid-f
 - Dependencies (`requirements.txt`): `pythonnet`, `fastmcp`, `matplotlib`, `numpy`, `pydantic`, `ezdxf`
 
 #### Installation
+
+The project is named **OptiForge**; the GitHub repository is still
+`zemax-opticstudio-mcp` (its original name), so the clone URL is unchanged.
+
 ```powershell
 git clone https://github.com/zhaopeizhao41-ops/zemax-opticstudio-mcp.git
 cd zemax-opticstudio-mcp
@@ -376,7 +390,15 @@ output/          Per-project workspaces (git-ignored)
 
 ### 这是什么？
 
-**Zemax OpticStudio MCP Server** 通过 **Model Context Protocol（MCP）** 把 Ansys Zemax OpticStudio 开放给 AI 智能体使用，支持 Claude、Gemini、Antigravity 以及其他 MCP 客户端。它基于 `pythonnet` 调用 **ZOS-API**，并内置了《OpticStudio 用户手册》中的光学工程设计规范和可制造性准则。
+**OptiForge（光匠）** 是一个 AI 原生的光学工程平台，而不是把 OpticStudio 包一层的 MCP 外壳——**光学本身就在平台里**。它通过 `pythonnet` 调用 **ZOS-API** 驱动 Ansys Zemax OpticStudio，并在其之上补上光学软件**自己不会告诉你**的那部分能力：强制设计 SOP 与人工审批门禁、把可制造性写成可执行门禁、一阶与像差推演层，以及公差 / CAD / 光机交付链路。
+
+整个平台再通过 **Model Context Protocol（MCP）** 暴露出去，因此任何符合 MCP 的智能体——Claude、Gemini、Antigravity、Codex 或你自己的客户端——都能端到端地驱动一次真实设计。
+
+三点决定了它是「平台」而非「工具集」：
+
+1. **拒绝瞎猜**：需求完备性审查（`zemax_audit_requirements`）会在建任何面之前叫停智能体，追问缺失参数并附上行业默认值。
+2. **内建制造现实**：定心可行性（Karow）、净口径处边缘厚度、样板检验陡度、禁半球/禁近平面、内部空气间隔上限——全部在软件之外检查，因为 OpticStudio 会欣然保存一个**根本做不出来**的设计。
+3. **从失败中进化**：每一次「文件能存但系统不工作」的事故都会变成 `core/quality_gates.py` 里的一条门禁加一个离线回归测试。学一次，永久强制。
 
 智能体可以独立完成整个设计闭环：
 
@@ -684,6 +706,9 @@ output/          Per-project workspaces (git-ignored)
 - 依赖包（见 `requirements.txt`）：`pythonnet`、`fastmcp`、`matplotlib`、`numpy`、`pydantic`、`ezdxf`
 
 #### 安装
+
+项目名为 **OptiForge**；GitHub 仓库名仍是 `zemax-opticstudio-mcp`（沿用原仓库名），因此克隆地址不变。
+
 ```powershell
 git clone https://github.com/zhaopeizhao41-ops/zemax-opticstudio-mcp.git
 cd zemax-opticstudio-mcp

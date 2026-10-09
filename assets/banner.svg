@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" width="960" height="240" role="img" aria-label="Zemax OpticStudio MCP">
-  <title>Zemax OpticStudio MCP: AI-native optical design over ZOS-API</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" width="960" height="240" role="img" aria-label="OptiForge">
+  <title>OptiForge: AI-native optical engineering platform over the Zemax ZOS-API</title>
   <defs>
     <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#081629"/>
@@ -58,8 +58,8 @@
 
   <!-- wordmark -->
   <g font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">
-    <text x="256" y="104" font-size="50" font-weight="700" fill="#FFFFFF">Zemax OpticStudio <tspan fill="#7FDBFF">MCP</tspan></text>
-    <text x="258" y="146" font-size="21" fill="#A9C7E8">AI-native optical design, optimization &amp; CAD export over ZOS-API</text>
+    <text x="256" y="104" font-size="50" font-weight="700" fill="#FFFFFF">Opti<tspan fill="#7FDBFF">Forge</tspan></text>
+    <text x="258" y="146" font-size="21" fill="#A9C7E8">AI-native optical engineering platform over the Zemax ZOS-API</text>
     <g font-size="15" font-weight="600" fill="#DDEBFA">
       <rect x="258" y="166" width="96" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
       <text x="306" y="186" text-anchor="middle">35 tools</text>

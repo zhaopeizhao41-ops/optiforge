@@ -462,3 +462,121 @@ flowchart LR
 4. **阶梯镜筒建模**：根据 `barrel_specification` 的阶梯内孔直径与深度列表，调用 SolidWorks MCP 的 `create_3d_lens_barrel`，实现一键光机模型自动装配！
 
 
+
+---
+
+## 11. 行业行为规范与注意事项（联网检索汇总）
+
+本节汇总 Edmund Optics、Avantier、Ansys Zemax 官方文档、Shafer 经典论文（JOSA 54:879, 1964）
+与 Proton Optics 设计流程等来源中的**行业行为规范**，并说明其在 MCP 中的落地位置。
+凡标 ⛔ 者为**红线**（违反即视为设计无效）；标 ⚠️ 者为**成本/工序风险**（不阻断，但必须记录）。
+
+### 11.1 反射式与折叠光路（Czerny-Turner 失败教训）
+
+⛔ **折叠镜绝不可用裸 CoordinateBreak 手搓。**
+CoordinateBreak 只旋转局部坐标轴，**不会反转光束传播方向**。真正实现折叠必须
+`CB(θ) → MIRROR → CB(-θ)`，并且**镜面之后所有面（含像面）的厚度取负、曲率半径变号**，
+直到遇到下一次反射为止。这正是 `RunTool_AddFoldMirror` 内部做的事；手搓 CB 倾角会得到一个
+"看起来折了、实际直穿" 的布局——.zmx 可以正常保存、可以正常打开，但像面永远不收敛。
+
+- MCP 落地：`core/quality_gates.py::check_fold_sign_consistency`（奇数次反射后出现正厚度即告警）；
+  SOP 2.7；工具 `zemax_add_fold_mirror` / `zemax_add_scan_mirror`。
+- 平面折叠镜**不需要 decenter**。decenter 只属于离轴使用的镜面，是公差成本项，必须显式论证。
+
+⛔ **光栅必须是 `DiffractionGrating` 面型 + Par1=线/µm + Par2=级次；反射式光栅 Material=MIRROR。**
+Comment 写 "grating" 的 Standard 面只是一个平面镜：**整个光谱仪变成单点成像**，文件完全合法，
+没有任何报错。Zemax **不建模光栅效率**，效率假设必须另行声明。
+
+- MCP 落地：`check_grating_surface`；参数别名 `{"lines_per_um": 1, "order": 2}`；SOP 2.7。
+
+⛔ **反射式/倾斜/偏心光阑系统必须开启 Real Ray Aiming。**
+当 CoordinateBreak 位于光阑之前时，近轴入瞳已经**不是**真实入瞳，各视场的光束全部错位而无任何提示。
+
+- MCP 落地：`check_*` 与 `OpticalRuleCheck.validate_system` 的 "Ray Aiming for Tilted/Decentered Stop" 规则。
+
+### 11.2 可制造性红线（Edmund Optics DFM / Karow 2004）
+
+| 项目 | 判据 | 级别 |
+|---|---|---|
+| 边缘厚度 | 在**净口径 +1 mm** 的直径处评估，ET ≥ 0.7 mm | ⛔ |
+| 中心比 | D:CT > 10:1 成本上升；> 15:1 显著劣化 | ⚠️ |
+| Karow 定心因子 | Z = \|D1/R1 + D2/R2\| > 0.56 才能自动钟罩定心 | ⚠️ |
+| 同轴度余量 | 同号半径时 \|R1−R2∓CT\| > 2 mm | ⚠️ |
+| 半球面 | \|R\| ≤ 0.7 × D（抛光模具无法均匀接触边缘） | ⚠️ |
+| 近平面 | 矢高 ≤ 100 µm（无法用样板检测半径） | ⚠️ |
+| 叶片/锐边 | ET ≤ 0 时两曲面自交，几何上不成立 | ⛔ |
+
+> 关键认知：**光学软件不会告诉你一个设计做不出来**（"Optical software does not warn that a design
+> is impossible to make"）。上述判据必须在软件之外显式检查。
+
+- MCP 落地：`check_manufacturability`（保存门禁告警）+ `OpticalRuleCheck` 的
+  Karow / D:CT / 同心度 / 半球 / 近平面规则 + `zemax_validate_design_rules` 审计输出。
+
+### 11.3 成本与公差工程
+
+- D:CT < 10:1 属常规；机械直径 ≈ 净口径 + 3 mm（或放 10%~20%）。
+- 玻璃相对成本（以 BK7 = 1 计）：SF11 ≈ 5，LaSFN30 ≈ 25 —— 选玻璃要计成本，不只是折射率。
+- 双凸单透镜最省事；**每个元件都要给公差**，再根据灵敏度分析只对敏感项收紧。
+- 抛光通常低配（面型偏松），等效**光焦度公差被折半**，不要重复计入。
+- 公差等级参考（Avantier）：直径 100/25/6 µm，中心厚 200/50/10 µm，半径 0.2%/0.1%，
+  同轴度 Class 1/2 = 0.1/0.05 mm。Ansys 默认中心厚公差 0.2 mm。
+
+### 11.4 公差分析与装配顺序
+
+- **公差叠加必须按装配顺序**：后装元件的倾斜/偏心叠加在前序误差之上，逐级累积。
+- **蒙特卡洛的中心厚度分布是偏斜的**（真实研磨如此）；对称公差假设会高估合格率。
+- 面型不规则度模型：50/50 或 100% 像散、或 Zernike；**Standard / Noll 与 Fringe 编号
+  不通用**，报数据时必须声明用的是哪一套。
+- 必须设置补偿器（后焦、像面倾斜）并给出足够的蒙特卡洛采样次数。
+
+### 11.5 评价标准与像质判据
+
+- 以 **MTF / RMS 波前误差 / Strehl** 判定，而不是"几何点列斑 vs 艾里斑"。
+- 瑞利判据 λ/4 P-V；马雷夏尔判据 λ/14 RMS → Strehl ≈ 0.82；衍射受限 Strehl ≥ 0.8（λ/13.4）。
+- 艾里斑半径 = 1.22·λ·F/#。
+- 康拉迪二级光谱经验式 D²/10000λ。
+
+### 11.6 评价函数边界操作数（强制）
+
+⛔ 任何优化结果在采信之前，必须已布置边界操作数：
+
+- 厚度：`MNCT` / `MXCT` / `MNET`
+- 玻璃：`MNCG` / `MXCG` / `MNEG`
+- 系统总长：`FTGT` / `FTLT`
+
+（Sasian, *Getting Started with ZEMAX* §4.9.5）
+
+### 11.7 光栅光谱仪（Czerny-Turner）专用公式
+
+- 光路顺序：狭缝 → 准直镜 → 光栅 → 聚焦镜 → 探测器。
+- 光栅方程：`d(sin i + sin θ) = mλ`。
+- 固定偏向角配置：`2d·cos(Φ/2)·sin θ = mλ`。
+- **Shafer 消彗差条件**（Shafer, Megill & Droppleman, JOSA 54:879, 1964）：
+
+  ```
+  sin I4 / sin I2 = (r4/r2)² · (cos³I4 / cos³I2) · (cos³i / cos³θ)
+  ```
+
+  在中心波长处消彗差；代价是像散增大，因此它是优化起点而非终点。
+- 像散用 Coddington 方程：
+  子午 `n′cos²I′/l′t = n·cos²I/lt + (n′cosI′ − n·cosI)/r`；
+  弧矢 `n′/l′s = n/ls + (n′cosI′ − n·cosI)/r`。
+- 探测器长度匹配：`f_focus = L·d·cosθ / (λ2 − λ1)`（L 为 CCD 总像素长度，d 为栅距）。
+  先由探测器与光谱范围定焦长，而不是先定镜子再凑探测器。
+- 球面镜球差上限：`WS(max) = ymax⁴/(8r³) ≤ λ/4`。
+- 狭缝置于准直镜焦点（R/2）。
+- 倒线色散 `dλ/dx = d·cosβ/(m·f)`；带通 = 狭缝宽度 × 倒线色散；
+  分辨率 = 狭缝 ⊗ 像素 ⊗ 线扩散函数的 FWHM 卷积。
+- 探测器倾斜可作为变量；LGL 用 Littrow 构型，另有 Fastie 平场条件。
+
+- MCP 落地：`domain/zemax_rules.py` 的纯函数
+  `grating_diffraction_angle_deg` / `reciprocal_linear_dispersion_nm_per_mm` /
+  `spectral_bandpass_nm` / `detector_focal_length_mm` / `mirror_spherical_wavefront_waves` /
+  `shafer_coma_free_angle_deg`。
+
+### 11.8 设计流程（Proton Optics 十一阶段）
+
+需求 → 初始结构 → 近轴 → 三级像差(Seidel) → 带约束优化 → 公差（灵敏度/蒙特卡洛/补偿器）
+→ 杂散光 → 机械与热 → 镀膜 → 样机 → 量产。
+
+> 流程顺序本身就是规范：**跳过公差分析的"完成"设计，不算完成。**

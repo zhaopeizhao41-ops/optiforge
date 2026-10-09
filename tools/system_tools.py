@@ -328,6 +328,9 @@ def zemax_get_system_data() -> Dict[str, Any]:
         surfaces.append({
             "index": i,
             "comment": str(surf.Comment),
+            # Surface type drives the fold/grating/critical-angle rules; keep the bare enum
+            # name (e.g. "CoordinateBreak", "DiffractionGrating") rather than the .NET path.
+            "type": str(surf.Type).split(".")[-1],
             "is_stop": bool(surf.IsStop),
             "radius": float(surf.Radius),
             "thickness": float(surf.Thickness),

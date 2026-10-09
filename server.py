@@ -1,7 +1,17 @@
 """
-Zemax OpticStudio MCP Server
-Exposes Zemax OpticStudio automation tools, optical design manual rules,
-and system inspection resources to Antigravity and other MCP-compliant AI agents.
+OptiForge - AI-native optical engineering platform over the Zemax ZOS-API.
+
+OptiForge is more than an MCP transport: it is a design system that carries the
+optics itself. On top of the ZOS-API it layers
+
+  * a mandatory 5-stage closed-loop design SOP with a user approval gate,
+  * executable quality gates that turn every observed failure into a rule,
+  * fabrication rules the optical software will not tell you (centering, edge
+    thickness, test-plate steepness, gratings and folds),
+  * tolerance, CAD and optomechanical deliverables.
+
+This module exposes that platform as MCP tools, resources and prompts, so any
+MCP-compliant agent (Claude, Gemini, Antigravity, Codex, ...) can drive it.
 """
 
 import json
@@ -122,6 +132,48 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
    - Stage 3: Switch to RMS Wavefront (Centroid) as spot approaches 1.5x Airy disk; substitute catalog glasses.
    - Stage 4: Hammer optimization with doubled boundary weights + RAID desensitization.
 
+2.7. [REFLECTIVE / FOLD / GRATING DISCIPLINE - NON-NEGOTIABLE]
+   - FOLD MIRRORS: NEVER hand-build a fold from a bare CoordinateBreak tilt. A CB tilt only
+     rotates the local axis; it does not reverse the beam. Use `zemax_add_fold_mirror` (or
+     `zemax_add_scan_mirror` for a scanning mirror), which writes CB(theta) -> MIRROR ->
+     CB(-theta) and NEGATES the thickness of every surface after the mirror. If you must edit
+     a fold by hand, remember that a reflection reverses propagation: thicknesses (and radii)
+     after the mirror are negative until the next reflection.
+   - A plane fold mirror needs NO decenter. Decenter belongs only on a mirror used off-axis,
+     and is a tolerance driver, so justify it explicitly.
+   - GRATINGS: a surface disperses only when its Type is `DiffractionGrating`, with Par1 =
+     lines/um and Par2 = order, and Material = MIRROR for a reflective grating. A Standard
+     surface with "grating" in its Comment is a flat mirror: the .zmx saves fine and the
+     detector shows one spot instead of a spectrum. OpticStudio does not model grating
+     efficiency at all; state efficiency assumptions separately.
+   - REFLECTIVE STOPS AND TILTED SYSTEMS: enable Ray Aiming (Real). With a CB at or before
+     the stop the paraxial entrance pupil is simply the wrong pupil, and every field gets the
+     wrong ray bundle without any error message.
+   - Czerny-Turner: slit -> collimator -> grating -> focusing mirror -> detector. Check the
+     Shafer coma-free condition on the two spherical mirrors before optimizing astigmatism
+     away, and size the focusing focal length from the detector length, the groove spacing and
+     the required spectral span - not the other way round.
+
+2.8. [ACCEPTANCE CRITERIA & TOLERANCING DISCIPLINE]
+   - JUDGE BY PHYSICS, NOT BY PICTURES: compare MTF / RMS wavefront error / Strehl against
+     Rayleigh (lambda/4 P-V) and Marechal (lambda/14 RMS -> Strehl ~0.82; diffraction-limited
+     Strehl >= 0.8). A geometric spot size compared against the Airy disk radius is a
+     starting-point metric, never the acceptance criterion.
+   - BOUNDARY OPERANDS ARE MANDATORY before trusting any optimization result: MNCT/MXCT and
+     MNET for thickness, MNCG/MXCG and MNEG for glass, FTGT/FTLT for total track. An optimizer
+     run without them produces a design that cannot be built.
+   - TOLERANCE EVERY ELEMENT, then tighten only what the sensitivity analysis says is
+     critical. Do not assign uniform tight tolerances: that is how a producible design becomes
+     an expensive one. Reference classes (Avantier): diameter 100/25/6 um, center thickness
+     200/50/10 um, radius 0.2%/0.1%, concentricity 0.1/0.05 mm for Class 1/2.
+   - MONTE CARLO with compensators (back focus, image plane tilt) and enough trials for
+     statistics. Center-thickness distributions from real grinding are skewed, not Gaussian:
+     a symmetric tolerance assumption flatters the yield.
+   - TOLERANCE STACK-UP FOLLOWS ASSEMBLY ORDER: tilt and decenter of a later element build on
+     the errors of the earlier ones. Analyse the stack in the sequence the barrel is built.
+   - SURFACE IRREGULARITY: state the model (50/50 or 100% astigmatism vs Zernike). Standard
+     vs Fringe Zernike numbering is a classic silent error; say which one the numbers use.
+
 3. [STEP 3: FORMULATE & REGISTER DESIGN PROPOSAL]
    - Call `zemax_register_design_proposal` to record and structure your optical design proposal.
    - Present the formatted proposal to the user for formal review.
@@ -135,7 +187,7 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
 """
 
 app = MCPServer(
-    name="zemax-opticstudio",
+    name="optiforge",
     instructions=MANDATORY_WORKFLOW_INSTRUCTIONS,
 )
 
@@ -470,7 +522,10 @@ def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> str:
     """
     Write LDE parameter columns. Keys: par1..par12, or aliases for the surface type:
     CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
-    EvenAspheric: a2, a4, ..., a16. Example: {"tilt_x": 45, "order": 0}.
+    EvenAspheric: a2, a4, ..., a16;
+    DiffractionGrating: lines_per_um (Par1), order (Par2) -- both are required for the grating
+      to disperse anything, and Material must be MIRROR for a reflection grating.
+    Example: {"tilt_x": 45, "order": 0}.
     """
     return json.dumps(_set_surface_params(surface_index, params), ensure_ascii=False, indent=2)
 
@@ -1023,7 +1078,12 @@ def zemax_validate_design_rules() -> str:
     - Minimum glass edge thickness (mounting & beveling feasibility)
     - Minimum center & edge air clearance (element collision risk)
     - Element aspect ratio (rigidity check)
+    - Diameter:center-thickness ratio (thin-blank polishing cost)
+    - Karow centering factor |D1/R1 + D2/R2| (automated bell-chuck centering feasibility)
+    - Concentric radii margin (centering feasibility for same-sign radii)
+    - Hemispheric and near-flat surface forms (unmakeable / untestable shapes)
     - High-field / large NA Ray Aiming requirement
+    - Ray aiming when a CoordinateBreak sits at or before the stop
     """
     res = _validate_design_rules()
     return json.dumps(res, ensure_ascii=False, indent=2)

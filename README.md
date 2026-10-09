@@ -344,13 +344,20 @@ Across the $0 \sim 500\,\text{lp/mm}$ spatial frequency range, on-axis and mid-f
 
 #### Installation
 
-The project is named **OptiForge**; the GitHub repository is still
-`zemax-opticstudio-mcp` (its original name), so the clone URL is unchanged.
+The project is named **OptiForge**; the GitHub repository was renamed to match,
+from `zemax-opticstudio-mcp`.
 
 ```powershell
-git clone https://github.com/zhaopeizhao41-ops/zemax-opticstudio-mcp.git
-cd zemax-opticstudio-mcp
+git clone https://github.com/zhaopeizhao41-ops/optiforge.git
+cd optiforge
 pip install -r requirements.txt
+```
+
+An existing clone of the old URL keeps working — use it normally, or point it at
+the new one:
+
+```powershell
+git remote set-url origin https://github.com/zhaopeizhao41-ops/optiforge.git
 ```
 
 #### MCP Client Configuration
@@ -707,12 +714,18 @@ output/          Per-project workspaces (git-ignored)
 
 #### 安装
 
-项目名为 **OptiForge**；GitHub 仓库名仍是 `zemax-opticstudio-mcp`（沿用原仓库名），因此克隆地址不变。
+项目名为 **OptiForge**；GitHub 仓库已同步改名（原名 `zemax-opticstudio-mcp`）。
 
 ```powershell
-git clone https://github.com/zhaopeizhao41-ops/zemax-opticstudio-mcp.git
-cd zemax-opticstudio-mcp
+git clone https://github.com/zhaopeizhao41-ops/optiforge.git
+cd optiforge
 pip install -r requirements.txt
+```
+
+按旧地址克隆的本地仓库照常可用；要指向新地址：
+
+```powershell
+git remote set-url origin https://github.com/zhaopeizhao41-ops/optiforge.git
 ```
 
 #### 客户端配置

@@ -128,10 +128,10 @@ def run_tests():
 
     print("\n=== 12. Testing zemax_save_file (Outputting .zmx file) ===")
     save_res = zemax_save_file()
-    print("Save file result:", save_res["status"], "| Saved to:", save_res.get("saved_to"), "| Format:", save_res.get("format"))
+    print("Save file result:", save_res["status"], "| Saved to:", save_res.get("file_path"), "| Format:", save_res.get("format"))
     assert save_res["status"] == "success"
-    assert os.path.exists(save_res["saved_to"])
-    assert save_res["saved_to"].endswith(".zmx")
+    assert os.path.exists(save_res["file_path"])
+    assert save_res["file_path"].endswith(".zmx")
 
     print("\n=== 13. Testing zemax_register_design_proposal (SOP 4-Stage Protocol Gate) ===")
     proposal_res = zemax_register_design_proposal(

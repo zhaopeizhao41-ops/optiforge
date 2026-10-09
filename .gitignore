@@ -20,25 +20,43 @@ output/
 *.json
 
 # Specific project design/optimization scripts (kept local only)
-optimize_*.py
-analyze_*.py
-full_audit.py
-generate_*.py
-eval_*.py
-design_*.py
-assemble_*.py
-verify_*.py
-sweep_*.py
-build_*.py
-explore_*.py
-finalize_*.py
-find_*.py
-fine_tune_*.py
-implement_*.py
-plot_*.py
-redesign_*.py
-run_*.py
-test_*.py
+#
+# These are anchored to the repository root on purpose. Unanchored, `build_*.py`
+# matched tools/build_*.py and `test_*.py` matched tests/test_*.py -- new source
+# files under core/, tools/, domain/ or tests/ would vanish from git with no
+# warning at all. Only throwaway scripts at the top level are meant to be local.
+/optimize_*.py
+/analyze_*.py
+/full_audit.py
+/generate_*.py
+/eval_*.py
+/design_*.py
+/assemble_*.py
+/verify_*.py
+/sweep_*.py
+/build_*.py
+/explore_*.py
+/finalize_*.py
+/find_*.py
+/fine_tune_*.py
+/implement_*.py
+/plot_*.py
+/redesign_*.py
+/run_*.py
+
+# One-off root scripts already untracked; named explicitly so they cannot be
+# re-added by a `git add -A` that does not match a pattern above.
+/complete_project_with_mcp.py
+/complete_project_with_mcp_fixed.py
+/complete_spectrometer_project.py
+/create_proper_spectrometer.py
+/export_fixed_spectrometer.py
+/final_quality_check.py
+/final_verification.py
+/load_and_export.py
+/rebuild_spectrometer.py
+/test_spectrometer.py
+/test_three_element_eyepiece.py
 
 # System & IDE
 .vscode/

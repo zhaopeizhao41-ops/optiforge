@@ -65,3 +65,9 @@ output/
 .DS_Store
 Thumbs.db
 scratch/
+
+# Agent scratch state. This is per-machine, per-session working memory -- it was
+# committed by accident once (e28584e) and is now untracked; the rule keeps a
+# later `git add -A` from putting it back. Note this is the copy that lives
+# inside the repo, not the agent's real memory directory outside it.
+.claude/

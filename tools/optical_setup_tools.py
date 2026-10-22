@@ -8,11 +8,8 @@ from core.zos_session import ZOSSession
 from core.operation_guard import model_operation
 
 
-def zemax_set_aperture(aperture_type: str, aperture_value: float) -> Dict[str, Any]:
-    """
-    Set system aperture type and value.
-    Supported types: 'EPD' (EntrancePupilDiameter), 'ImageSpaceFNum', 'ObjectSpaceNA', 'FloatByStopSize'.
-    """
+def _apply_aperture(aperture_type: str, aperture_value: float) -> Dict[str, Any]:
+    """Unwrapped aperture writer; also called from zemax_apply_prescription."""
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
@@ -46,15 +43,11 @@ def zemax_set_aperture(aperture_type: str, aperture_value: float) -> Dict[str, A
     }
 
 
-def zemax_set_fields(
+def _apply_fields(
     field_type: str,
     fields: List[Dict[str, float]],
 ) -> Dict[str, Any]:
-    """
-    Configure optical fields.
-    field_type: 'Angle' (degrees), 'ObjectHeight' (mm), 'ParaxialImageHeight' (mm), 'RealImageHeight' (mm).
-    fields: List of dicts, e.g. [{"x": 0.0, "y": 0.0, "weight": 1.0}, {"x": 0.0, "y": 14.0, "weight": 1.0}]
-    """
+    """Unwrapped field writer; also called from zemax_apply_prescription."""
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
@@ -103,15 +96,11 @@ def zemax_set_fields(
     }
 
 
-def zemax_set_wavelengths(
+def _apply_wavelengths(
     wavelengths: List[Dict[str, float]],
     primary_index: int = 1,
 ) -> Dict[str, Any]:
-    """
-    Configure wavelengths.
-    wavelengths: List of dicts, e.g. [{"wavelength_um": 0.58756, "weight": 1.0}, {"wavelength_um": 0.48613, "weight": 1.0}]
-    primary_index: 1-based index of primary wavelength.
-    """
+    """Unwrapped wavelength writer; also called from zemax_apply_prescription."""
     session = ZOSSession.get_instance()
     sys = session.system
     sd_waves = sys.SystemData.Wavelengths
@@ -142,12 +131,8 @@ def zemax_set_wavelengths(
     }
 
 
-def zemax_set_ray_aiming(method: str = "Off") -> Dict[str, Any]:
-    """
-    Set Ray Aiming method.
-    Options: 'Off', 'Paraxial', 'Real'.
-    Required by Zemax manual when field angle > 20 degrees or optical speed / pupil aberrations are large.
-    """
+def _apply_ray_aiming(method: str = "Off") -> Dict[str, Any]:
+    """Unwrapped ray-aiming writer; also called from zemax_apply_prescription."""
     session = ZOSSession.get_instance()
     sys = session.system
     zos = session.ZOSAPI
@@ -167,6 +152,44 @@ def zemax_set_ray_aiming(method: str = "Off") -> Dict[str, Any]:
         "status": "success",
         "ray_aiming": str(sys.SystemData.RayAiming.RayAiming),
     }
+
+
+def zemax_set_aperture(aperture_type: str, aperture_value: float) -> Dict[str, Any]:
+    """
+    Set system aperture type and value.
+    Supported types: 'EPD' (EntrancePupilDiameter), 'ImageSpaceFNum', 'ObjectSpaceNA', 'FloatByStopSize'.
+    """
+    return _apply_aperture(aperture_type, aperture_value)
+
+
+def zemax_set_fields(field_type: str, fields: List[Dict[str, float]]) -> Dict[str, Any]:
+    """
+    Configure optical fields.
+    field_type: 'Angle' (degrees), 'ObjectHeight' (mm), 'ParaxialImageHeight' (mm), 'RealImageHeight' (mm).
+    fields: List of dicts, e.g. [{"x": 0.0, "y": 0.0, "weight": 1.0}, {"x": 0.0, "y": 14.0, "weight": 1.0}]
+    """
+    return _apply_fields(field_type, fields)
+
+
+def zemax_set_wavelengths(
+    wavelengths: List[Dict[str, float]],
+    primary_index: int = 1,
+) -> Dict[str, Any]:
+    """
+    Configure wavelengths.
+    wavelengths: List of dicts, e.g. [{"wavelength_um": 0.58756, "weight": 1.0}, {"wavelength_um": 0.48613, "weight": 1.0}]
+    primary_index: 1-based index of primary wavelength.
+    """
+    return _apply_wavelengths(wavelengths, primary_index)
+
+
+def zemax_set_ray_aiming(method: str = "Off") -> Dict[str, Any]:
+    """
+    Set Ray Aiming method.
+    Options: 'Off', 'Paraxial', 'Real'.
+    Required by Zemax manual when field angle > 20 degrees or optical speed / pupil aberrations are large.
+    """
+    return _apply_ray_aiming(method)
 
 
 for _name in ("zemax_set_aperture", "zemax_set_fields", "zemax_set_wavelengths", "zemax_set_ray_aiming"):

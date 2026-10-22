@@ -56,6 +56,14 @@
   - Stage 3: Spot 接近 $1.5\times$ 艾里斑时切换 RMS Wavefront，代换优选玻璃；
   - Stage 4: 边界权重加倍，Hammer 深度寻优与公差钝化。
 
+- **批量建模与批量评价（回合数经济性红线）**：
+  - **建面型表必须用 `zemax_apply_prescription` 一次写入**（Complete Surface Table in ONE Call）：把 Object→Image 全部面元（半径/厚度/材料/通光孔径/圆锥常数/Comment/面型/params）、视场、波长、光阑、孔径与光线瞄准在一次调用内写成闭环。**严禁**退回 `zemax_surface_operations` 逐面循环（每面 4 次回合）；后者仅用于对既有模型的单点微调。
+  - **提案门禁仍然生效**：`zemax_apply_prescription` 属建模工具，未解禁前调用返回 `PROPOSAL_NOT_CONFIRMED`。
+  - **门禁前置校验**：该工具在写入任何数据之前先用与 `zemax_validate_design_rules` 同一套规则（`OpticalRuleCheck`）整体预检，凡有 CRITICAL 级问题即**整体拒绝**并原样返回问题清单——什么都没写入，因此没有回滚、没有 recovery 文件；按清单修正后重新调用即可。WARNING 级可用 `allow_warnings=True` 放行。
+  - **像质评价必须用 `zemax_run_analysis_suite` 一套跑完**：Round 内一次性给出 wavefront / spot / mtf / ray_fan / field_curvature 的 PASS-WARN-FAIL 判定表；仅当某一行 FAIL 且需要看细节时，才下钻到单点分析工具。
+  - **判据纪律**：波前 RMS、Strehl、MTF 为**门禁行**；点列斑半径与艾里斑对比一律为 **INFO 行（诊断用，不作为验收依据）**，不得把 INFO 行读成 FAIL。MTF 行仅在传入 `mtf_min_at_30lp_mm` 时参与判定。
+  - `zemax_run_spot_diagram` 的逐波长分解（`include_wavelength_detail`）**默认关闭**：它按波长数成倍追加完整 `Apply()` 周期，仅在需要定位“哪个波长拖累某视场”时才显式开启。
+
 ---
 
 ### Step 3: 输出《光学设计提案报告》并审阅 (Proposal Review)
@@ -73,7 +81,7 @@
 ### Step 4: 用户决策门禁 (User Confirmation Gate)
 - **强制暂停**：呈报方案后，**必须停下来明确向用户询问**：
   > *"以上设计方案已根据文献检索与深度光学推演完成。请审阅该方案，是否同意以此方案启动 Zemax 仿真与自动优化？"*
-- **严禁擅自调用**：在用户明确输入“同意”、“确认”、“开始仿真”或类似确认指令之前，**严禁私自调用** `zemax_new_file`, `zemax_load_template`, `zemax_surface_operations`, `zemax_setup_merit_function`, `zemax_run_optimization`, `zemax_run_hammer`。
+- **严禁擅自调用**：在用户明确输入“同意”、“确认”、“开始仿真”或类似确认指令之前，**严禁私自调用** `zemax_new_file`, `zemax_load_template`, `zemax_surface_operations`, `zemax_apply_prescription`, `zemax_run_analysis_suite`, `zemax_setup_merit_function`, `zemax_run_optimization`, `zemax_run_hammer`。
 - **用户确认后的放行动作（必需）**：Step 3 登记提案时门禁默认关闭（`user_confirmed_to_simulate=False`）。收到用户明确确认后，**必须调用** `zemax_confirm_design_proposal(user_confirmed_to_simulate=True)` 解除门禁，然后才能开始建模；**无需**重新登记提案。若跳过这一步，所有建模工具都会返回 `PROPOSAL_NOT_CONFIRMED`，流程会卡死在这一步。
 - 若用户提出修改意见，返回 Step 2 调整方案，并重新调用 `zemax_register_design_proposal` 登记（登记会重新关闭门禁）。
 - 注意：`zemax_load_file` 载入既有模型**不会**自动授权仿真；载入后仍需按上述流程确认。

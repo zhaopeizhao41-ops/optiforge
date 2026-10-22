@@ -32,6 +32,7 @@ from tools.surface_tools import (
     zemax_set_surface_params,
     zemax_add_fold_mirror,
     zemax_add_scan_mirror,
+    zemax_apply_prescription,
 )
 from tools.config_tools import (
     zemax_mce_setup,
@@ -69,6 +70,7 @@ from tools.analysis_tools import (
     zemax_run_ray_fan,
     zemax_run_wavefront_map,
     zemax_run_field_curvature_distortion,
+    zemax_run_analysis_suite,
     zemax_export_spot_diagram_plot,
 )
 from tools.validation_tools import (
@@ -107,6 +109,7 @@ __all__ = [
     "zemax_set_surface_params",
     "zemax_add_fold_mirror",
     "zemax_add_scan_mirror",
+    "zemax_apply_prescription",
     "zemax_mce_setup",
     "zemax_mce_set_operand",
     "zemax_mce_get",
@@ -132,6 +135,7 @@ __all__ = [
     "zemax_run_ray_fan",
     "zemax_run_wavefront_map",
     "zemax_run_field_curvature_distortion",
+    "zemax_run_analysis_suite",
     "zemax_export_spot_diagram_plot",
     "zemax_validate_design_rules",
     "zemax_lookup_manual",

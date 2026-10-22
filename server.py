@@ -49,6 +49,7 @@ from tools import (
     zemax_set_surface_params as _set_surface_params,
     zemax_add_fold_mirror as _add_fold_mirror,
     zemax_add_scan_mirror as _add_scan_mirror,
+    zemax_apply_prescription as _apply_prescription,
     zemax_mce_setup as _mce_setup,
     zemax_mce_set_operand as _mce_set_operand,
     zemax_mce_get as _mce_get,
@@ -74,6 +75,7 @@ from tools import (
     zemax_run_ray_fan as _run_ray_fan,
     zemax_run_wavefront_map as _run_wavefront_map,
     zemax_run_field_curvature_distortion as _run_field_curvature_distortion,
+    zemax_run_analysis_suite as _run_analysis_suite,
     zemax_export_spot_diagram_plot as _export_spot_diagram_plot,
     zemax_validate_design_rules as _validate_design_rules,
     zemax_lookup_manual as _lookup_manual,
@@ -557,6 +559,57 @@ def zemax_add_scan_mirror(
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
+@app.tool()
+def zemax_apply_prescription(
+    surfaces: List[Dict[str, Any]],
+    fields: Optional[List[Dict[str, Any]]] = None,
+    field_type: Optional[str] = None,
+    wavelengths: Optional[List[Dict[str, Any]]] = None,
+    primary_wavelength_index: int = 1,
+    aperture_type: Optional[str] = None,
+    aperture_value: Optional[float] = None,
+    ray_aiming: Optional[str] = None,
+    stop_surface: Optional[int] = None,
+    allow_warnings: bool = False,
+) -> str:
+    """
+    PREFERRED WAY TO BUILD A MODEL: write the entire prescription in ONE call -- the whole
+    surface table (Object to Image) plus fields, wavelengths, aperture, ray aiming and the
+    stop -- under a single snapshot and a single gate check. Use this instead of looping
+    zemax_surface_operations once per surface; that loop costs ~4 round trips per surface.
+
+    The whole prescription is checked against the shared design rules BEFORE anything is
+    written (glass center/edge thickness, internal air gap, barrel aspect ratio, surface
+    steepness, near-flat sag, ray aiming). Any CRITICAL finding refuses the entire
+    prescription and writes nothing, so an infeasible design never lands in the model.
+
+    surfaces, in order, Object first and Image last. Each entry:
+      radius (number, or 'flat'/'inf' for a plane; omit/null keeps the LDE's current value),
+      thickness (mm; required for every surface except the Object; 0.0 for a dummy plane),
+      material (glass name from the CDGM/Schott preferred list; omit, null or 'AIR' is air),
+      semi_diameter (mm), conic (float), comment (str),
+      type ('Standard', 'EvenAspheric', 'CoordinateBreak', 'DiffractionGrating', ...),
+      params (par1..par12, or the type's aliases -- see zemax_set_surface_params), is_stop (bool).
+    fields: [{"x": .., "y": .., "weight": ..}] with field_type 'Angle', 'ObjectHeight',
+      'ParaxialImageHeight' or 'RealImageHeight'. Omit both to leave fields untouched.
+    wavelengths: [{"wavelength_um": .., "weight": ..}]; primary_wavelength_index is 1-based.
+    aperture_type / aperture_value: 'EPD', 'ImageSpaceFNum', 'ObjectSpaceNA', 'FloatByStopSize'.
+    ray_aiming: 'Off', 'Paraxial' or 'Real'. 'Real' is required when a CoordinateBreak sits at or
+      before the stop, or when the field angle exceeds 20 degrees.
+    stop_surface: 0-based index of the aperture stop, applied after the surfaces are written.
+    allow_warnings: write despite WARNING-level findings. CRITICAL findings always refuse.
+
+    Returns the written surface table and the residual WARNING list. If it returns
+    status=rejected, fix the listed findings and call again -- nothing was written, so there is
+    no recovery file and no cleanup to do.
+    """
+    res = _apply_prescription(
+        surfaces, fields, field_type, wavelengths, primary_wavelength_index,
+        aperture_type, aperture_value, ray_aiming, stop_surface, allow_warnings,
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
 # ==============================================================================
 # MCP Tools - Multi-Configuration & Confocal
 # ==============================================================================
@@ -984,14 +1037,25 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> str:
 # ==============================================================================
 
 @app.tool()
-def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[int] = None) -> str:
+def zemax_run_spot_diagram(
+    field_index: Optional[int] = None,
+    include_wavelength_detail: bool = False,
+    config: Optional[int] = None,
+) -> str:
     """
     Run Standard Spot Diagram analysis across fields and wavelengths.
     Returns RMS spot radius, GEO maximum radius, Airy disk radius, and diffraction limit diagnosis.
     field_index: Optional 1-based field index (if omitted, reports all fields).
+    include_wavelength_detail: also break the spot down per wavelength. Costs one extra full
+      Apply() cycle per wavelength, so it is off by default; the polychromatic result answers the
+      usual question. Turn it on only to find which wavelength is dragging a field down.
     config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
-    res = _run_spot_diagram(field_index=field_index, config=config)
+    res = _run_spot_diagram(
+        field_index=field_index,
+        include_wavelength_detail=include_wavelength_detail,
+        config=config,
+    )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
@@ -1044,6 +1108,49 @@ def zemax_run_field_curvature_distortion(config: Optional[int] = None) -> str:
     config: Optional 1-based multi-configuration index to evaluate (restored afterwards).
     """
     res = _run_field_curvature_distortion(config=config)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_run_analysis_suite(
+    analyses: Optional[List[str]] = None,
+    max_frequency: float = 100.0,
+    sample_size: str = "256x256",
+    max_wavefront_fields: int = 5,
+    mtf_min_at_30lp_mm: Optional[float] = None,
+    distortion_max_pct: Optional[float] = None,
+    config: Optional[int] = None,
+) -> str:
+    """
+    PREFERRED WAY TO JUDGE IMAGE QUALITY: run the whole analysis battery in ONE call and get back a
+    compact PASS/WARN/FAIL verdict table, instead of five raw analysis dumps you then have to
+    interpret. Use this after every optimization round. Drop to the individual analysis tools only
+    when a row FAILs and you need the numbers behind it.
+
+    analyses: any of 'wavefront', 'spot', 'mtf', 'ray_fan', 'field_curvature'. Default: the first
+      three, run in the order given.
+    max_frequency / sample_size: passed through to the FFT MTF run.
+    max_wavefront_fields: run the wavefront map on at most this many fields (the first N); the
+      verdict is taken from the worst field. Bounds the suite's cost on a many-field system.
+    mtf_min_at_30lp_mm: optional tangential/sagittal MTF floor at 30 lp/mm. Omit it and the MTF row
+      is reported as INFO (raw numbers, no verdict) -- pass it when the spec sets an MTF target.
+    distortion_max_pct: optional |distortion| limit; the field-curvature row FAILs above it.
+    config: Optional 1-based multi-configuration index for the whole suite (restored afterwards).
+
+    Rows are judged on the project acceptance criteria -- Marechal lambda/14 RMS wavefront,
+    Strehl >= 0.8, Rayleigh lambda/4 P-V as reference -- NOT on the Airy disk. Spot radius versus
+    Airy radius is reported as INFO: geometric spot size is not an acceptance criterion here, so
+    do not read an INFO spot row as a failure.
+    """
+    res = _run_analysis_suite(
+        analyses=analyses,
+        max_frequency=max_frequency,
+        sample_size=sample_size,
+        max_wavefront_fields=max_wavefront_fields,
+        mtf_min_at_30lp_mm=mtf_min_at_30lp_mm,
+        distortion_max_pct=distortion_max_pct,
+        config=config,
+    )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

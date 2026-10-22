@@ -58,10 +58,32 @@ def _primary_wavelength_um(sys) -> float:
     return 0.55
 
 
-def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[int] = None) -> Dict[str, Any]:
+def _tone(verdict: str) -> str:
+    """Consistent uppercase tone so the model can pattern-match the row at a glance."""
+    return {"pass": "PASS", "warn": "WARN", "fail": "FAIL", "info": "INFO", "error": "ERROR"}[verdict]
+
+
+def _worst_verdict(verdicts: List[str]) -> str:
+    """Most severe verdict present. INFO is the lowest rung, not above PASS: a suite whose only
+    gated rows passed is a PASS, and the informational rows must not downgrade it."""
+    for level in ("fail", "error", "warn", "pass"):
+        if level in verdicts:
+            return level
+    return "info"
+
+
+def zemax_run_spot_diagram(
+    field_index: Optional[int] = None,
+    include_wavelength_detail: bool = False,
+    config: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Run Standard Spot Diagram analysis across fields and wavelengths.
     Returns RMS spot radius, GEO maximum radius, Airy disk radius, and diffraction limit diagnosis.
+    include_wavelength_detail: also break the spot down per wavelength. This costs one extra
+      full Apply() cycle PER WAVELENGTH on top of the all-wavelength pass, so it is off by
+      default; the polychromatic result already covers the usual pass/fail question. Turn it on
+      only when you need to see which wavelength is dragging a field down.
     config: Optional 1-based MCE configuration to evaluate (restored afterwards).
     """
     session = ZOSSession.get_instance()
@@ -117,18 +139,21 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[i
         # In an all-wavelength analysis some API versions return aggregate data
         # even for a nonzero waveN. Recompute each selected wavelength, copying
         # native values before the next Apply invalidates the previous results.
-        for w_idx in range(1, num_waves + 1):
-            settings.Wavelength.SetWavelengthNumber(w_idx)
-            mono_data = run_analysis(spot).SpotData
-            if not mono_data:
-                return {"status": "error", "message": f"Failed to acquire SpotData for wavelength {w_idx}."}
-            for field in field_results:
-                f_idx = field["field_index"]
-                field["wavelengths"].append({
-                    "wave_index": w_idx,
-                    "rms_spot_um": round(float(mono_data.GetRMSSpotSizeFor(f_idx, 1)), 4),
-                    "geo_spot_um": round(float(mono_data.GetGeoSpotSizeFor(f_idx, 1)), 4),
-                })
+        # Opt-in: this is num_waves extra full Apply() cycles, the single most
+        # expensive thing this tool can do.
+        if include_wavelength_detail:
+            for w_idx in range(1, num_waves + 1):
+                settings.Wavelength.SetWavelengthNumber(w_idx)
+                mono_data = run_analysis(spot).SpotData
+                if not mono_data:
+                    return {"status": "error", "message": f"Failed to acquire SpotData for wavelength {w_idx}."}
+                for field in field_results:
+                    f_idx = field["field_index"]
+                    field["wavelengths"].append({
+                        "wave_index": w_idx,
+                        "rms_spot_um": round(float(mono_data.GetRMSSpotSizeFor(f_idx, 1)), 4),
+                        "geo_spot_um": round(float(mono_data.GetGeoSpotSizeFor(f_idx, 1)), 4),
+                    })
     finally:
         spot.Close()
 
@@ -138,6 +163,7 @@ def zemax_run_spot_diagram(field_index: Optional[int] = None, config: Optional[i
         "working_f_number": round(wfno, 4) if wfno > 0 else "N/A",
         "primary_wavelength_um": primary_wave_um,
         "airy_disk_radius_um": round(airy_disk_radius_um, 4),
+        "wavelength_detail_included": include_wavelength_detail,
         "fields": field_results,
     }
 
@@ -383,6 +409,231 @@ def zemax_run_field_curvature_distortion(config: Optional[int] = None) -> Dict[s
     }
 
 
+def zemax_run_analysis_suite(
+    analyses: Optional[List[str]] = None,
+    max_frequency: float = 100.0,
+    sample_size: str = "256x256",
+    max_wavefront_fields: int = 5,
+    mtf_min_at_30lp_mm: Optional[float] = None,
+    distortion_max_pct: Optional[float] = None,
+    config: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Run the whole image-quality battery in ONE call and return a compact PASS/WARN/FAIL verdict
+    table instead of five raw analysis dumps. Use this after every optimization round; drop to the
+    individual analyses only when a row FAILs and you need the detail behind it.
+
+    analyses: any of 'wavefront', 'spot', 'mtf', 'ray_fan', 'field_curvature'. Default: the first
+      three. Order given is the order run.
+    max_frequency / sample_size: passed to the FFT MTF run.
+    max_wavefront_fields: run the wavefront map on at most this many fields (the first N), since the
+      verdict is judged on the worst field. Keeps the suite bounded on a many-field system.
+    mtf_min_at_30lp_mm: if given, the MTF row is judged against this tangential/sagittal floor at
+      30 lp/mm; omit it and the MTF row is reported as INFO (raw numbers, no verdict).
+    distortion_max_pct: if given, the field-curvature row FAILs above this |distortion|.
+    config: Optional 1-based MCE configuration for the whole suite (restored afterwards).
+
+    Verdicts are judged against the acceptance criteria in the project manual, not against the
+    Airy disk: Rayleigh lambda/4 P-V (reference), Marechal lambda/14 RMS wavefront, Strehl >= 0.8
+    for diffraction limited. Spot radius vs Airy radius is reported as INFO only -- geometric spot
+    size is not an acceptance criterion.
+    """
+    session = ZOSSession.get_instance()
+    sys = session.system
+
+    aliases = {
+        "wavefront": "wavefront", "wavefront_map": "wavefront", "opd": "wavefront",
+        "spot": "spot", "spot_diagram": "spot",
+        "mtf": "mtf", "fft_mtf": "mtf",
+        "ray_fan": "ray_fan", "rayfan": "ray_fan",
+        "field_curvature": "field_curvature", "field_curvature_distortion": "field_curvature",
+        "distortion": "field_curvature",
+    }
+    if analyses is None:
+        requested = ["wavefront", "spot", "mtf"]
+    elif not isinstance(analyses, list) or not analyses:
+        return {"status": "error", "code": "BAD_ANALYSES",
+                "message": "analyses must be a non-empty list of analysis names."}
+    else:
+        requested = []
+        for name in analyses:
+            key = aliases.get(str(name).strip().lower().replace(" ", "_"))
+            if key is None:
+                return {"status": "error", "code": "BAD_ANALYSES",
+                        "message": f"Unknown analysis '{name}'. Choose from: wavefront, spot, mtf, "
+                                   f"ray_fan, field_curvature."}
+            if key not in requested:
+                requested.append(key)
+
+    num_fields = int(sys.SystemData.Fields.NumberOfFields)
+    num_waves = int(sys.SystemData.Wavelengths.NumberOfWavelengths)
+    wave_um = _primary_wavelength_um(sys)
+    rule_checker = OpticalRuleCheck()
+
+    # Working F/# drives the diffraction-limit reference. Read it defensively: a system that
+    # cannot report WFNO (no merit function yet, or an unsolvable pupil) still gets a suite run,
+    # just without the PSF reference.
+    try:
+        wfno = float(sys.MFE.GetOperandValue(
+            session.ZOSAPI.Editors.MFE.MeritOperandType.WFNO, 0, 0, 0, 0, 0, 0, 0, 0))
+    except Exception:
+        wfno = 0.0
+
+    rows: List[Dict[str, Any]] = []
+    # Key numbers the caller actually needs to see, kept out of the raw dumps.
+    headline: Dict[str, Any] = {}
+    verdicts: List[str] = []
+    gated: List[str] = []
+
+    def add_row(analysis: str, verdict: str, criteria: str, evidence: str, detail: Any = None) -> None:
+        row = {"analysis": analysis, "verdict": _tone(verdict), "criteria": criteria, "evidence": evidence}
+        if detail is not None:
+            row["detail"] = detail
+        rows.append(row)
+        verdicts.append(verdict)
+        if verdict != "info":
+            gated.append(verdict)
+
+    # ---- Wavefront (the primary acceptance criterion) -------------------------
+    if "wavefront" in requested:
+        n = max(1, min(int(max_wavefront_fields), num_fields))
+        worst = None
+        per_field = []
+        for f_idx in range(1, n + 1):
+            res = _run_wavefront_map(field_index=f_idx)
+            if res.get("status") != "success":
+                add_row("wavefront", "error", "Marechal lambda/14 RMS, Strehl >= 0.8",
+                        str(res.get("message", "wavefront map failed")))
+                worst = None
+                break
+            entry = {
+                "field_index": f_idx,
+                "pv_waves": res["peak_to_valley_pv_waves"],
+                "rms_waves": res["rms_wavefront_error_waves"],
+                "strehl": res["strehl_ratio_estimate"],
+            }
+            per_field.append(entry)
+            if worst is None or entry["rms_waves"] > worst["rms_waves"]:
+                worst = entry
+        if worst is not None:
+            rms = worst["rms_waves"]
+            strehl = worst["strehl"]
+            if rms <= 0.072 and strehl >= 0.8:
+                verdict = "pass"
+            elif rms <= 0.072 or strehl >= 0.8:
+                verdict = "warn"
+            else:
+                verdict = "fail"
+            headline.update({
+                "worst_wavefront_field": worst["field_index"],
+                "rms_wavefront_waves": rms,
+                "strehl_ratio": strehl,
+                "pv_waves": worst["pv_waves"],
+            })
+            add_row("wavefront", verdict,
+                    "RMS <= lambda/14 (0.0714), Strehl >= 0.8",
+                    f"worst field {worst['field_index']}: RMS {rms:.4f} waves, Strehl {strehl:.3f}, PV {worst['pv_waves']:.4f} waves",
+                    per_field if n > 1 else None)
+
+    # ---- Spot (diagnostic; geometric spot is not an acceptance criterion) -----
+    if "spot" in requested:
+        res = _run_spot_diagram()
+        if res.get("status") != "success":
+            add_row("spot", "error", "informational (spot vs Airy)", str(res.get("message", "spot failed")))
+        else:
+            airy = res["airy_disk_radius_um"]
+            fields = res["fields"]
+            worst = max(fields, key=lambda f: f["polychromatic_rms_spot_um"]) if fields else None
+            inside = sum(1 for f in fields if f["is_diffraction_limited"])
+            headline.update({
+                "airy_radius_um": airy,
+                "worst_rms_spot_um": worst["polychromatic_rms_spot_um"] if worst else None,
+                "worst_spot_field": worst["field_index"] if worst else None,
+                "fields_inside_airy": f"{inside}/{len(fields)}",
+            })
+            add_row("spot", "info", "informational: RMS spot vs Airy radius (not an acceptance gate)",
+                    f"Airy {airy:.3f} um; worst RMS spot {worst['polychromatic_rms_spot_um']:.3f} um at field "
+                    f"{worst['field_index']}; {inside}/{len(fields)} fields inside Airy"
+                    if worst else f"Airy {airy:.3f} um",
+                    None)
+
+    # ---- FFT MTF (judged only if the caller supplies a floor) ----------------
+    if "mtf" in requested:
+        res = _run_fft_mtf(max_frequency=max_frequency, sample_size=sample_size)
+        if res.get("status") != "success":
+            add_row("mtf", "error", f"tangential/sagittal >= {mtf_min_at_30lp_mm}" if mtf_min_at_30lp_mm else "informational",
+                    str(res.get("message", "MTF failed")))
+        else:
+            at_30 = []
+            for series in res["results"]:
+                for point in series["key_frequencies"]:
+                    if abs(point["frequency_lp_mm"] - 30.0) <= 5.0:
+                        at_30.append(min(point["tangential_mtf"], point["sagittal_mtf"]))
+            worst_mtf = min(at_30) if at_30 else None
+            headline["min_mtf_at_30lp_mm"] = round(worst_mtf, 4) if worst_mtf is not None else None
+            if mtf_min_at_30lp_mm is None or worst_mtf is None:
+                add_row("mtf", "info", "informational: MTF at 30 lp/mm (pass mtf_min_at_30lp_mm to gate it)",
+                        f"min T/S MTF near 30 lp/mm: {worst_mtf:.4f}" if worst_mtf is not None else "no 30 lp/mm sample in range")
+            else:
+                verdict = "pass" if worst_mtf >= float(mtf_min_at_30lp_mm) else "fail"
+                add_row("mtf", verdict, f"min T/S MTF at 30 lp/mm >= {mtf_min_at_30lp_mm}",
+                        f"min {worst_mtf:.4f} across {res['series_count']} series")
+
+    # ---- Ray fan (diagnostic) ------------------------------------------------
+    if "ray_fan" in requested:
+        res = _run_ray_fan()
+        if res.get("status") != "success":
+            add_row("ray_fan", "error", "informational (transverse aberration)", str(res.get("message", "ray fan failed")))
+        else:
+            worst = max((c["max_transverse_error_um"] for c in res["curves_summary"]), default=0.0)
+            headline["max_transverse_error_um"] = round(worst, 4)
+            add_row("ray_fan", "info", "informational: transverse ray aberration (diagnostic only)",
+                    f"max transverse error {worst:.4f} um over {res['total_curves']} curves")
+
+    # ---- Field curvature / distortion ---------------------------------------
+    if "field_curvature" in requested:
+        res = _run_field_curvature_distortion()
+        if res.get("status") != "success":
+            add_row("field_curvature", "error", "distortion", str(res.get("message", "field curvature failed")))
+        else:
+            curves = [s for s in res["series"] if "max_tangential_field_curvature_mm" in s]
+            dist = [s.get("max_distortion_pct") for s in res["series"] if s.get("max_distortion_pct") is not None]
+            worst_curv = max((s["max_tangential_field_curvature_mm"] for s in curves), default=None)
+            worst_dist = max(dist) if dist else None
+            headline["max_field_curvature_mm"] = worst_curv
+            headline["max_distortion_pct"] = worst_dist
+            curvature_txt = f"max |tangential| {worst_curv:.4f} mm" if worst_curv is not None else "no curvature data"
+            dist_txt = f"max |distortion| {worst_dist:.4f}%" if worst_dist is not None else "no distortion data"
+            if distortion_max_pct is None or worst_dist is None:
+                add_row("field_curvature", "info",
+                        "informational: field curvature / distortion (pass distortion_max_pct to gate distortion)",
+                        f"{curvature_txt}; {dist_txt}")
+            else:
+                verdict = "pass" if worst_dist <= float(distortion_max_pct) else "fail"
+                add_row("field_curvature", verdict, f"|distortion| <= {distortion_max_pct}%",
+                        f"{dist_txt}; {curvature_txt}")
+
+    overall = _worst_verdict(verdicts) if verdicts else "info"
+    return {
+        "status": "success",
+        "analysis": "Analysis Suite",
+        "overall": _tone(overall),
+        "config": config,
+        "fields_in_model": num_fields,
+        "wavelengths_in_model": num_waves,
+        "primary_wavelength_um": wave_um,
+        "working_f_number": round(wfno, 4) if wfno > 0 else "N/A",
+        "diffraction_limit_psf_um": round(rule_checker.calculate_airy_disk_radius_um(wave_um, wfno), 4),
+        "headline": headline,
+        "verdicts": rows,
+        "criteria_note": (
+            "PASS/FAIL rows use the project acceptance criteria (RMS wavefront lambda/14, Strehl >= 0.8). "
+            "INFO rows carry numbers with no verdict. Geometric spot radius vs the Airy radius is NOT "
+            "an acceptance criterion in this project -- judge the design on wavefront/MTF/Strehl."
+        ),
+    }
+
+
 def _wavelength_color(wl_um: float) -> str:
     """Approximate visible color of a wavelength (for spot diagram ray markers)."""
     nm = wl_um * 1000.0
@@ -561,9 +812,19 @@ def zemax_export_spot_diagram_plot(
     }
 
 
+# Unwrapped implementations, captured before the decorators go on. zemax_run_analysis_suite
+# drives the whole battery under ONE configuration switch and ONE lock acquisition, so it must
+# call these bodies rather than the public tools (which would re-enter with_configuration and
+# re-open the analysis -- the exact per-call overhead the suite exists to remove).
+_run_spot_diagram = zemax_run_spot_diagram
+_run_fft_mtf = zemax_run_fft_mtf
+_run_ray_fan = zemax_run_ray_fan
+_run_wavefront_map = zemax_run_wavefront_map
+_run_field_curvature_distortion = zemax_run_field_curvature_distortion
+
 for _name in (
     "zemax_run_spot_diagram", "zemax_run_fft_mtf", "zemax_run_ray_fan",
     "zemax_run_wavefront_map", "zemax_run_field_curvature_distortion",
-    "zemax_export_spot_diagram_plot",
+    "zemax_export_spot_diagram_plot", "zemax_run_analysis_suite",
 ):
     globals()[_name] = serialized_operation(with_configuration(globals()[_name]))

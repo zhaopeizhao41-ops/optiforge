@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![OpticStudio](https://img.shields.io/badge/OpticStudio-ZOS--API-C8102E.svg)](https://www.ansys.com/products/optics/ansys-zemax-opticstudio)
 [![MCP](https://img.shields.io/badge/MCP-FastMCP-6E56CF.svg)](https://modelcontextprotocol.io/)
-[![Tools](https://img.shields.io/badge/tools-35-0A7EA4.svg)](#tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-37-0A7EA4.svg)](#tool-catalog)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows&logoColor=white)](#quickstart)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -314,9 +314,9 @@ Across the $0 \sim 500\,\text{lp/mm}$ spatial frequency range, on-axis and mid-f
 | **System & ORS** | `zemax_audit_requirements`, `zemax_system_info`, `zemax_register_design_proposal`, `zemax_new_file`, `zemax_load_file`, `zemax_save_file`, `zemax_get_system_data`, `zemax_load_template` |
 | **Project Workspace** | `zemax_set_project`, `zemax_get_project`, `zemax_list_projects` |
 | **Optical Setup** | `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming` |
-| **Surfaces & Solves** | `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve` |
+| **Surfaces & Solves** | `zemax_apply_prescription` (whole surface table in one call, with pre-flight rule validation), `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve` |
 | **Optimization** | `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer` |
-| **Analysis** | `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot` (Batch Ray Trace spot PNG with Airy circle) |
+| **Analysis** | `zemax_run_analysis_suite` (whole battery in one call, PASS/WARN/FAIL verdict table), `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot` (Batch Ray Trace spot PNG with Airy circle) |
 | **Validation & Knowledge** | `zemax_validate_design_rules`, `zemax_lookup_manual` |
 | **Optomechanics & CAD** | `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad` |
 
@@ -573,7 +573,7 @@ output/          Per-project workspaces (git-ignored)
 ### 核心特性
 
 1. **AI 闭环光学自主设计**
-   - 提供 **35 个工具**、**7 项资源**和 `optical_design_workflow` 设计提示词。工具涵盖光学、项目管理与 CAD；资源包括当前系统、规则、操作数目录、SOP、当前方案和专家手册。
+   - 提供 **37 个工具**、**7 项资源**和 `optical_design_workflow` 设计提示词。工具涵盖光学、项目管理与 CAD；资源包括当前系统、规则、操作数目录、SOP、当前方案和专家手册。
    - 智能体用自然语言即可完成全流程：需求审查、载入初始结构、配置视场与波长、设置曲率和厚度变量、构建评价函数、多阶段 DLS 优化，以及生成全套像差图表。
    - 内置三个初始结构模板：`singlet_bk7`、`achromat_doublet`、`cooke_triplet`。
 
@@ -687,7 +687,7 @@ output/          Per-project workspaces (git-ignored)
 | **光学参数配置** | `zemax_set_aperture`, `zemax_set_fields`, `zemax_set_wavelengths`, `zemax_set_ray_aiming` |
 | **表面与求解器** | `zemax_surface_operations`, `zemax_insert_surface`, `zemax_delete_surface`, `zemax_set_solve` |
 | **优化与评价函数** | `zemax_setup_merit_function`, `zemax_add_operand`, `zemax_quick_focus`, `zemax_run_optimization`, `zemax_run_hammer` |
-| **光学性能分析** | `zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot`（光线追迹点列图 PNG，含艾里斑圆） |
+| **光学性能分析** | `zemax_run_analysis_suite`（一次跑完全套评价，输出 PASS/WARN/FAIL 判定表）、`zemax_run_spot_diagram`, `zemax_run_fft_mtf`, `zemax_run_ray_fan`, `zemax_run_wavefront_map`, `zemax_run_field_curvature_distortion`, `zemax_export_spot_diagram_plot`（光线追迹点列图 PNG，含艾里斑圆） |
 | **规则审计与知识库** | `zemax_validate_design_rules`, `zemax_lookup_manual` |
 | **光机工程与 CAD** | `zemax_export_cad`, `zemax_export_optical_drawing`, `zemax_export_prescription_for_cad` |
 

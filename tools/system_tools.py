@@ -599,14 +599,27 @@ def zemax_register_design_proposal(
             "zemax_setup_merit_function 及 zemax_run_optimization 开始实际建模与优化。"
         )
 
+    # The proposal body is NOT echoed back: the caller just wrote it, and the same text is
+    # already on disk at proposal_report_file (canonical) and in design_proposal.json.
+    # Returning it re-injected ~9.5 KB into every subsequent turn of the conversation.
     return {
         "status": "success",
         "project_name": project_name,
         "project_directory": p_dir,
         "proposal_report_file": proposal_report_path,
+        "proposal_sections": [
+            "设计需求指标拆解表", "初始结构来源与拓扑结构", "理论光焦度分配与像差平衡策略",
+            "玻璃材料清单及选型依据", "紧凑度与光机装配边界预算", "评价函数控制与分阶段优化路径",
+            "公差敏感度与工艺风险预警",
+        ],
+        "proposal_char_count": len(proposal_doc),
+        "proposal_note": (
+            "The full proposal Markdown was written to proposal_report_file; read that file if "
+            "you need the text again. Present the design to the user from your own plan, not by "
+            "re-reading this payload."
+        ),
         "simulation_authorized": user_confirmed_to_simulate,
         "next_action": next_step,
-        "formatted_proposal": proposal_doc,
     }
 
 

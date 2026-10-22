@@ -8,7 +8,14 @@ from typing import Any, Dict, List, Optional
 from core.zos_session import ZOSSession
 from core.editor_cells import read_cell, write_cell
 from core.operation_guard import model_operation
+from domain.zemax_rules import OpticalRuleCheck
 from tools.config_tools import resize_configs, write_mce_row
+from tools.optical_setup_tools import (
+    _apply_aperture,
+    _apply_fields,
+    _apply_ray_aiming,
+    _apply_wavelengths,
+)
 
 
 def zemax_surface_operations(
@@ -226,14 +233,8 @@ def zemax_set_surface_type(surface_index: int, surface_type: str) -> Dict[str, A
     return {"status": "success", "surface_index": surface_index, "type": str(surf.Type)}
 
 
-def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Write LDE parameter columns. Keys are par1..par12, or aliases for the current surface type:
-    CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
-    EvenAspheric: a2, a4, ..., a16;
-    DiffractionGrating: lines_per_um (Par1), order (Par2) -- set both, and the surface Material
-    to MIRROR for a reflection grating. Grating efficiency is not modelled by OpticStudio.
-    """
+def _write_surface_params(surface_index: int, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwrapped parameter-column writer; also called from zemax_apply_prescription."""
     session = ZOSSession.get_instance()
     lde = session.system.LDE
     if surface_index < 0 or surface_index >= lde.NumberOfSurfaces:
@@ -252,6 +253,17 @@ def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> Dict
                                                   f"use par1..par12 or {sorted(aliases) or 'no aliases'}."}
         written[name] = write_cell(surf.GetSurfaceCell(column), value, f"surface {surface_index} {key}")
     return {"status": "success", "surface_index": surface_index, "type": kind, "written": written}
+
+
+def zemax_set_surface_params(surface_index: int, params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Write LDE parameter columns. Keys are par1..par12, or aliases for the current surface type:
+    CoordinateBreak: decenter_x, decenter_y, tilt_x, tilt_y, tilt_z (deg), order (0/1);
+    EvenAspheric: a2, a4, ..., a16;
+    DiffractionGrating: lines_per_um (Par1), order (Par2) -- set both, and the surface Material
+    to MIRROR for a reflection grating. Grating efficiency is not modelled by OpticStudio.
+    """
+    return _write_surface_params(surface_index, params)
 
 
 def _fold_target_error(lde, surface_index: int) -> Optional[str]:
@@ -349,7 +361,354 @@ def zemax_add_scan_mirror(
             "mce_rows": rows, "scan_angles_deg": [list(p) for p in pairs], **result}
 
 
+def _prescription_rule_check(surfaces: List[Dict[str, Any]], general: Dict[str, Any],
+                             fields: Optional[List[Dict[str, Any]]],
+                             wavelengths: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Run the shared OpticalRuleCheck over a prescription that has not been written yet.
+
+    Builds the same system summary shape zemax_get_system_data returns, so the batch path
+    and the post-hoc validation report can never disagree about a threshold.
+    """
+    summary_surfaces = [
+        {
+            "index": i,
+            "comment": str(s.get("comment") or ""),
+            "type": s["_type"],
+            "is_stop": bool(s.get("is_stop")),
+            "radius": s["_r"],
+            "thickness": s["_t"],
+            "material": s["_m"],
+            "semi_diameter": s["_sd"],
+            "conic": float(s.get("conic") or 0.0),
+        }
+        for i, s in enumerate(surfaces)
+    ]
+    return OpticalRuleCheck().validate_system({
+        "surfaces": summary_surfaces,
+        "general": general,
+        "fields": fields or [],
+        "wavelengths": wavelengths or [],
+    })
+
+
+def _preflight_prescription(surfaces: List[Dict[str, Any]], general: Dict[str, Any],
+                            fields: Optional[List[Dict[str, Any]]],
+                            wavelengths: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Refuse a whole prescription before a single cell is written.
+
+    A design-rule violation caught here costs nothing: nothing has been touched, so there is
+    no snapshot to roll back. Caught afterwards it costs a rollback, a recovery file, and
+    another assistant turn to retype the prescription.
+    """
+    for i, s in enumerate(surfaces):
+        if s["_r"] is None:
+            continue  # inherits the radius already in the LDE
+        if isinstance(s["_r"], str) and s["_r"].strip().lower() in ("flat", "inf", "infinite", "plane"):
+            s["_r"] = 0.0  # optical flat; the LDE radius column takes 0.0, written as such below
+        if s["_r"] is not None and not math.isfinite(s["_r"]):
+            s["_r"] = 0.0
+
+    audit = _prescription_rule_check(surfaces, general, fields, wavelengths)
+    findings = audit["findings"]
+    critical = [f for f in findings if f["level"] == "CRITICAL"]
+    warnings = [f for f in findings if f["level"] == "WARNING"]
+
+    # AGENTS.md red lines, applied as numeric rejects rather than prose. OpticalRuleCheck
+    # already flags each of these; the batch path refuses rather than reports because the
+    # prescription is not yet in the model.
+    for i, s in enumerate(surfaces):
+        if s["_m"] and s["_t"] is not None and s["_t"] < 1.0:
+            critical.append({
+                "level": "CRITICAL", "rule": "Glass Center Thickness", "surface": i,
+                "message": f"Surface {i} ({s['_m']}) center thickness {s['_t']:.3f} mm < 1.0 mm "
+                           f"(AGENTS.md DFM red line).",
+            })
+        # Internal element-to-element air gap. Exempted by Comment keyword the same way
+        # OpticalRuleCheck does it, for deliberate relay / intermediate-image spaces.
+        if not s["_m"] and s["_t"] is not None:
+            comment = str(s.get("comment") or "").upper()
+            is_relay = any(k in comment for k in ("RELAY", "INTERMEDIATE", "CONJUGATE", "4F",
+                                                  "TUBE TO OBJ", "SCAN TO TUBE"))
+            if s["_t"] > 12.0 and not is_relay and not _is_external_air(surfaces, i):
+                critical.append({
+                    "level": "CRITICAL", "rule": "Excessive Internal Air Space", "surface": i,
+                    "message": f"Surface {i} internal air gap {s['_t']:.2f} mm > 12.0 mm "
+                               f"(AGENTS.md optimizer-escape red line). Long gaps decenter badly.",
+                })
+
+    payload: Dict[str, Any] = {
+        "audit_status": audit["status"],
+        "critical_count": len(critical),
+        "warning_count": len(warnings),
+        "critical": critical,
+        "warnings": warnings,
+        "total_findings": len(findings),
+    }
+    if critical:
+        payload["status"] = "rejected"
+        payload["code"] = "PRESCRIPTION_RULE_VIOLATION"
+        payload["message"] = (
+            f"{len(critical)} critical design-rule violation(s); nothing was written. Fix the "
+            f"flagged surfaces and resubmit, or pass allow_warnings=True to override the "
+            f"warning-level findings only (critical findings cannot be overridden)."
+        )
+    return payload
+
+
+def _is_external_air(surfaces: List[Dict[str, Any]], index: int) -> bool:
+    """Air before the first glass or after the last glass is outside the lens stack."""
+    glass = [i for i, s in enumerate(surfaces) if s["_m"]]
+    if not glass:
+        return True
+    return index < glass[0] or index >= glass[-1]
+
+
+def _coerce_radius(radius: Any, index: int) -> float:
+    """Accept a number, or the words a designer actually writes for a flat."""
+    if isinstance(radius, str):
+        text = radius.strip().lower()
+        if text in ("flat", "inf", "infinite", "plane", "plano"):
+            return 0.0
+        try:
+            return float(text)
+        except ValueError:
+            raise ValueError(f"surfaces[{index}].radius '{radius}' is not a number or 'flat'.")
+    return float(radius)
+
+
+def _resolve_surface_type(session, surface_type: str):
+    """Map a ZOSAPI SurfaceType name to its enum member (only real enum members)."""
+    types = session.ZOSAPI.Editors.LDE.SurfaceType
+    wanted = str(surface_type).replace(" ", "").lower()
+    match = next((n for n in dir(types)
+                  if n.lower() == wanted and isinstance(getattr(types, n), types)), None)
+    if match is None:
+        raise ValueError(f"Surface type '{surface_type}' not found in ZOSAPI SurfaceType.")
+    return getattr(types, match)
+
+
+def zemax_apply_prescription(
+    surfaces: List[Dict[str, Any]],
+    fields: Optional[List[Dict[str, Any]]] = None,
+    field_type: Optional[str] = None,
+    wavelengths: Optional[List[Dict[str, Any]]] = None,
+    primary_wavelength_index: int = 1,
+    aperture_type: Optional[str] = None,
+    aperture_value: Optional[float] = None,
+    ray_aiming: Optional[str] = None,
+    stop_surface: Optional[int] = None,
+    allow_warnings: bool = False,
+) -> Dict[str, Any]:
+    """
+    Write a complete prescription in ONE call: the whole surface table, plus fields,
+    wavelengths, aperture, ray aiming and the stop, under a single snapshot and one gate check.
+
+    Replaces the ~4-calls-per-surface modeling loop. The entire prescription is checked
+    against the shared design rules first (OpticalRuleCheck: glass center/edge thickness,
+    internal air gap, barrel aspect ratio, steepness, near-flat sag, ray aiming) and refused
+    as a whole if any CRITICAL finding is present, so an infeasible design never lands.
+
+    surfaces: Object to Image, in order. Each entry:
+      radius (float, or null/omitted to keep the LDE's current value), thickness (float, mm),
+      material (glass name; omit, null or 'AIR' for air), semi_diameter (float),
+      conic (float), comment (str), type ('Standard', 'EvenAspheric', 'CoordinateBreak',
+      'DiffractionGrating', ...), params (par1..par12 or the type's aliases), is_stop (bool).
+      The first entry is the Object surface and the last is the Image surface.
+    fields: [{"x": .., "y": .., "weight": ..}]; field_type: 'Angle', 'ObjectHeight',
+      'ParaxialImageHeight', 'RealImageHeight'. Omit either to leave fields untouched.
+    wavelengths: [{"wavelength_um": .., "weight": ..}]; primary_wavelength_index: 1-based.
+    aperture_type / aperture_value: 'EPD', 'ImageSpaceFNum', 'ObjectSpaceNA', 'FloatByStopSize'.
+    ray_aiming: 'Off', 'Paraxial', 'Real'. Required when a CoordinateBreak sits at or before
+      the stop, or the field angle exceeds 20 degrees.
+    stop_surface: 0-based index of the aperture stop; applied after the surfaces are written.
+    allow_warnings: write despite WARNING-level findings (CRITICAL findings always refuse).
+    """
+    session = ZOSSession.get_instance()
+    sys = session.system
+    lde = sys.LDE
+    sd = sys.SystemData
+
+    if not isinstance(surfaces, list) or len(surfaces) < 2:
+        return {"status": "error", "code": "BAD_PRESCRIPTION",
+                "message": "surfaces must list at least the Object and Image surfaces."}
+
+    # Normalize the raw entries before any validation reads them.
+    prepared: List[Dict[str, Any]] = []
+    target = lde.NumberOfSurfaces
+    for i, s in enumerate(surfaces):
+        if not isinstance(s, dict):
+            return {"status": "error", "code": "BAD_PRESCRIPTION",
+                    "message": f"surfaces[{i}] must be an object, got {type(s).__name__}."}
+        radius = s.get("radius")
+        thickness = s.get("thickness")
+        if i != 0 and thickness is None:
+            return {"status": "error", "code": "MISSING_THICKNESS",
+                    "message": f"surfaces[{i}] has no thickness. Every surface except the Object "
+                               f"needs one; use 0.0 for a dummy plane."}
+        material = str(s.get("material") or "").strip()
+        if material.upper() == "AIR":
+            material = ""
+        data: Dict[str, Any] = {
+            "radius": None if radius is None else _coerce_radius(radius, i),
+            "thickness": None if thickness is None else float(thickness),
+            "material": material,
+            "semi_diameter": s.get("semi_diameter"),
+            "conic": s.get("conic"),
+            "comment": s.get("comment"),
+            "type": s.get("type"),
+            "params": s.get("params") or {},
+            "is_stop": s.get("is_stop"),
+        }
+        # Mirror the normalized values into the keys the rule summary reads, keeping the
+        # unset sentinels (-1 radius, 0.0 semi-diameter) that the LDE reports for a fresh row.
+        surf_now = lde.GetSurfaceAt(min(i, target - 1))
+        data["_r"] = data["radius"] if data["radius"] is not None else float(surf_now.Radius)
+        data["_t"] = data["thickness"] if data["thickness"] is not None else 0.0
+        data["_m"] = data["material"]
+        data["_sd"] = (float(data["semi_diameter"]) if data["semi_diameter"] is not None
+                       else float(surf_now.SemiDiameter))
+        # Resolve the type to a real enum member now, not in the write loop: a typo found
+        # mid-write would cost a snapshot rollback and a recovery file for a caller mistake.
+        if data["type"] is not None:
+            try:
+                data["_resolved_type"] = _resolve_surface_type(session, data["type"])
+            except ValueError as error:
+                return {"status": "error", "code": "BAD_SURFACE_TYPE",
+                        "message": f"surfaces[{i}]: {error}"}
+        else:
+            data["_resolved_type"] = None
+        data["_type"] = str(data["type"] or str(surf_now.Type).split(".")[-1])
+        prepared.append(data)
+
+    # Field and wavelength types are only validated when the caller supplies them.
+    field_writer_type = "angle"
+    if field_type is not None:
+        field_writer_type = str(field_type).lower().replace("_", "").strip()
+        if field_writer_type not in ("angle", "objectheight", "height", "paraxialimageheight",
+                                     "realimageheight"):
+            return {"status": "error", "code": "BAD_FIELD_TYPE",
+                    "message": f"Unsupported field_type '{field_type}'. Choose from 'Angle', "
+                               f"'ObjectHeight', 'ParaxialImageHeight', 'RealImageHeight'."}
+    if fields is not None and not fields:
+        return {"status": "error", "code": "BAD_FIELDS",
+                "message": "fields was supplied as an empty list; omit it to leave fields untouched."}
+
+    general = {
+        "field_type": str(field_writer_type),
+        "ray_aiming": str(ray_aiming if ray_aiming is not None
+                          else sd.RayAiming.RayAiming),
+    }
+    audit = _preflight_prescription(prepared, general, fields, wavelengths)
+
+    if audit["status"] == "rejected":
+        return audit
+    if audit["warning_count"] and not allow_warnings:
+        return {
+            "status": "rejected",
+            "code": "PRESCRIPTION_WARNINGS",
+            "message": (f"{audit['warning_count']} design-rule warning(s); nothing was written. "
+                        f"Review the findings and resubmit, or pass allow_warnings=True to "
+                        f"write anyway."),
+            "audit_status": audit["audit_status"],
+            "critical_count": 0,
+            "warning_count": audit["warning_count"],
+            "critical": [],
+            "warnings": audit["warnings"],
+            "total_findings": audit["total_findings"],
+        }
+
+    # Grow or shrink the LDE to the prescription length. The Image surface stays last.
+    while lde.NumberOfSurfaces < len(prepared):
+        lde.InsertNewSurfaceAt(lde.NumberOfSurfaces - 1)
+    while lde.NumberOfSurfaces > len(prepared):
+        if lde.NumberOfSurfaces <= 2:
+            break
+        lde.RemoveSurfaceAt(lde.NumberOfSurfaces - 2)
+
+    written = []
+    for i, s in enumerate(prepared):
+        surf = lde.GetSurfaceAt(i)
+        if s["_resolved_type"] is not None:
+            surf.ChangeType(surf.GetSurfaceTypeSettings(s["_resolved_type"]))
+        if s["radius"] is not None:
+            surf.Radius = s["radius"]
+        if s["thickness"] is not None:
+            surf.Thickness = s["thickness"]
+        surf.Material = s["material"]
+        if s["semi_diameter"] is not None:
+            surf.SemiDiameter = float(s["semi_diameter"])
+        if s["conic"] is not None:
+            surf.Conic = float(s["conic"])
+        if s["comment"] is not None:
+            surf.Comment = str(s["comment"])
+        if s["params"]:
+            params_result = _write_surface_params(i, s["params"])
+            if params_result.get("status") == "error":
+                return params_result
+        if s["is_stop"] is not None and i > 0:
+            surf.IsStop = bool(s["is_stop"])
+        written.append({
+            "index": i,
+            "type": str(surf.Type).split(".")[-1],
+            "radius": float(surf.Radius),
+            "thickness": float(surf.Thickness),
+            "material": str(surf.Material).strip(),
+            "semi_diameter": float(surf.SemiDiameter),
+            "is_stop": bool(surf.IsStop),
+        })
+
+    system_updates: Dict[str, Any] = {}
+    if aperture_type is not None:
+        result = _apply_aperture(aperture_type, float(aperture_value or 0.0))
+        if result.get("status") == "error":
+            return result
+        system_updates["aperture"] = {"type": result["aperture_type"],
+                                      "value": result["aperture_value"]}
+    if fields is not None:
+        result = _apply_fields(field_type, fields)
+        if result.get("status") == "error":
+            return result
+        system_updates["fields"] = {"type": result["field_type"],
+                                    "count": result["number_of_fields"]}
+    if wavelengths is not None:
+        result = _apply_wavelengths(wavelengths, int(primary_wavelength_index))
+        if result.get("status") == "error":
+            return result
+        system_updates["wavelengths"] = {"count": result["number_of_wavelengths"],
+                                         "primary_index": result["primary_wavelength_index"]}
+    if ray_aiming is not None:
+        result = _apply_ray_aiming(ray_aiming)
+        if result.get("status") == "error":
+            return result
+        system_updates["ray_aiming"] = result["ray_aiming"]
+    if stop_surface is not None:
+        stop_index = int(stop_surface)
+        if not 1 <= stop_index <= lde.NumberOfSurfaces - 1:
+            return {"status": "error", "code": "BAD_STOP",
+                    "message": f"stop_surface {stop_index} must be between 1 and "
+                               f"{lde.NumberOfSurfaces - 2}."}
+        for i in range(lde.NumberOfSurfaces):
+            lde.GetSurfaceAt(i).IsStop = (i == stop_index)
+        system_updates["stop_surface"] = stop_index
+
+    return {
+        "status": "success",
+        "message": f"Prescription written: {len(written)} surfaces.",
+        "surface_count": lde.NumberOfSurfaces,
+        "surfaces": written,
+        "system_updates": system_updates,
+        "validation": {
+            "audit_status": audit["audit_status"],
+            "critical_count": 0,
+            "warning_count": audit["warning_count"],
+            "warnings": audit["warnings"],
+            "total_findings": audit["total_findings"],
+            "overridden": bool(audit["warning_count"] and allow_warnings),
+        },
+    }
+
+
 for _name in ("zemax_surface_operations", "zemax_insert_surface", "zemax_delete_surface", "zemax_set_solve",
               "zemax_set_surface_type", "zemax_set_surface_params", "zemax_add_fold_mirror",
-              "zemax_add_scan_mirror"):
+              "zemax_add_scan_mirror", "zemax_apply_prescription"):
     globals()[_name] = model_operation(globals()[_name])

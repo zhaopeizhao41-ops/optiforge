@@ -292,6 +292,58 @@ def _write_operand_cell(op, col: int, value: float) -> float:
     return write_cell(cell, value, f"Column '{str(cell.Header).strip()}' (Param{col - 1})")
 
 
+def _insert_operand(mfe, zos, spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Write ONE operand from a spec dict and return its record, WITHOUT recalculating the
+    merit function. Raises ValueError on any bad field. The caller owns the recalculation --
+    a block of operands needs it once, not once per row, and CalculateMeritFunction() is a
+    full ray trace of every operand in the editor."""
+    raw_code = spec.get("type_code", spec.get("code"))
+    if not isinstance(raw_code, str) or not raw_code.strip():
+        raise ValueError("each operand needs a non-empty 'type_code'.")
+    code_upper = raw_code.upper().strip()
+    try:
+        op_type = getattr(zos.Editors.MFE.MeritOperandType, code_upper)
+    except AttributeError:
+        raise ValueError(f"Operand code '{code_upper}' not found in ZOSAPI MeritOperandType.")
+
+    position = spec.get("position")
+    if position is not None and 1 <= int(position) <= mfe.NumberOfOperands:
+        op = mfe.InsertNewOperandAt(int(position))
+    else:
+        op = mfe.AddOperand()
+
+    op.ChangeType(op_type)
+    op.Target = float(spec.get("target", 0.0))
+    op.Weight = float(spec.get("weight", 0.0))
+
+    written: Dict[str, float] = {}
+    for n in range(1, 5):
+        val = spec.get(f"param{n}", 0)
+        if val:  # legacy shortcuts write only when non-zero, as before
+            written[f"param{n}"] = _write_operand_cell(op, _PARAM_CELLS[n - 1], val)
+
+    params = spec.get("params")
+    if params:
+        if not isinstance(params, dict):
+            raise ValueError("'params' must be an object mapping column names to numbers.")
+        cells = _operand_param_cells(op)
+        for key, val in params.items():
+            col = cells.get(str(key).strip().lower())
+            if col is None:
+                names = [k for k in cells if not k.startswith("param")]
+                raise ValueError(f"Unknown column '{key}' for {code_upper}. "
+                                 f"Use param1..param8 or one of: {', '.join(names)}.")
+            written[f"param{col - 1}"] = _write_operand_cell(op, col, val)
+
+    return {
+        "operand": code_upper,
+        "target": float(op.Target),
+        "weight": float(op.Weight),
+        "row": int(op.RowIndex),
+        "parameters": written,
+    }
+
+
 def zemax_add_operand(
     type_code: str,
     target: float,
@@ -309,55 +361,115 @@ def zemax_add_operand(
     param1..param4: Legacy integer shortcuts for the first four columns (written only when non-zero).
     params: Any of Param1..Param8 by name ('param5') or column header ('Hx', 'Py'); floats allowed.
             Applied after the legacy shortcuts, so it wins on overlap.
+
+    Inserts ONE operand, then recalculates the merit function. To write a whole block -- the
+    AGENTS.md barrier matrix, say -- use zemax_add_operands instead: it does one recalculation
+    for the block rather than one per row.
     """
     session = ZOSSession.get_instance()
-    sys = session.system
+    mfe = session.system.MFE
     zos = session.ZOSAPI
-    mfe = sys.MFE
-
-    code_upper = type_code.upper().strip()
     try:
-        op_type = getattr(zos.Editors.MFE.MeritOperandType, code_upper)
-    except AttributeError:
-        return {
-            "status": "error",
-            "message": f"Operand code '{code_upper}' not found in ZOSAPI MeritOperandType.",
-        }
-
-    if position is not None and 1 <= position <= mfe.NumberOfOperands:
-        op = mfe.InsertNewOperandAt(position)
-    else:
-        op = mfe.AddOperand()
-
-    op.ChangeType(op_type)
-    op.Target = float(target)
-    op.Weight = float(weight)
-
-    written: Dict[str, float] = {}
-    for n, val in enumerate([param1, param2, param3, param4], start=1):
-        if val != 0:
-            written[f"param{n}"] = _write_operand_cell(op, _PARAM_CELLS[n - 1], val)
-
-    if params:
-        cells = _operand_param_cells(op)
-        for key, val in params.items():
-            col = cells.get(key.strip().lower())
-            if col is None:
-                names = [k for k in cells if not k.startswith("param")]
-                return {"status": "error",
-                        "message": f"Unknown column '{key}' for {code_upper}. Use param1..param8 or one of: {', '.join(names)}."}
-            written[f"param{col - 1}"] = _write_operand_cell(op, col, val)
+        record = _insert_operand(mfe, zos, {
+            "type_code": type_code, "target": target, "weight": weight,
+            "param1": param1, "param2": param2, "param3": param3, "param4": param4,
+            "position": position, "params": params,
+        })
+    except ValueError as error:
+        return {"status": "error", "message": str(error)}
 
     # op.Value stays 0 until the merit function is recalculated.
     mfe.CalculateMeritFunction()
+    record["current_value"] = float(mfe.GetOperandAt(record["row"]).Value)
+    record["status"] = "success"
+    return record
+
+
+def zemax_add_operands(
+    operands: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Insert a whole BLOCK of merit-function operands in one call, then recalculate the merit
+    function ONCE. This is the batch counterpart to zemax_add_operand and the intended way to
+    write the AGENTS.md barrier matrix (EFLA / REAA / REAY / RAID / MXCA / MNEG / MNEA ...).
+
+    Why it matters: each zemax_add_operand is a separate model operation -- its own CopySystem()
+    snapshot -- and ends with mfe.CalculateMeritFunction(), a full ray trace of every operand.
+    An 8-15 row barrier matrix therefore costs 8-15 snapshots and 8-15 full evaluations. This
+    call costs one of each.
+
+    operands: list of objects, each {'type_code': 'REAY', 'target': 0.0, 'weight': 500.0,
+              'param1': 3, 'param2': 0, 'params': {'Py': 1.0}}, in the same fields and with the
+              same meaning as zemax_add_operand. 'position' is optional per entry.
+
+    Transactional: every operand code is resolved BEFORE anything is written, so a typo rejects
+    the whole block with nothing inserted. If a later row fails mid-write (an unknown 'params'
+    column, say) the rows already added by this call are removed and the block is reported
+    rejected, leaving the merit function exactly as it was.
+    """
+    if not isinstance(operands, list) or not operands:
+        return {"status": "error", "code": "BAD_OPERAND_BATCH",
+                "message": "operands must be a non-empty list of operand objects."}
+
+    session = ZOSSession.get_instance()
+    mfe = session.system.MFE
+    zos = session.ZOSAPI
+
+    # Phase 1 -- reject the whole block on a bad code before a single row is written.
+    problems = []
+    for index, spec in enumerate(operands):
+        if not isinstance(spec, dict):
+            problems.append({"index": index, "message": "each operand must be an object."})
+            continue
+        raw_code = spec.get("type_code", spec.get("code"))
+        if not isinstance(raw_code, str) or not raw_code.strip():
+            problems.append({"index": index, "message": "missing 'type_code'."})
+        elif not hasattr(zos.Editors.MFE.MeritOperandType, raw_code.upper().strip()):
+            problems.append({"index": index, "type_code": raw_code,
+                             "message": f"unknown operand code '{raw_code}'."})
+    if problems:
+        return {"status": "error", "code": "BAD_OPERAND_BATCH",
+                "message": f"{len(problems)} of {len(operands)} operands were rejected; nothing was written.",
+                "problems": problems}
+
+    # Phase 2 -- write the block. Roll the whole block back if any row fails.
+    records: List[Dict[str, Any]] = []
+    try:
+        for spec in operands:
+            records.append(_insert_operand(mfe, zos, spec))
+    except Exception as error:
+        rolled_back = True
+        try:
+            for record in reversed(records):
+                mfe.RemoveOperandAt(record["row"])
+        except Exception as rollback_error:
+            rolled_back = False
+            error = f"{error} (rollback also failed: {rollback_error})"
+        return {"status": "error", "code": "OPERAND_BATCH_FAILED",
+                "message": f"Block write failed after {len(records)} rows: {error}",
+                "rolled_back": rolled_back, "written_rows": [r["row"] for r in records]}
+
+    # Phase 3 -- ONE recalculation for the whole block, then read the values that were zero
+    # while the rows were being written.
+    mfe.CalculateMeritFunction()
+    for record in records:
+        row = record["row"]
+        try:
+            op = mfe.GetOperandAt(row)
+            actual = str(op.Type).split(".")[-1]
+            if actual != record["operand"] and actual != "BLNK":
+                record["row_mismatch"] = f"row {row} holds {actual}, expected {record['operand']}"
+            record["current_value"] = float(op.Value)
+        except Exception as error:
+            record["value_error"] = str(error)
+
     return {
         "status": "success",
-        "operand": code_upper,
-        "target": float(op.Target),
-        "weight": float(op.Weight),
-        "current_value": float(op.Value),
-        "row": int(op.RowIndex),
-        "parameters": written,
+        "message": f"Inserted {len(records)} operands and recalculated the merit function once.",
+        "inserted": len(records),
+        "rows": [r["row"] for r in records],
+        "total_operands": int(mfe.NumberOfOperands),
+        "operands": records,
     }
 
 
@@ -678,5 +790,6 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> Dict[str, Any]:
     }
 
 
-for _name in ("zemax_setup_merit_function", "zemax_add_operand", "zemax_quick_focus", "zemax_run_optimization", "zemax_run_hammer"):
+for _name in ("zemax_setup_merit_function", "zemax_add_operand", "zemax_add_operands",
+              "zemax_quick_focus", "zemax_run_optimization", "zemax_run_hammer"):
     globals()[_name] = model_operation(globals()[_name])

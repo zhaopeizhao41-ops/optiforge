@@ -65,6 +65,7 @@ output/
 .DS_Store
 Thumbs.db
 scratch/
+/*.png
 
 # Agent scratch state. This is per-machine, per-session working memory -- it was
 # committed by accident once (e28584e) and is now untracked; the rule keeps a

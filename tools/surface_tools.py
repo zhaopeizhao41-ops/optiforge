@@ -437,6 +437,7 @@ def _preflight_prescription(surfaces: List[Dict[str, Any]], general: Dict[str, A
                 })
 
     payload: Dict[str, Any] = {
+        "status": "rejected" if critical else "ok",
         "audit_status": audit["status"],
         "critical_count": len(critical),
         "warning_count": len(warnings),

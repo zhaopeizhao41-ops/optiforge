@@ -67,6 +67,7 @@ from tools import (
     zemax_generate_mount_interface as _generate_mount_interface,
     zemax_setup_merit_function as _setup_merit_function,
     zemax_add_operand as _add_operand,
+    zemax_add_operands as _add_operands,
     zemax_quick_focus as _quick_focus,
     zemax_run_optimization as _run_optimization,
     zemax_run_hammer as _run_hammer,
@@ -976,6 +977,37 @@ def zemax_add_operand(
         position=position,
         params=params,
     )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_add_operands(operands: List[Dict[str, Any]]) -> str:
+    """
+    PREFERRED WAY TO WRITE A BLOCK OF OPERANDS: insert many merit-function operands in one call,
+    then recalculate the merit function once. Use this for the AGENTS.md barrier matrix
+    (EFLA / REAA / REAY / RAID / MXCA / MNEG / MNEA ...) instead of calling zemax_add_operand
+    once per row.
+
+    Cost: each zemax_add_operand is its own model operation (its own model snapshot) and ends
+    with a full merit-function ray trace. A 10-row matrix therefore pays 10 snapshots and 10
+    full evaluations; this call pays one of each.
+
+    operands: a list of objects, each with the same fields as zemax_add_operand:
+      type_code (str, required)  -- 'REAY', 'EFLA', 'MXCA', ...
+      target (float)             -- defaults to 0.0
+      weight (float)             -- defaults to 0.0
+      param1..param4 (int)       -- legacy shortcuts, written only when non-zero
+      params (object)            -- any of Param1..Param8 by name or column header, e.g. {"Py": 1.0}
+      position (int, optional)   -- insert at an absolute row instead of appending
+    Example:
+      [{"type_code": "EFLA", "target": 35.0, "weight": 100.0, "param1": 2, "param2": 6},
+       {"type_code": "REAY", "target": 0.0, "weight": 500.0, "param1": 9, "params": {"Py": 1.0}}]
+
+    Transactional: every operand code is validated before anything is written, so one bad code
+    rejects the whole block with nothing inserted. If a row fails mid-write, the rows this call
+    already added are removed and the result reports rolled_back.
+    """
+    res = _add_operands(operands=operands)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 

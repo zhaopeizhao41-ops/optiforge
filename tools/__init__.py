@@ -60,6 +60,7 @@ from tools.mechanical_tools import (
 from tools.optimization_tools import (
     zemax_setup_merit_function,
     zemax_add_operand,
+    zemax_add_operands,
     zemax_quick_focus,
     zemax_run_optimization,
     zemax_run_hammer,
@@ -127,6 +128,7 @@ __all__ = [
     "zemax_generate_mount_interface",
     "zemax_setup_merit_function",
     "zemax_add_operand",
+    "zemax_add_operands",
     "zemax_quick_focus",
     "zemax_run_optimization",
     "zemax_run_hammer",

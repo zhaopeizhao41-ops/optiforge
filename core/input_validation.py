@@ -177,6 +177,33 @@ def validate_arguments(name, args):
                 if not isinstance(key, str) or not key.strip():
                     raise ValueError("params keys must be non-empty column names.")
                 number(value, f"params.{key}")
+    elif name == "zemax_add_operands":
+        operands = args.get("operands")
+        if not isinstance(operands, list) or not operands:
+            raise ValueError("operands must be a non-empty list of operand objects.")
+        for index, spec in enumerate(operands):
+            if not isinstance(spec, dict):
+                raise ValueError(f"operands[{index}] must be an object.")
+            code = spec.get("type_code", spec.get("code"))
+            if not isinstance(code, str) or not code.strip():
+                raise ValueError(f"operands[{index}] needs a non-empty 'type_code'.")
+            if "target" in spec:
+                number(spec["target"], f"operands[{index}].target")
+            if "weight" in spec:
+                number(spec["weight"], f"operands[{index}].weight", minimum=0)
+            for key in ("param1", "param2", "param3", "param4"):
+                if key in spec:
+                    integer(spec[key], f"operands[{index}].{key}", minimum=None)
+            if spec.get("position") is not None:
+                integer(spec["position"], f"operands[{index}].position")
+            params = spec.get("params")
+            if params is not None:
+                if not isinstance(params, dict):
+                    raise ValueError(f"operands[{index}].params must be an object.")
+                for key, value in params.items():
+                    if not isinstance(key, str) or not key.strip():
+                        raise ValueError(f"operands[{index}].params keys must be non-empty column names.")
+                    number(value, f"operands[{index}].params.{key}")
     elif name == "zemax_set_surface_type":
         integer(args["surface_index"], "surface_index", minimum=0)
         if not isinstance(args["surface_type"], str) or not args["surface_type"].strip():

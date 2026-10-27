@@ -1,0 +1,225 @@
+<div id="of-concepts" class="viz-carousel" aria-label="OptiForge 布局设计" data-previous-label="上一个布局" data-next-label="下一个布局">
+  <section data-variant="光路优先" aria-label="光路优先布局"><div class="of-app" data-layout="optical" aria-label="OptiForge 光路优先工作台"></div></section>
+  <section data-variant="分析并排" aria-label="分析并排布局" hidden><div class="of-app" data-layout="analysis" aria-label="OptiForge 分析并排工作台"></div></section>
+</div>
+<style>
+  #of-concepts .of-app {
+    --of-bg:light-dark(#f5f7f9,#11171c);--of-panel:light-dark(#ffffff,#192127);--of-soft:light-dark(#edf1f5,#222d35);
+    --of-fg:light-dark(#1e2b36,#e3eaf0);--of-muted:light-dark(#5e707f,#a4b5c1);--of-line:light-dark(#dce3e9,#35424c);
+    --of-accent:light-dark(#215fd1,#85b1ff);--of-tint:light-dark(#eaf1ff,#263950);--of-glass:light-dark(#ddecf3,#2a414f);
+    --of-green:light-dark(#20674b,#8ad5b5);--of-warn:light-dark(#86500c,#e9bd76);--of-warn-bg:light-dark(#fff5e4,#3b3021);
+    --of-radius:4px;--of-row:35px;--of-tree-width:154px;--of-inspector-width:176px;--of-table-height:278px;
+    box-sizing:border-box;background:var(--of-bg);color:var(--of-fg);font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
+    height:776px;display:grid;grid-template-rows:52px 35px minmax(0,1fr) 28px;border:1px solid var(--of-line);border-radius:6px;
+    font-variant-numeric:tabular-nums;position:relative;text-align:left;
+  }
+  #of-concepts .of-app *,#of-concepts .of-app *::before,#of-concepts .of-app *::after{box-sizing:border-box}
+  #of-concepts .of-app button,#of-concepts .of-app select,#of-concepts .of-app input{font:inherit;color:inherit}
+  #of-concepts .of-app button{border:0;border-radius:var(--of-radius);background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:28px;padding:4px 8px}
+  #of-concepts .of-app button:hover{background:var(--of-soft)}
+  #of-concepts .of-app button:focus-visible,#of-concepts .of-app select:focus-visible,#of-concepts .of-app input:focus-visible{outline:2px solid var(--of-accent);outline-offset:2px}
+  #of-concepts .of-app button[aria-pressed="true"],#of-concepts .of-app button[aria-selected="true"]{background:var(--of-tint);color:var(--of-accent)}
+  #of-concepts .of-app button:disabled{opacity:.5}
+  #of-concepts .of-app select{background:var(--of-panel);border:1px solid var(--of-line);border-radius:var(--of-radius);padding:3px 6px;min-width:0}
+  #of-concepts .of-app [hidden]{display:none!important}
+  #of-concepts .of-app svg:not(.lucide){display:block;width:100%;height:100%}
+  #of-concepts .of-app .lucide{width:15px;height:15px;flex-shrink:0}
+  #of-concepts .of-head{display:flex;align-items:center;gap:16px;padding:0 14px;background:var(--of-panel);border-bottom:1px solid var(--of-line);min-width:0}
+  #of-concepts .of-brand{font-size:16px;font-weight:600;letter-spacing:-.5px;white-space:nowrap}
+  #of-concepts .of-brand span{color:var(--of-accent)}
+  #of-concepts .of-project-title{border-left:1px solid var(--of-line);padding-left:16px;min-width:0}
+  #of-concepts .of-sub{color:var(--of-muted);font-size:11px}
+  #of-concepts .of-actions{margin-left:auto;display:flex;align-items:center;gap:7px;flex-shrink:0}
+  #of-concepts .of-tag{font-size:11px;white-space:nowrap;border:1px solid var(--of-line);border-radius:4px;padding:2px 6px;color:var(--of-muted)}
+  #of-concepts .of-mode{display:flex;align-items:center;padding:0 14px;gap:14px;border-bottom:1px solid var(--of-line);font-size:11px;color:var(--of-muted)}
+  #of-concepts .of-mode .of-right{margin-left:auto;color:var(--of-warn)}
+  #of-concepts .of-main{display:grid;grid-template-columns:var(--of-tree-width) 5px minmax(0,1fr) var(--of-inspector-width);min-height:0}
+  #of-concepts .of-tree{background:var(--of-panel);padding:12px 8px;min-width:0}
+  #of-concepts .of-label{font-size:11px;letter-spacing:.06em;color:var(--of-muted);margin:0 0 10px;padding:0 8px}
+  #of-concepts .of-tree .of-node{width:100%;justify-content:flex-start;margin-bottom:3px;text-align:left;white-space:nowrap;padding-left:10px}
+  #of-concepts .of-tree .of-node-indent{padding-left:23px}
+  #of-concepts .of-tree .of-tree-note{border-top:1px solid var(--of-line);margin:18px 8px 0;padding-top:12px;font-size:11px;color:var(--of-muted)}
+  #of-concepts .of-grip{width:5px;min-height:0!important;border-radius:0!important;padding:0!important;background:var(--of-line)!important;cursor:col-resize;touch-action:none}
+  #of-concepts .of-grip:hover{background:var(--of-accent)!important}
+  #of-concepts .of-center{display:grid;grid-template-rows:minmax(0,1fr) var(--of-table-height);min-width:0;min-height:0}
+  #of-concepts .of-visuals{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+  #of-concepts .of-panel{background:var(--of-panel);min-width:0;min-height:0;display:flex;flex-direction:column}
+  #of-concepts .of-panel-head{height:36px;flex-shrink:0;padding:0 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--of-line)}
+  #of-concepts .of-panel-head .of-push{margin-left:auto}
+  #of-concepts .of-panel-name{font-weight:500;white-space:nowrap}
+  #of-concepts .of-panel-head button{font-size:12px;min-height:26px;padding:3px 7px}
+  #of-concepts .of-scene-wrap{position:relative;flex:1;min-height:210px;background:var(--of-panel)}
+  #of-concepts .of-scene{position:absolute;inset:0}
+  #of-concepts .of-scene-title{position:absolute;top:12px;left:14px;z-index:1;color:var(--of-muted);font-size:11px;pointer-events:none}
+  #of-concepts .of-scene-hits{position:absolute;inset:0;pointer-events:none}
+  #of-concepts .of-scene-hits button{position:absolute;width:36px;height:110px;top:calc(50% - 55px);padding:0;transform:translateX(-50%);pointer-events:auto;border-radius:10px}
+  #of-concepts .of-scene-hits button:hover{background:color-mix(in srgb,var(--of-accent) 7%,transparent)}
+  #of-concepts .of-scene-hits button[aria-pressed="true"]{background:transparent}
+  #of-concepts .of-scene-foot{display:flex;justify-content:space-between;gap:8px;padding:6px 12px;color:var(--of-muted);font-size:11px;border-top:1px solid var(--of-line)}
+  #of-concepts .of-scene-swatch{display:inline-block;width:16px;height:2px;vertical-align:middle;margin-right:4px;background:var(--of-accent)}
+  #of-concepts .of-prescription{border-top:1px solid var(--of-line)}
+  #of-concepts .of-table-scroll{overflow-x:auto;flex:1}
+  #of-concepts .of-table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:12px}
+  #of-concepts .of-table th{font-size:11px;color:var(--of-muted);font-weight:400;background:var(--of-bg);height:29px;text-align:right;padding:0 10px}
+  #of-concepts .of-table th:first-child,#of-concepts .of-table td:first-child{text-align:left;padding-left:12px}
+  #of-concepts .of-table td{border-bottom:1px solid var(--of-line);height:var(--of-row);padding:2px 10px;text-align:right}
+  #of-concepts .of-table tr[aria-selected="true"] td{background:var(--of-tint)}
+  #of-concepts .of-table tr:hover td{background:var(--of-soft)}
+  #of-concepts .of-table td button{padding:0;min-height:24px;justify-content:flex-start;color:var(--of-accent)}
+  #of-concepts .of-table .of-changed{color:var(--of-warn);font-weight:500}
+  #of-concepts .of-table-note{font-size:11px;color:var(--of-muted);padding:6px 12px;display:flex;justify-content:space-between;gap:10px}
+  #of-concepts .of-inspector{border-left:1px solid var(--of-line);background:var(--of-panel);min-width:0}
+  #of-concepts .of-inspector-body{padding:13px 12px}
+  #of-concepts .of-object-name{font-size:15px;font-weight:500;margin-bottom:3px}
+  #of-concepts .of-kv{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--of-line);font-size:12px}
+  #of-concepts .of-kv span{color:var(--of-muted)}
+  #of-concepts .of-kv strong{font-weight:500}
+  #of-concepts .of-section-gap{margin-top:21px}
+  #of-concepts .of-state{color:var(--of-green);font-size:12px;margin:8px 0}
+  #of-concepts .of-state[data-state="stale"],#of-concepts .of-state[data-state="running"]{color:var(--of-warn)}
+  #of-concepts .of-state-note{padding:8px;background:var(--of-soft);border-radius:var(--of-radius);font-size:11px;color:var(--of-muted);margin-top:9px}
+  #of-concepts .of-event-actions{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+  #of-concepts .of-event-actions button{border:1px solid var(--of-line);font-size:11px}
+  #of-concepts .of-event-actions .of-receive{background:var(--of-tint);color:var(--of-accent)}
+  #of-concepts .of-log{padding:6px 12px;font-size:12px;line-height:1.6;flex:1}
+  #of-concepts .of-log-line{display:flex;gap:12px;border-bottom:1px solid var(--of-line);padding:8px 0}
+  #of-concepts .of-log-line span{font-size:11px;color:var(--of-muted);min-width:36px}
+  #of-concepts .of-statusbar{border-top:1px solid var(--of-line);display:flex;align-items:center;padding:0 12px;gap:12px;font-size:11px;color:var(--of-muted);background:var(--of-panel)}
+  #of-concepts .of-statusbar .of-right{margin-left:auto}
+  #of-concepts .of-dot{width:6px;height:6px;border-radius:50%;display:inline-block;background:var(--of-muted);margin-right:5px}
+  #of-concepts .of-analysis{border-left:1px solid var(--of-line)}
+  #of-concepts .of-chart-area{min-height:170px;flex:1;position:relative}
+  #of-concepts .of-chart{position:absolute;inset:0}
+  #of-concepts .of-chart-controls{padding:6px 10px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11px}
+  #of-concepts .of-chart-controls button{min-height:22px;padding:2px 4px}
+  #of-concepts .of-legend-line{width:16px;border-top:2px solid var(--of-accent)}
+  #of-concepts .of-legend-line.of-dashed{border-top-style:dashed}
+  #of-concepts .of-chart-controls button[aria-pressed="false"]{color:var(--of-muted);opacity:.6}
+  #of-concepts .of-frequency{padding:5px 12px 10px;font-size:11px;color:var(--of-muted)}
+  #of-concepts .of-frequency input{width:100%;display:block;height:17px;accent-color:var(--of-accent);margin:4px 0 0}
+  #of-concepts .of-chart-reading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  #of-concepts .of-stale-bar{background:var(--of-warn-bg);color:var(--of-warn);font-size:11px;padding:6px 12px;border-bottom:1px solid var(--of-line)}
+  #of-concepts .of-app[data-phase="stale"] .of-chart-area{opacity:.55}
+  #of-concepts .of-app[data-phase="running"] .of-chart-area{opacity:.55}
+  #of-concepts .of-app[data-layout="analysis"] .of-main{grid-template-columns:minmax(0,1fr) 196px}
+  #of-concepts .of-app[data-layout="analysis"] .of-tree,#of-concepts .of-app[data-layout="analysis"] .of-grip{display:none}
+  #of-concepts .of-app[data-layout="analysis"] .of-center{grid-template-rows:minmax(0,1fr) var(--of-table-height)}
+  #of-concepts .of-app[data-layout="analysis"] .of-visuals{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+  #of-concepts .of-app[data-layout="analysis"] .of-view-tabs{display:none}
+  #of-concepts .of-app[data-layout="optical"][data-view="analysis"] .of-optical-panel{display:none}
+  #of-concepts .of-app[data-layout="optical"][data-view="optical"] .of-analysis{display:none}
+  #of-concepts .of-app[data-layout="optical"][data-view="analysis"] .of-analysis{border-left:0}
+  #of-concepts .of-app[data-focus="true"] .of-main{grid-template-columns:minmax(0,1fr)}
+  #of-concepts .of-app[data-focus="true"] .of-tree,#of-concepts .of-app[data-focus="true"] .of-grip,#of-concepts .of-app[data-focus="true"] .of-inspector{display:none}
+  #of-concepts .of-app[data-focus="true"] .of-center{grid-template-rows:minmax(0,1fr)}
+  #of-concepts .of-app[data-focus="true"] .of-prescription{display:none}
+  @media (prefers-reduced-motion:no-preference){#of-concepts .of-app button,#of-concepts .of-kv strong,#of-concepts .of-table td{transition:background-color 140ms ease,color 140ms ease}#of-concepts .of-chart-area{transition:opacity 160ms ease}}
+  @media(max-width:850px){#of-concepts .of-app{--of-tree-width:130px;--of-inspector-width:162px}#of-concepts .of-tree .of-node{font-size:12px}#of-concepts .of-project-title{padding-left:10px}#of-concepts .of-head{gap:10px}#of-concepts .of-app[data-layout="analysis"] .of-main{grid-template-columns:minmax(0,1fr) 162px}}
+  @media(max-width:700px){#of-concepts .of-app{height:1020px;grid-template-rows:61px 45px minmax(0,1fr) 34px}#of-concepts .of-project-title{display:none}#of-concepts .of-mode{flex-wrap:wrap;gap:3px 10px;padding:4px 10px}#of-concepts .of-mode .of-right{margin-left:0}#of-concepts .of-main,#of-concepts .of-app[data-layout="analysis"] .of-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 235px}#of-concepts .of-tree,#of-concepts .of-grip{display:none}#of-concepts .of-center{grid-template-rows:minmax(0,1fr) var(--of-table-height)}#of-concepts .of-inspector{border-left:0;border-top:1px solid var(--of-line)}#of-concepts .of-inspector-body{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;padding:10px 12px}#of-concepts .of-properties{grid-row:1/5}#of-concepts .of-section-gap{margin-top:0}#of-concepts .of-event-actions{margin-top:7px}#of-concepts .of-app[data-layout="analysis"] .of-visuals{grid-template-columns:1fr 1fr}#of-concepts .of-app[data-layout="analysis"] .of-center{grid-template-rows:minmax(0,1fr) var(--of-table-height)}#of-concepts .of-chart-controls{gap:4px}#of-concepts .of-statusbar{gap:5px;flex-wrap:wrap;padding:3px 10px}#of-concepts .of-statusbar .of-right{margin-left:auto}#of-concepts .of-tag{display:none}#of-concepts .of-app[data-focus="true"] .of-main{grid-template-rows:minmax(0,1fr)}}
+  @media(max-width:460px){#of-concepts .of-app{height:1240px}#of-concepts .of-app[data-layout="analysis"] .of-visuals{grid-template-columns:1fr;grid-template-rows:1fr 1fr}#of-concepts .of-app[data-layout="analysis"] .of-analysis{border-left:0;border-top:1px solid var(--of-line)}#of-concepts .of-scene-wrap{min-height:175px}#of-concepts .of-panel-head{padding:0 6px;gap:4px}#of-concepts .of-panel-head .of-sub{display:none}#of-concepts .of-head{padding:0 10px}#of-concepts .of-app button{padding:4px 6px}#of-concepts .of-actions{gap:4px}#of-concepts .of-brand{font-size:15px}#of-concepts .of-inspector-body{gap:0 12px}#of-concepts .of-state-note{padding:5px}#of-concepts .of-kv{padding:7px 0}}
+  @media(pointer:coarse){#of-concepts .of-app button{min-height:36px}#of-concepts .of-scene-hits button{width:44px}#of-concepts .of-app{--of-row:39px;--of-table-height:302px}}
+  @media(max-width:700px){#of-concepts .of-app{grid-template-rows:61px 45px minmax(0,1fr) auto}#of-concepts .of-statusbar{min-height:34px}#of-concepts .of-app .of-tree,#of-concepts .of-app .of-grip{display:none}#of-concepts .of-main,#of-concepts .of-app[data-layout="analysis"] .of-main{grid-template-rows:minmax(0,1fr) auto}#of-concepts .of-inspector-body{padding-top:8px}#of-concepts .of-app .of-event-actions button{white-space:normal}}
+  @media(max-width:460px){#of-concepts .of-app{height:1400px}#of-concepts .of-app[data-layout="analysis"] .of-visuals{grid-template-rows:minmax(245px,1fr) minmax(380px,1.2fr)}#of-concepts .of-app[data-focus="true"] .of-main{grid-template-rows:minmax(0,1fr)}}
+</style>
+<script>
+(() => {
+  const root=document.getElementById('of-concepts');
+  const sample=[
+    {id:1,name:'前表面',type:'Standard',radius:'62.844',thickness:'8.000',glass:'N-BK7'},
+    {id:2,name:'胶合面',type:'Standard',radius:'−39.605',thickness:'7.334',glass:'N-SF2'},
+    {id:3,name:'后表面',type:'Standard',radius:'−122.520',thickness:'93.432',glass:'AIR'}
+  ];
+  const saved=window.openai?.widgetState?.modelContent||{};
+  const theme=['light','dark','system'].includes(saved.theme)?saved.theme:'system';
+  const apps=[];
+  function persist(){if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{theme:apps[0]?.theme,selectedSurface:apps[0]?.selected,uiConcept:'双主题 · 光路优先 / 分析并排'},privateContent:{}}).catch(()=>{});}
+  function linePath(values,w,h){return values.map((v,i)=>`${i?'L':'M'} ${52+(w-70)*i/10} ${19+(h-51)*(1-v)}`).join(' ');}
+  function curve(s,kind){const base=kind==='t'?[1,.97,.90,.82,.72,.61,.50,.39,.29,.20,.12]:[1,.95,.88,.78,.67,.55,.43,.32,.23,.15,.09];return base.map((v,i)=>Math.max(0,v-(s.field*.035+s.analysisGeneration*.004)*i/10));}
+  function interpolate(v,f){const p=f/10,i=Math.min(9,Math.floor(p));return v[i]+(v[i+1]-v[i])*(p-i);}
+  function radius(s,id){return id===2&&s.updated%2?'−39.800':sample[id-1].radius;}
+  function scene(s){
+    const el=s.app.querySelector('.of-scene'),w=el.clientWidth,h=el.clientHeight;if(w<20||h<30)return;
+    const mid=h*.51,half=Math.min(66,h*.25),x=[w*.27,w*.40,w*.52],end=w*.88;
+    const paths=[`M${x[0]} ${mid-half} Q${x[0]-22} ${mid} ${x[0]} ${mid+half}`,`M${x[1]} ${mid-half} Q${x[1]+15} ${mid} ${x[1]} ${mid+half}`,`M${x[2]} ${mid-half} Q${x[2]+7} ${mid} ${x[2]} ${mid+half}`];
+    let rays='';for(const off of [-.78,-.36,0,.36,.78]){const y=mid+half*off;rays+=`<path d="M20 ${y} L${x[0]-8*(1-off*off)} ${y} L${x[1]+5} ${mid+half*off*.85} L${x[2]+4} ${mid+half*off*.65} L${end} ${mid}" fill="none" stroke="var(--of-accent)" stroke-width="1.15" opacity="${off===0?.8:.45}"/>`;}
+    const shapes=`<path d="${paths[0]} L${x[1]} ${mid+half} Q${x[1]+15} ${mid} ${x[1]} ${mid-half} Z" fill="var(--of-glass)" stroke="var(--of-muted)" stroke-width="1"/><path d="${paths[1]} L${x[2]} ${mid+half} Q${x[2]+7} ${mid} ${x[2]} ${mid-half} Z" fill="var(--of-glass)" opacity=".6" stroke="var(--of-muted)"/>`;
+    el.innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="双片镜几何示意，当前选中 S${s.selected}，不是真实光线追迹"><line x1="15" y1="${mid}" x2="${w-15}" y2="${mid}" stroke="var(--of-line)" stroke-dasharray="4 5"/>${shapes}${rays}<line x1="${end}" y1="${mid-half*.8}" x2="${end}" y2="${mid+half*.8}" stroke="var(--of-muted)" stroke-width="1.2"/><path d="${paths[s.selected-1]}" fill="none" stroke="var(--of-accent)" stroke-width="3"/>${x.map((a,i)=>`<text x="${a}" y="${mid+half+25}" text-anchor="middle" fill="${s.selected===i+1?'var(--of-accent)':'var(--of-muted)'}" font-size="11">S${i+1}</text>`).join('')}<text x="${end}" y="${mid+half+25}" text-anchor="middle" fill="var(--of-muted)" font-size="11">像面</text></svg>`;
+  }
+  function chart(s){
+    const el=s.app.querySelector('.of-chart'),w=el.clientWidth,h=el.clientHeight;if(w<30||h<30)return;
+    const x=52+(w-70)*s.frequency/100,t=curve(s,'t'),sag=curve(s,'s');
+    let grid='';for(const v of [0,.5,1]){const y=19+(h-51)*(1-v);grid+=`<line x1="52" y1="${y}" x2="${w-18}" y2="${y}" stroke="var(--of-line)"/><text x="41" y="${y+4}" fill="var(--of-muted)" text-anchor="end" font-size="11">${v.toFixed(1)}</text>`;}
+    for(const v of [0,50,100]){const a=52+(w-70)*v/100;grid+=`<text x="${a}" y="${h-15}" fill="var(--of-muted)" text-anchor="middle" font-size="11">${v}</text>`;}
+    const marks=['t','s'].map((kind)=>{const vals=kind==='t'?t:sag;if(!s.lines[kind])return '';return `<path d="${linePath(vals,w,h)}" fill="none" stroke="var(--of-accent)" stroke-width="1.7" ${kind==='s'?'stroke-dasharray="5 4"':''}/><circle cx="${x}" cy="${19+(h-51)*(1-interpolate(vals,s.frequency))}" r="3" fill="var(--of-accent)"/>`;}).join('');
+    el.innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="示意 MTF 曲线，横轴为空间频率 lp/mm，纵轴为归一化对比度，非计算结果">${grid}<text x="13" y="${h/2}" transform="rotate(-90 13 ${h/2})" fill="var(--of-muted)" font-size="11" text-anchor="middle">MTF</text><text x="${w-18}" y="${h-1}" fill="var(--of-muted)" font-size="11" text-anchor="end">lp/mm</text><line x1="${x}" y1="19" x2="${x}" y2="${h-32}" stroke="var(--of-muted)" stroke-dasharray="2 4"/>${marks}</svg>`;
+    s.app.querySelector('.of-reading').textContent=`${s.frequency} lp/mm · T ${s.lines.t?interpolate(t,s.frequency).toFixed(2):'隐藏'} / S ${s.lines.s?interpolate(sag,s.frequency).toFixed(2):'隐藏'}`;
+  }
+  function refresh(s){
+    const a=s.app,obj=sample[s.selected-1];a.dataset.phase=s.phase;a.dataset.view=s.view;a.dataset.focus=String(s.focus);a.style.colorScheme=s.theme==='system'?'light dark':s.theme;
+    a.querySelector('[data-theme]').value=s.theme;
+    a.querySelectorAll('[data-select]').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.select)===s.selected)));
+    a.querySelectorAll('[data-row]').forEach(r=>r.setAttribute('aria-selected',String(Number(r.dataset.row)===s.selected)));
+    a.querySelector('[data-object]').textContent=`S${s.selected} · ${obj.name}`;a.querySelector('[data-radius]').textContent=radius(s,s.selected);
+    a.querySelector('[data-thickness]').textContent=obj.thickness;a.querySelector('[data-glass]').textContent=obj.glass;a.querySelector('[data-radius-cell]').textContent=radius(s,2);a.querySelector('[data-radius-cell]').classList.toggle('of-changed',Boolean(s.updated));
+    a.querySelectorAll('[data-revision]').forEach(e=>e.textContent=`rev ${s.revision}`);a.querySelectorAll('[data-analysis-revision]').forEach(e=>e.textContent=`rev ${s.analysisRevision}`);
+    const status=s.phase==='stale'?'结果已过期':s.phase==='running'?'演示任务运行中':'与示例修订一致';
+    const state=a.querySelector('.of-state');state.dataset.state=s.phase;state.textContent=status;
+    a.querySelector('[data-status]').textContent=s.phase==='current'?`示例状态 · rev ${s.revision} 已同步`:`示例状态 · rev ${s.revision} · ${status}`;
+    a.querySelector('[data-stale]').hidden=s.phase==='current';a.querySelector('[data-stale]').textContent=`当前 rev ${s.revision} · 曲线属于 rev ${s.analysisRevision}，等待新结果`;
+    a.querySelector('[data-update]').disabled=s.phase==='running';a.querySelector('[data-arrive]').disabled=s.phase==='current'||s.phase==='running';a.querySelector('[data-arrive]').textContent=s.phase==='running'?'正在演示事件…':'演示分析返回';
+    a.querySelector('[data-task-message]').textContent=s.phase==='stale'?'处方已更新，上一份分析保留为历史。':s.phase==='running'?'示例任务运行，旧曲线继续可见。':'示例结果与处方修订对应。';
+    a.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===s.view)));
+    a.querySelector('[data-focus]').setAttribute('aria-pressed',String(s.focus));a.querySelector('[data-focus]').setAttribute('aria-label',s.focus?'恢复工作区':'聚焦主视图');
+    a.querySelectorAll('[data-line]').forEach(b=>b.setAttribute('aria-pressed',String(s.lines[b.dataset.line])));
+    a.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-pressed',String(s.bottom===b.dataset.bottom)));
+    a.querySelector('.of-table-scroll').hidden=s.bottom!=='prescription';a.querySelector('.of-table-note').hidden=s.bottom!=='prescription';a.querySelector('.of-log').hidden=s.bottom!=='events';
+    a.querySelector('.of-log').innerHTML=s.events.slice(-4).map(e=>`<div class="of-log-line"><span>${e[0]}</span><div>${e[1]}</div></div>`).join('');
+    scene(s);chart(s);
+  }
+  function create(app){
+    const s={app,theme,selected:[1,2,3].includes(saved.selectedSurface)?saved.selectedSurface:2,revision:12,analysisRevision:12,analysisGeneration:0,phase:'current',field:0,updated:0,view:'optical',bottom:'prescription',frequency:40,lines:{t:true,s:true},focus:false,events:[['示例','rev 12 · 读取胶合双片处方'],['示例','rev 12 · 分析快照载入，未连接计算后端']]};apps.push(s);
+    app.innerHTML=`
+      <header class="of-head"><div class="of-brand">Opti<span>Forge</span></div><div class="of-project-title">胶合双片 <span class="of-sub">/ 工作台</span></div><div class="of-actions"><span class="of-tag">交互概念</span><select data-theme aria-label="界面主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select><button type="button" data-focus aria-label="聚焦主视图" aria-pressed="false" class="cursor-interaction"><i data-lucide="maximize-2" aria-hidden="true"></i></button></div></header>
+      <div class="of-mode"><span>示例工作区</span><span data-revision>rev 12</span><span>对话入口：外部 Agent</span><span class="of-right">未连接计算 · 非仿真数据</span></div>
+      <div class="of-main">
+        <aside class="of-tree" aria-label="项目与光学对象"><div class="of-label">项目 / 示例</div><button type="button" class="of-node cursor-interaction" data-select="1"><i data-lucide="layers-2" aria-hidden="true"></i>胶合双片</button>${sample.map(o=>`<button type="button" class="of-node of-node-indent cursor-interaction" data-select="${o.id}">S${o.id} ${o.name}</button>`).join('')}<div class="of-tree-note">示例项目<br>2 片 · 3 个曲面<br><br>显示设置与模型参数分开管理。</div></aside>
+        <button type="button" class="of-grip" aria-label="拖动或用方向键调整项目面板宽度"></button>
+        <main class="of-center">
+          <div class="of-visuals">
+            <section class="of-panel of-optical-panel" aria-label="二维光路"><div class="of-panel-head"><span class="of-panel-name">二维光路</span><span class="of-sub">YZ</span><div class="of-push of-view-tabs"><button type="button" data-view="analysis" class="cursor-interaction">查看分析</button></div></div><div class="of-scene-wrap"><div class="of-scene-title">胶合双片 · 几何与光线示意</div><div class="of-scene"></div><div class="of-scene-hits">${sample.map((o,i)=>`<button type="button" data-select="${o.id}" aria-label="选择曲面 S${o.id}" class="cursor-interaction" style="left:${[27,40,52][i]}%"></button>`).join('')}</div></div><div class="of-scene-foot"><span><span class="of-scene-swatch"></span>参考光束</span><span>几何非比例</span></div></section>
+            <section class="of-panel of-analysis" aria-label="分析曲线"><div class="of-panel-head"><span class="of-panel-name">MTF</span><span class="of-sub">交互示意</span><div class="of-push of-view-tabs"><button type="button" data-view="optical" class="cursor-interaction">返回光路</button></div><select data-field aria-label="示例视场"><option value="0">轴上</option><option value="0.7">0.7 视场</option><option value="1">边缘</option></select></div><div class="of-stale-bar" data-stale hidden></div><div class="of-chart-area"><div class="of-chart"></div></div><div class="of-chart-controls"><button type="button" data-line="t" aria-pressed="true" class="cursor-interaction"><span class="of-legend-line"></span>T 子午</button><button type="button" data-line="s" aria-pressed="true" class="cursor-interaction"><span class="of-legend-line of-dashed"></span>S 弧矢</button><span class="of-sub">示意曲线</span></div><div class="of-frequency"><label class="of-chart-reading"><span>检查频率</span><output class="of-reading"></output><input type="range" data-frequency min="0" max="100" step="1" value="40" aria-label="检查曲线频率，lp/mm"></label></div></section>
+          </div>
+          <section class="of-panel of-prescription" aria-label="处方与任务事件"><div class="of-panel-head"><button type="button" data-bottom="prescription" aria-pressed="true" class="cursor-interaction">处方</button><button type="button" data-bottom="events" aria-pressed="false" class="cursor-interaction">任务事件</button><span class="of-push of-sub">只读 · mm</span></div><div class="of-table-scroll"><table class="of-table" aria-label="双片示例处方，选择行联动光路与属性"><thead><tr><th>曲面</th><th>半径 R</th><th>厚度 T</th><th>材料</th></tr></thead><tbody><tr><td>OBJ</td><td>∞</td><td>∞</td><td>AIR</td></tr>${sample.map(o=>`<tr data-row="${o.id}"><td><button type="button" data-select="${o.id}" class="cursor-interaction" aria-label="在处方中选择 S${o.id}">S${o.id} · ${o.name}</button></td><td ${o.id===2?'data-radius-cell':''}>${o.radius}</td><td>${o.thickness}</td><td>${o.glass}</td></tr>`).join('')}<tr><td>IMA</td><td>∞</td><td>—</td><td>AIR</td></tr></tbody></table></div><div class="of-log" hidden aria-label="模拟任务事件"></div><div class="of-table-note"><span>选择曲面以联动光路与检查器</span><span data-revision>rev 12</span></div></section>
+        </main>
+        <aside class="of-inspector" aria-label="选中曲面检查器"><div class="of-panel-head"><span class="of-panel-name">检查器</span><span class="of-push of-sub">只读</span></div><div class="of-inspector-body"><div class="of-properties"><div class="of-object-name" data-object>S2 · 胶合面</div><div class="of-sub">Standard · 示例曲面</div><div class="of-kv"><span>半径 / mm</span><strong data-radius>−39.605</strong></div><div class="of-kv"><span>厚度 / mm</span><strong data-thickness>7.334</strong></div><div class="of-kv"><span>材料</span><strong data-glass>N-SF2</strong></div></div><div class="of-section-gap"><div class="of-sub">分析快照 <span data-analysis-revision>rev 12</span></div><div class="of-state" data-state="current">与示例修订一致</div></div><div class="of-state-note" data-task-message>示例结果与处方修订对应。</div><div class="of-event-actions"><button type="button" data-update class="cursor-interaction">演示 Agent 更新</button><button type="button" data-arrive class="of-receive cursor-interaction" disabled>演示分析返回</button></div><div class="of-state-note">仅演示状态变化，不修改实际模型。对话继续在外部 Agent 中进行。</div></div></aside>
+      </div><footer class="of-statusbar"><span><span class="of-dot"></span>本地交互预览</span><span role="status" aria-live="polite" data-status>示例状态 · rev 12 已同步</span><span class="of-right">非实时光学结果</span></footer>`;
+    app.addEventListener('click',e=>{
+      const b=e.target.closest('button');if(!b||b.disabled)return;
+      if(b.dataset.select){s.selected=Number(b.dataset.select);refresh(s);persist();}
+      if(b.dataset.view){s.view=b.dataset.view;refresh(s);}
+      if(b.dataset.bottom){s.bottom=b.dataset.bottom;refresh(s);}
+      if(b.dataset.line){s.lines[b.dataset.line]=!s.lines[b.dataset.line];refresh(s);}
+      if(b.hasAttribute('data-focus')){s.focus=!s.focus;refresh(s);}
+      if(b.hasAttribute('data-update')){s.revision++;s.updated++;s.selected=2;s.phase='stale';s.events.push(['示例',`rev ${s.revision} · S2 半径更新，rev ${s.analysisRevision} 分析过期`]);refresh(s);}
+      if(b.hasAttribute('data-arrive')){
+        s.phase='running';s.events.push(['示例',`rev ${s.revision} · 模拟任务开始`]);refresh(s);
+        setTimeout(()=>{s.phase='current';s.analysisRevision=s.revision;s.analysisGeneration=s.updated%2;s.events.push(['示例',`rev ${s.revision} · 模拟结果返回，修订匹配`]);refresh(s);},1100);
+      }
+    });
+    app.querySelector('[data-theme]').addEventListener('change',e=>{apps.forEach(a=>{a.theme=e.target.value;refresh(a);});persist();});
+    app.querySelector('[data-field]').addEventListener('change',e=>{s.field=Number(e.target.value);chart(s);});
+    app.querySelector('[data-frequency]').addEventListener('input',e=>{s.frequency=Number(e.target.value);chart(s);});
+    const grip=app.querySelector('.of-grip');let drag=null;
+    grip.addEventListener('pointerdown',e=>{drag={x:e.clientX,width:app.querySelector('.of-tree').getBoundingClientRect().width};grip.setPointerCapture(e.pointerId);});
+    grip.addEventListener('pointermove',e=>{if(!drag)return;const width=Math.max(120,Math.min(230,drag.width+e.clientX-drag.x));app.style.setProperty('--of-tree-width',`${width}px`);});
+    grip.addEventListener('pointerup',()=>{drag=null;});grip.addEventListener('pointercancel',()=>{drag=null;});
+    grip.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();const w=app.querySelector('.of-tree').getBoundingClientRect().width;app.style.setProperty('--of-tree-width',`${Math.max(120,Math.min(230,w+(e.key==='ArrowRight'?10:-10)))}px`);});
+    const ro=new ResizeObserver(()=>{scene(s);chart(s);});ro.observe(app.querySelector('.of-scene'));ro.observe(app.querySelector('.of-chart'));
+    refresh(s);
+    if(globalThis.Tweak){const settings={density:'舒适',corner:4};const tweak=new Tweak({container:app,onChange:()=>{app.style.setProperty('--of-row',settings.density==='紧凑'?'31px':'35px');app.style.setProperty('--of-radius',`${settings.corner}px`);}});tweak.addSelect(settings,'density',{label:'处方密度',options:['舒适','紧凑']});tweak.addSlider(settings,'corner',{label:'控件圆角',min:2,max:8,step:1,unit:'px'});}
+  }
+  root.querySelectorAll('.of-app').forEach(create);
+  window.addEventListener('openai:set_globals',event=>{const state=event.detail?.globals?.widgetState?.modelContent;if(!state)return;apps.forEach(s=>{if(['light','dark','system'].includes(state.theme))s.theme=state.theme;refresh(s);});});
+  if(globalThis.lucide)lucide.createIcons({attrs:{width:15,height:15}});
+})();
+</script>

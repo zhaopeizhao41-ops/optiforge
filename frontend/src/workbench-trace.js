@@ -6,6 +6,37 @@ export function defaultTraceSettings(model) {
   return { fields: [...new Set([fields[0]?.index, fields[Math.floor(fields.length/2)]?.index, fields.at(-1)?.index].filter(Number.isInteger))],
     wavelengths: model.wavelengths.filter(w => w.is_primary).slice(0,1).map(w => w.index), pupil_count: 5, pupil_axis: 'Y' };
 }
+export function reconcileTraceSettings(model, chosen) {
+  const defaults = defaultTraceSettings(model), base = chosen || defaults;
+  const fields = new Set((model.trace_fields || model.fields).filter(f=>!f.ignore&&f.is_active!==false).map(f=>f.index));
+  const waves = new Set(model.wavelengths.map(w=>w.index));
+  const keepFields = base.fields.filter(i=>fields.has(i)).slice(0,9);
+  const keepWaves = base.wavelengths.filter(i=>waves.has(i)).slice(0,3);
+  const settings = { ...base, fields:keepFields.length?keepFields:defaults.fields,
+    wavelengths:keepWaves.length?keepWaves:defaults.wavelengths, pupil_axis:'Y' };
+  return { settings, adjusted: settingsId(base)!==settingsId(settings) };
+}
+
+export function traceBlocked(s, phase) {
+  if (!s || ['reconnecting','unavailable','connecting'].includes(phase)) return '当前工作台模型未连接';
+  if (!s.context_valid || s.validity!=='valid') return '模型状态待恢复，暂不显示旧光线';
+  if (!s.active_project || s.active_project!==s.model_project) return '项目与模型归属不同，暂不能追迹';
+  if (!s.proposal_confirmed) return '当前项目提案未确认，请在 Agent 中审阅并确认';
+  return '';
+}
+
+export function traceMessage(view, state, phase, settings) {
+  if (!view.enabled) return '';
+  const blocked = traceBlocked(state,phase);
+  if (blocked) return blocked;
+  if (modelBusy(state)) return '等待当前模型更新完成';
+  if (view.error) return view.error;
+  if (view.status==='queued') return '真实光线正在排队';
+  if (view.status==='running') return '正在计算真实光线';
+  if (view.result && !matchesTrace(view.result,state,settings,phase)) return '旧光线已失效，正在更新真实结果';
+  return { waiting:'等待真实追迹结果',queued:'真实光线正在排队',running:'正在计算真实光线',
+    unknown:'正在核对追迹结果，请稍候',failed:'追迹未完成，请查看光路详情' }[view.status] || '';
+}
 const reads = new Set(['__refresh__', '__trace__', 'zemax_get_workbench_snapshot', 'zemax_system_info', 'zemax_get_system_data',
   'zemax_get_project', 'zemax_list_projects', 'get_current_design_proposal', 'zemax_audit_requirements', 'zemax_lookup_manual']);
 export const modelBusy = (s) => s?.tasks.pending.some(t => !reads.has(t.tool));

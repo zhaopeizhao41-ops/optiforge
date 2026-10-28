@@ -255,6 +255,21 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(first["capabilities"], {"ray_trace": True, "analysis": False, "editing": False})
         json.dumps(first, allow_nan=False)
 
+    def test_unsaved_snapshot_reads_native_title_notes_and_empty_title_falls_back(self):
+        data = {"status":"success","surfaces":model()["surfaces"],"fields":[],"wavelengths":[],"general":{}}
+        notes = SimpleNamespace(Title="")
+        fake = SimpleNamespace(last_recovery_error=None,current_filepath=None,model_project=None,mode="Standalone",
+            system=SimpleNamespace(Mode="Sequential",MCE=SimpleNamespace(CurrentConfiguration=1,NumberOfConfigurations=1),
+                SystemData=SimpleNamespace(Units=SimpleNamespace(LensUnits="Millimeters"),TitleNotes=notes)))
+        with patch("core.zos_session.ZOSSession.get_instance",return_value=fake), patch("tools.system_tools.zemax_get_system_data",return_value=data), patch("core.workbench_snapshot.native_layout_issues",return_value=[]), patch("core.workbench_trace.native_field_table",return_value=([],"Radial")), patch("core.workbench_display.native_display_layout",return_value={"status":"unsupported"}):
+            self.assertEqual(capture_snapshot()["model"]["name"],"未命名模型")
+            notes.Title="未保存的真实设计"
+            self.assertEqual(capture_snapshot()["model"]["name"],notes.Title)
+            del notes.Title
+            self.assertEqual(capture_snapshot()["model"]["name"],"未命名模型")
+            del fake.system.SystemData.TitleNotes
+            self.assertEqual(capture_snapshot()["model"]["name"],"未命名模型")
+
 
 class WorkerTests(unittest.TestCase):
     def test_concurrent_calls_share_one_engine_thread(self):

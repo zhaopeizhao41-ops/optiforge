@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TraceController, defaultTraceSettings, matchesTrace, projection, settingsId } from '../src/workbench-trace.js';
+import { TraceController, defaultTraceSettings, reconcileTraceSettings, traceMessage, matchesTrace, projection, settingsId } from '../src/workbench-trace.js';
 import { createWorkbenchApi } from '../src/workbench-api.js';
 
 const settings = {fields:[1],wavelengths:[1],pupil_count:5,pupil_axis:'Y'};
@@ -19,6 +19,37 @@ function fixture(api={}) {
 test('defaults select actual min/middle/max and primary; subset order is canonical',()=>{
   assert.deepEqual(defaultTraceSettings(state().snapshot.model),{...settings,fields:[1,2,3]});
   assert.equal(settingsId({...settings,fields:[3,1]}),settingsId({...settings,fields:[1,3]}));
+});
+
+test('same model table changes remove invalid selection and fall back only to actual available items',()=>{
+  const model=state().snapshot.model;
+  assert.deepEqual(reconcileTraceSettings(model,{...settings,fields:[1,99],wavelengths:[99]}),
+    {settings,adjusted:true});
+  const updated={...model,trace_fields:[{index:2,x:0,y:1},{index:3,x:0,y:2,ignore:true}],wavelengths:[{index:4,is_primary:true}]};
+  assert.deepEqual(reconcileTraceSettings(updated,settings),{settings:{...settings,fields:[2],wavelengths:[4]},adjusted:true});
+  assert.deepEqual(reconcileTraceSettings({...updated,trace_fields:[],wavelengths:[]},settings).settings,
+    {...settings,fields:[],wavelengths:[]});
+  assert.equal(reconcileTraceSettings(model,settings).adjusted,false);
+});
+
+test('visible messages explain authorization, disconnection, stale result, queue and failure',()=>{
+  const s=state(),view={enabled:true,status:'waiting'};
+  assert.match(traceMessage(view,{...s,proposal_confirmed:false},'synced',settings),/提案未确认/);
+  assert.match(traceMessage(view,s,'reconnecting',settings),/未连接/);
+  assert.match(traceMessage(view,{...s,model_project:'other'},'synced',settings),/归属不同/);
+  assert.match(traceMessage({...view,result:result()}, {...s,model_revision:2},'synced',settings),/已失效/);
+  assert.match(traceMessage({...view,status:'queued'},s,'synced',settings),/排队/);
+  assert.match(traceMessage({...view,status:'running'},s,'synced',settings),/正在计算/);
+  assert.equal(traceMessage({...view,status:'failed',error:'原生工具被占用'},s,'synced',settings),'原生工具被占用');
+  assert.equal(traceMessage({...view,enabled:false},s,'synced',settings),'');
+});
+
+test('unconfirmed imported project makes zero requests and resumes only after actual confirmation',async(t)=>{
+  const {c,calls}=fixture();t.after(()=>c.stop());
+  const s={...state(),proposal_confirmed:false};c.update(s,'synced',settings);c.enable(true);
+  await tick();assert.equal(calls.length,0);
+  c.update({...s,proposal_confirmed:true},'synced',settings);
+  await tick();assert.equal(calls.length,1);
 });
 test('orthogonal view is part of result identity and uses only symmetric contours',()=>{
   assert.notEqual(settingsId({...settings,pupil_axis:'X'}),settingsId(settings));

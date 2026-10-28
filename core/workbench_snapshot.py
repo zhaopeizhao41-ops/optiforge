@@ -200,7 +200,7 @@ def capture_snapshot():
         system = session.system
         units_name = str(system.SystemData.Units.LensUnits).split(".")[-1]
         filepath = session.current_filepath
-        model = {"name": Path(filepath).stem if filepath else str(system.SystemData.Title or "未命名模型"),
+        model = {"name": Path(filepath).stem if filepath else str(getattr(getattr(system.SystemData, "TitleNotes", None), "Title", "") or "未命名模型"),
                  "filepath": filepath, "project": session.model_project,
                  "units": UNIT_LABELS.get(units_name, units_name), "lens_units": units_name,
                  "system_mode": str(system.Mode).split(".")[-1],

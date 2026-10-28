@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, Fi
   Focus, Maximize2, Minus, Moon, Plus, RefreshCw, SlidersHorizontal, Sun } from 'lucide-react';
 import { Button, Modal, spring, useBox } from './ui.jsx';
 import { useWorkbenchSync } from './use-workbench-sync.js';
+import { SurfacePicker } from './SurfacePicker.jsx';
 
 const format = (value) => value === 'Infinity' ? '∞' : value === '-Infinity' ? '−∞'
   : typeof value === 'number' ? value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 }) : '—';
@@ -53,9 +54,8 @@ function NativeInspector({ model, selected, onSelect, onDetails }) {
   return <aside className="studio-inspector" aria-label="表面属性">
     <div className="studio-section-title">表面属性</div>
     <div className="studio-object-heading">
-      <select className="studio-native-picker" value={selected} aria-label="选择表面" onChange={(event) => onSelect(Number(event.target.value))}>
-        {model.surfaces.map((item) => <option key={item.index} value={item.index}>S{item.index} · {surfaceName(item, last)}</option>)}
-      </select>
+      <SurfacePicker key={model.filepath} value={selected} onChange={onSelect}
+        options={model.surfaces.map((item) => ({ value: item.index, label: `S${item.index} · ${surfaceName(item, last)}` }))} />
       <div className="studio-stepper"><Button className="studio-icon-button" aria-label="上一个表面" onClick={() => step(-1)}><ChevronLeft size={17} /></Button>
         <Button className="studio-icon-button" aria-label="下一个表面" onClick={() => step(1)}><ChevronRight size={17} /></Button></div>
     </div>

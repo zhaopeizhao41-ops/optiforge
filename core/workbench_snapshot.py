@@ -112,6 +112,15 @@ def build_layout(model):
     # Unsupported coordinate frames may affect every subsequent surface.
     if result["issues"]:
         return result
+    for surface in surfaces[1:-1]:
+        try:
+            sag(surface["radius"], surface["conic"], surface["semi_diameter"])
+        except (ValueError, TypeError, OverflowError) as error:
+            result["issues"].append(
+                f'S{surface["index"]}：{error}（半径 {surface["radius"]:.6g} {model["units"]}，'
+                f'半口径 {surface["semi_diameter"]:.6g} {model["units"]}，圆锥系数 {surface["conic"]:.6g}）')
+    if result["issues"]:
+        return result
     maximum = max(surface["semi_diameter"] for surface in surfaces[1:-1])
     vertex = 0.0
     try:

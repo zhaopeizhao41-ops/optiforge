@@ -66,6 +66,22 @@ class GeometryTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 sag(*values)
 
+    def test_out_of_domain_surfaces_report_each_index_and_preserve_prescription(self):
+        data = model()
+        data["surfaces"][1].update(radius=-1.8205879295825702, semi_diameter=7.5)
+        data["surfaces"][2].update(radius=-6.089717157889521, semi_diameter=7.5)
+        original = deepcopy(data)
+        layout = build_layout(data)
+        self.assertEqual(layout["status"], "unsupported")
+        self.assertEqual(len(layout["issues"]), 2)
+        self.assertIn("S1", layout["issues"][0])
+        self.assertIn("-1.82059 mm", layout["issues"][0])
+        self.assertIn("S2", layout["issues"][1])
+        self.assertIn("7.5 mm", layout["issues"][1])
+        self.assertEqual(layout["surfaces"], [])
+        self.assertEqual(layout["elements"], [])
+        self.assertEqual(data, original)
+
     def test_object_infinity_not_used_as_internal_distance(self):
         layout = build_layout(model())
         self.assertEqual(layout["status"], "ready")

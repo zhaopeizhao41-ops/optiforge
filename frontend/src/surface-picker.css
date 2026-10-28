@@ -1,0 +1,16 @@
+#optiforge-soft-studio .studio-surface-picker { position: relative; flex: 1; min-width: 0; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-trigger { width: 100%; justify-content: space-between; gap: 8px; padding: 8px 10px; min-height: 38px; border: 1px solid transparent; background: var(--st-soft); border-radius: 12px; font-size: 15px; font-weight: 500; color: var(--st-text); transition: background .18s ease, box-shadow .18s ease; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-trigger:hover,
+#optiforge-soft-studio .studio-surface-picker .studio-picker-trigger[aria-expanded="true"] { background: var(--st-accent-soft); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-trigger:focus { outline: none; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-trigger:focus-visible { box-shadow: 0 0 0 3px var(--st-accent-soft); border-color: var(--st-edge); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-chevron { display: flex; flex-shrink: 0; color: var(--st-muted); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-menu { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: min(304px, calc(100vw - 48px)); overflow-y: auto; overscroll-behavior: contain; padding: 6px; background: var(--st-panel); border: 1px solid var(--st-line); border-radius: 17px; box-shadow: 0 12px 36px color-mix(in srgb, var(--st-text) 12%, transparent); scrollbar-width: thin; scrollbar-color: var(--st-line) transparent; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-menu[data-side="above"] { top: auto; bottom: calc(100% + 8px); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-option { position: relative; display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 9px 11px; border-radius: 11px; cursor: pointer; font-size: 14px; line-height: 1.45; color: var(--st-muted); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-option[aria-selected="true"],
+#optiforge-soft-studio .studio-surface-picker .studio-picker-option[data-active="true"] { color: var(--st-text); }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-option-label { position: relative; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-option > svg { position: relative; flex-shrink: 0; }
+#optiforge-soft-studio .studio-surface-picker .studio-picker-highlight { position: absolute; inset: 0; border-radius: 11px; background: var(--st-accent-soft); }

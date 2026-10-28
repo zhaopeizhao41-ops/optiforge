@@ -197,7 +197,12 @@ class FakeMFE:
     def AddOperand(self):
         op = FakeOperand()
         self.operands.append(op)
+        op.RowIndex = len(self.operands)
+        self.NumberOfOperands = len(self.operands)
         return op
+
+    def GetOperandAt(self, index):
+        return self.operands[index - 1]
 
     def CalculateMeritFunction(self):
         return 0.0

@@ -86,6 +86,11 @@ from tools import (
 )
 from domain.operand_kb import OPERAND_DATABASE
 from domain.zemax_rules import OpticalRuleCheck
+from tools.workbench_tools import zemax_get_workbench_snapshot as _get_workbench_snapshot
+from core.workbench_client import route_tool_aliases
+
+# Opt-in shared execution; no automatic fallback to a different native session.
+route_tool_aliases(globals())
 
 MANDATORY_WORKFLOW_INSTRUCTIONS = """
 === ZEMAX OPTICSTUDIO AUTONOMOUS OPTICAL DESIGN STANDARD OPERATING PROCEDURE (SOP) ===
@@ -199,6 +204,12 @@ app = MCPServer(
 # ==============================================================================
 # MCP Tools - System Management
 # ==============================================================================
+
+@app.tool()
+def zemax_get_workbench_snapshot() -> str:
+    """Read the active model and its supported YZ contours for the local workbench."""
+    return json.dumps(_get_workbench_snapshot(), ensure_ascii=False, indent=2)
+
 
 @app.tool()
 def zemax_system_info() -> str:

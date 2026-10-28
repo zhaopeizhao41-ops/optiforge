@@ -83,8 +83,10 @@ from tools.cad_export_tools import (
     zemax_export_optical_drawing,
     zemax_export_prescription_for_cad,
 )
+from tools.workbench_tools import zemax_get_workbench_snapshot
 
 __all__ = [
+    "zemax_get_workbench_snapshot",
     "zemax_system_info",
     "zemax_new_file",
     "zemax_load_file",

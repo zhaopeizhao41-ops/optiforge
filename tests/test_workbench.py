@@ -4,10 +4,12 @@ Uses fake engine tools and temporary files; never connects to OpticStudio.
 """
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import asyncio
 import http.client
 import inspect
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -22,7 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.workbench_client import WorkbenchClient, route_tool_aliases
 from core.workbench_service import EngineWorker, WorkbenchHTTPServer, write_service_file
-from core.workbench_snapshot import build_layout, capture_snapshot, json_safe, native_layout_issues, sag
+from core.workbench_snapshot import build_layout, capture_snapshot, json_safe, minimum_surface_gap, native_layout_issues, sag
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def surface(index, radius=0., thickness=0., material="", half=5., **extra):
@@ -35,6 +39,14 @@ def model():
         surface(0, math.inf, math.inf, half=math.inf),
         surface(1, 20., 4., "N-BK7", is_test=True),
         surface(2, -20., 30.), surface(3, math.inf, math.inf, half=2.)]}
+
+
+def two_lenses(air_gap=.1):
+    return {"units": "mm", "system_mode": "Sequential", "surfaces": [
+        surface(0, math.inf, math.inf, half=math.inf),
+        surface(1, 0., 2., "N-BK7"), surface(2, 20., air_gap, "AIR"),
+        surface(3, -20., 2., "N-BK7"), surface(4, 0., 30., "AIR"),
+        surface(5, math.inf, math.inf, half=2.)]}
 
 
 class GeometryTests(unittest.TestCase):
@@ -95,6 +107,101 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(build_layout(data)["units"], "in")
         data["system_mode"] = "NonSequential"
         self.assertEqual(build_layout(data)["status"], "unsupported")
+
+    def test_air_gap_collision_is_rejected_without_changing_prescription(self):
+        # Independent spherical-circle sag: both glass layers have positive
+        # thickness, but their shared air clearance is negative at y=5 mm.
+        expected = .1 - 2 * (20 - math.sqrt(20 ** 2 - 5 ** 2))
+        self.assertAlmostEqual(expected, -1.170166537925831, places=12)
+        for unit, scale in (("mm", 1.), ("m", .001)):
+            data = two_lenses()
+            data["units"] = unit
+            for row in data["surfaces"]:
+                for key in ("radius", "thickness", "semi_diameter"):
+                    row[key] *= scale
+            original = deepcopy(data)
+            layout = build_layout(data)
+            with self.subTest(unit=unit):
+                self.assertEqual(layout["status"], "unsupported")
+                self.assertIn("S2 与 S3", layout["issues"][0])
+                self.assertIn("空气", layout["issues"][0])
+                self.assertEqual(layout["surfaces"], [])
+                self.assertEqual(layout["elements"], [])
+                self.assertEqual(data, original)
+
+    def test_positive_air_clearance_and_unequal_apertures_remain_supported(self):
+        self.assertGreater(2 - 2 * (20 - math.sqrt(20 ** 2 - 5 ** 2)), 0.)
+        self.assertEqual(len(build_layout(two_lenses(2.))["elements"]), 2)
+        for first_half, second_half in ((1., 5.), (5., 1.)):
+            data = two_lenses()
+            data["surfaces"][2]["semi_diameter"] = first_half
+            data["surfaces"][3]["semi_diameter"] = second_half
+            # The common clear aperture has y <= 1 mm; no edge collision there.
+            self.assertGreater(.1 - 2 * (20 - math.sqrt(20 ** 2 - 1 ** 2)), 0.)
+            self.assertEqual(build_layout(data)["status"], "ready")
+
+    def test_conic_interior_collision_between_drawing_samples_is_rejected(self):
+        data = two_lenses(.00625 - 1e-8)
+        front, back = data["surfaces"][2:4]
+        front["conic"] = -1.
+        back.update(radius=21., conic=3.)
+        # Independent formulas: front z=y^2/40, back z=(21-sqrt(441-4*y^2))/4.
+        # Their slope equality is at y=sqrt(10.25), where sag_front-sag_back=.00625.
+        drawing_gaps = [front["thickness"] + (21 - math.sqrt(441 - 4 * y ** 2)) / 4 - y ** 2 / 40
+                        for y in (5 * (2 * i / 96 - 1) for i in range(97))]
+        self.assertGreater(min(drawing_gaps), 0.)
+        gap, height = minimum_surface_gap(front, back, front["thickness"], 5.)
+        self.assertAlmostEqual(height, math.sqrt(10.25), places=12)
+        self.assertAlmostEqual(gap, -1e-8, places=12)
+        layout = build_layout(data)
+        self.assertEqual(layout["status"], "unsupported")
+        self.assertIn("S2 与 S3", layout["issues"][0])
+        self.assertEqual((layout["surfaces"], layout["elements"]), ([], []))
+        # Reflect both curvatures: the stationary point becomes a maximum, so
+        # the minimum must instead be the aperture endpoint.
+        front["radius"], back["radius"] = -20., -21.
+        gap, height = minimum_surface_gap(front, back, front["thickness"], 5.)
+        self.assertEqual(height, 5.)
+        self.assertAlmostEqual(gap, front["thickness"] + (math.sqrt(341) - 21) / 4 + 25 / 40, places=12)
+
+    def test_cemented_interface_and_coincident_zero_air_boundary_are_valid(self):
+        data = two_lenses(2.)
+        del data["surfaces"][3]  # One shared surface between the two glasses.
+        data["surfaces"][2]["material"] = "N-SF11"
+        for i, row in enumerate(data["surfaces"]):
+            row["index"] = i
+        layout = build_layout(data)
+        self.assertEqual(layout["status"], "ready")
+        self.assertEqual([(e["front"], e["back"]) for e in layout["elements"]], [(1, 2), (2, 3)])
+        contact = two_lenses(0.)
+        contact["surfaces"][3]["radius"] = 20.
+        self.assertEqual(build_layout(contact)["status"], "ready")
+
+    def test_zero_thickness_virtual_stop_neither_causes_nor_hides_collision(self):
+        for air_gap, expected in ((2., "ready"), (.1, "unsupported")):
+            data = two_lenses(air_gap)
+            dummy = surface(3, 0., 0., "AIR")
+            dummy["is_stop"] = True
+            data["surfaces"].insert(3, dummy)
+            for i, row in enumerate(data["surfaces"]):
+                row["index"] = i
+            layout = build_layout(data)
+            with self.subTest(air_gap=air_gap):
+                self.assertEqual(layout["status"], expected)
+                if expected == "ready":
+                    self.assertTrue(layout["surfaces"][2]["is_stop"])
+                    self.assertEqual(len(layout["elements"]), 2)
+                else:
+                    self.assertIn("S2 与 S4", layout["issues"][0])
+                    self.assertEqual((layout["surfaces"], layout["elements"]), ([], []))
+
+    def test_zero_glass_thickness_is_rejected_even_for_planes(self):
+        data = model()
+        data["surfaces"][1].update(radius=0., thickness=0.)
+        data["surfaces"][2]["radius"] = 0.
+        layout = build_layout(data)
+        self.assertEqual(layout["status"], "unsupported")
+        self.assertEqual((layout["surfaces"], layout["elements"]), ([], []))
 
     def test_optical_infinities_are_strict_json(self):
         safe = json_safe({"values": (math.inf, -math.inf, math.nan)})
@@ -268,12 +375,86 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             proxy(1, 2)
 
+    def test_nested_optical_infinity_keeps_strict_json_and_other_values(self):
+        payload = {"surfaces": [{"thickness": math.inf, "params": {"par1": -math.inf}}],
+                   "finite": [0, 1.25, -3.5], "label": "Infinity", "enabled": True, "optional": None}
+        result = WorkbenchClient(self.url, self.credentials).call("echo", {"value": payload})
+        self.assertEqual(result, {"status": "success", "value": {
+            "surfaces": [{"thickness": "Infinity", "params": {"par1": "-Infinity"}}],
+            "finite": [0, 1.25, -3.5], "label": "Infinity", "enabled": True, "optional": None}})
+        self.assertEqual(payload["surfaces"][0]["thickness"], math.inf)
+
+    def test_invalid_encoding_is_an_argument_error_before_transport(self):
+        client = WorkbenchClient(self.url, self.credentials)
+        with patch("core.workbench_client.urllib.request.Request", side_effect=AssertionError("request sent")):
+            for value in (math.nan, {"surfaces": [{"params": {"par1": math.nan}}]}, {1, 2}):
+                with self.subTest(value=value):
+                    self.assertEqual(client.call("echo", {"value": value})["code"], "INVALID_TOOL_ARGUMENTS")
+            self.assertEqual(client.call("echo", [1, 2])["code"], "INVALID_TOOL_ARGUMENTS")
+            self.assertEqual(client.call(1, {})["code"], "INVALID_TOOL_ARGUMENTS")
+        self.assertEqual(client.call("echo", {"value": 2.5}), {"status": "success", "value": 2.5})
+
+    def test_encoded_infinity_respects_finite_validation_and_proposal_gate(self):
+        from tools.surface_tools import zemax_surface_operations
+        self.engine.registry["zemax_surface_operations"] = zemax_surface_operations
+        proxy = WorkbenchClient(self.url, self.credentials).wrap(zemax_surface_operations)
+        with patch("core.zos_session.ZOSSession.get_instance", side_effect=AssertionError("native model accessed")) as native, \
+             patch("tools.project_manager.get_active_project_name", return_value="unconfirmed-fixture"), \
+             patch("tools.system_tools.get_current_design_proposal", return_value={"user_confirmed_to_simulate": False}):
+            rejected = proxy(surface_index=0, conic=math.inf)
+            self.assertEqual(rejected["status"], "error")
+            self.assertIn("conic must be finite", rejected["message"])
+            self.assertNotIn("code", rejected)  # Preserve the existing business error.
+            blocked = proxy(surface_index=0, thickness=math.inf)
+            self.assertEqual(blocked["code"], "PROPOSAL_NOT_CONFIRMED")
+            self.assertEqual(blocked["active_project"], "unconfirmed-fixture")
+            native.assert_not_called()
+
+    def test_real_stdio_mcp_parses_and_forwards_optical_infinity(self):
+        from core.input_validation import validate_arguments
+        from tools.surface_tools import zemax_surface_operations
+        received = []
+        signature = inspect.signature(zemax_surface_operations)
+        def simulated_surface_tool(**arguments):
+            received.append(arguments.copy())
+            bound = signature.bind(**arguments)
+            bound.apply_defaults()
+            validate_arguments("zemax_surface_operations", bound.arguments)
+            return {"status": "success", "thickness": float(arguments["thickness"]),
+                    "comment": arguments.get("comment")}
+        self.engine.registry["zemax_surface_operations"] = simulated_surface_tool
+
+        async def exercise():
+            from mcp import ClientSession
+            from mcp.client.stdio import StdioServerParameters, stdio_client
+            parameters = StdioServerParameters(command=sys.executable, args=["-B", str(ROOT / "server.py")], cwd=ROOT,
+                env={**os.environ, "OPTIFORGE_SERVICE_URL": self.url, "OPTIFORGE_SERVICE_FILE": str(self.credentials)})
+            with (self.root / "mcp.log").open("w", encoding="utf-8") as log:
+                async with stdio_client(parameters, errlog=log) as streams:
+                    async with ClientSession(*streams, read_timeout_seconds=20) as session:
+                        await session.initialize()
+                        for value, expected in ((12.5, 12.5), ("Infinity", "Infinity"), ("-Infinity", "-Infinity")):
+                            result = await session.call_tool("zemax_surface_operations", {
+                                "surface_index": 0, "thickness": value, "comment": "Infinity"})
+                            self.assertFalse(result.is_error)
+                            self.assertEqual(json.loads(result.content[0].text), {
+                                "status": "success", "thickness": expected, "comment": "Infinity"})
+                        count = len(received)
+                        invalid = await session.call_tool("zemax_surface_operations", {"surface_index": 0, "thickness": "NaN"})
+                        self.assertEqual(json.loads(invalid.content[0].text)["code"], "INVALID_TOOL_ARGUMENTS")
+                        self.assertEqual(len(received), count)
+        asyncio.run(exercise())
+        self.assertEqual([request["thickness"] for request in received], [12.5, "Infinity", "-Infinity"])
+        self.assertEqual([request["comment"] for request in received], ["Infinity"] * 3)
+
     def test_unavailable_proxy_never_falls_back_to_native(self):
         client = WorkbenchClient(self.url, self.root / "missing.json")
         self.assertEqual(client.call("echo", {"value": 1})["code"], "WORKBENCH_UNAVAILABLE")
         for url in ("https://localhost", "http://example.com", "http://127.0.0.1/extra", "http://name@localhost"):
             with self.assertRaises(ValueError):
                 WorkbenchClient(url)
+        self.stop()
+        self.assertEqual(WorkbenchClient(self.url, self.credentials).call("echo", {"value": 1})["code"], "WORKBENCH_UNAVAILABLE")
 
 
 if __name__ == "__main__":

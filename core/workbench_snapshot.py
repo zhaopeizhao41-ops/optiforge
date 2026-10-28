@@ -35,6 +35,60 @@ def sag(radius, conic, height):
     return curvature * height ** 2 / (1 + math.sqrt(max(0, discriminant)))
 
 
+def minimum_surface_gap(front, back, distance, half):
+    """Minimum axial conic separation on the common circular aperture.
+
+    For z'(y) = y / (R * sqrt(1 - (1+k)*y*y/(R*R))), an interior
+    stationary point requires equally signed finite radii and
+    y*y = (R_back*R_back - R_front*R_front) / (k_back - k_front).
+    Endpoints plus this candidate exhaust the extrema; drawing samples are not
+    used for collision detection. Scale the radii before squaring them.
+    """
+    ra, rb = float(front["radius"]), float(back["radius"])
+    ka, kb = float(front["conic"]), float(back["conic"])
+    heights = [0., half]
+    if (ra != 0 and rb != 0 and math.isfinite(ra) and math.isfinite(rb)
+            and (ra > 0) == (rb > 0) and ka != kb):
+        scale = max(abs(ra), abs(rb))
+        delta_k = kb - ka
+        if not math.isfinite(delta_k):
+            raise ValueError("圆锥系数差值超出可计算范围")
+        squared = ((rb - ra) / scale) * (rb / scale + ra / scale) / delta_k
+        if squared > 0 and math.isfinite(squared):
+            height = scale * math.sqrt(squared)
+            if 0 < height < half:
+                heights.append(height)
+    candidates = [(math.fsum((distance, sag(rb, kb, height), -sag(ra, ka, height))), height)
+                  for height in heights]
+    if not all(math.isfinite(gap) for gap, _ in candidates):
+        raise ValueError("曲面间距超出可计算范围")
+    return min(candidates)
+
+
+def _is_air(surface):
+    return surface["material"].strip().upper() in {"", "AIR"}
+
+
+def _check_clearances(surfaces, contours):
+    # A Standard row in air on both sides is a reference/stop plane, not a
+    # glass boundary. Keep it in the drawing, but check across it so that a
+    # zero-thickness dummy neither causes a false collision nor hides one.
+    boundaries = [i for i in range(1, len(surfaces))
+                  if i == len(surfaces) - 1 or not (_is_air(surfaces[i - 1]) and _is_air(surfaces[i]))]
+    for start, end in zip(boundaries, boundaries[1:]):
+        front, back = surfaces[start], surfaces[end]
+        half = min(abs(contours[start - 1]["points"][-1][1]), abs(contours[end - 1]["points"][-1][1]))
+        distance = math.fsum(row["thickness"] for row in surfaces[start:end])
+        gap, _ = minimum_surface_gap(front, back, distance, half)
+        # Relative length tolerance keeps the same verdict after a unit change.
+        tolerance = 1e-10 * max(half, abs(distance))
+        if _is_air(front):
+            if gap < -tolerance:
+                raise ValueError(f'S{front["index"]} 与 S{back["index"]} 的空气层轮廓相交')
+        elif gap <= tolerance:
+            raise ValueError(f'S{front["index"]} 与 S{back["index"]} 的镜片厚度不为正或轮廓相交')
+
+
 def build_layout(model):
     """Build a single-scale axial section, including the native image position."""
     result = {"status": "unsupported", "plane": "YZ", "units": model["units"],
@@ -78,20 +132,13 @@ def build_layout(model):
                                        "points": points})
             if not image:
                 vertex += surface["thickness"]
+        _check_clearances(surfaces, result["surfaces"])
         for i, surface in enumerate(surfaces[1:-1]):
-            material = surface["material"].upper()
-            if material in {"", "AIR"}:
+            if _is_air(surface):
                 continue
             front, back = result["surfaces"][i:i + 2]
             if back["is_image"]:
                 raise ValueError(f'S{surface["index"]} 材料延伸到像面，无法构成封闭镜片')
-            other = surfaces[i + 2]
-            common_half = min(surface["semi_diameter"], other["semi_diameter"])
-            for y in (common_half * (2 * j / 96 - 1) for j in range(97)):
-                gap = (back["vertex_z"] + sag(other["radius"], other["conic"], y)
-                       - front["vertex_z"] - sag(surface["radius"], surface["conic"], y))
-                if gap <= 0:
-                    raise ValueError(f'S{surface["index"]} 与 S{other["index"]} 的镜片轮廓相交')
             result["elements"].append({"front": front["index"], "back": back["index"],
                                        "material": surface["material"],
                                        "points": front["points"] + list(reversed(back["points"]))})

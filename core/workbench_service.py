@@ -1,53 +1,19 @@
 """Loopback HTTP host and a single owner thread for all ZOS-API operations."""
-from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
+import os
 from pathlib import Path
 import secrets
 import urllib.parse
 import uuid
 
 from core.workbench_client import SERVICE_FILE
+from core.workbench_engine import EngineWorker
 from core.workbench_snapshot import json_safe
+from core.workbench_state import PROTOCOL_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-class EngineWorker:
-    def __init__(self, registry=None):
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="optiforge-engine")
-        self.registry = registry
-
-    def _call(self, name, arguments):
-        try:
-            if self.registry is None:
-                import tools
-                self.registry = {key: getattr(tools, key) for key in tools.__all__}
-            if name not in self.registry:
-                return {"status": "error", "code": "UNKNOWN_TOOL", "message": "未知工具"}
-            return json_safe(self.registry[name](**arguments))
-        except Exception as error:
-            return {"status": "error", "message": str(error)}
-
-    def call(self, name, arguments=None):
-        return self.executor.submit(self._call, name, arguments or {}).result()
-
-    def load_model(self, filepath):
-        # Keep load + read in one queue item: a second import must not replace
-        # the model between these two operations.
-        def load_and_read():
-            loaded = self._call("zemax_load_file", {"filepath": str(filepath)})
-            return self._call("zemax_get_workbench_snapshot", {}) if loaded.get("status") == "success" else loaded
-        return self.executor.submit(load_and_read).result()
-
-    def close(self):
-        def close_session():
-            from core.zos_session import ZOSSession
-            if ZOSSession._instance is not None:
-                ZOSSession._instance.close()
-        self.executor.submit(close_session).result()
-        self.executor.shutdown(wait=True)
 
 
 class WorkbenchHTTPServer(ThreadingHTTPServer):
@@ -59,14 +25,23 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
         self.dist = Path(dist or ROOT / "frontend" / "dist").resolve()
         super().__init__(address, WorkbenchHandler)
 
+    def shutdown(self):
+        self.engine.state.close()
+        super().shutdown()
+
+    def server_close(self):
+        self.engine.state.close()
+        super().server_close()
+
 
 class WorkbenchHandler(BaseHTTPRequestHandler):
-    server_version = "OptiForge/0.3"
+    server_version = "OptiForge/0.4"
 
     def log_message(self, *args):
         pass
 
     def _json(self, payload, status=200):
+        payload = {"protocol_version": PROTOCOL_VERSION, **payload}
         self._send(json.dumps(json_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8"),
                    "application/json; charset=utf-8", status)
 
@@ -106,9 +81,20 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json({"status": "success", "service": "optiforge-workbench", "schema_version": 1})
         elif path == "/api/session":
-            self._json({"token": self.server.token})
+            self._json({"token": self.server.token, "service_instance_id": self.server.engine.state.context()["service_instance_id"]})
         elif path == "/api/state":
-            self._json(self.server.engine.call("zemax_get_workbench_snapshot"))
+            self._json(self.server.engine.state.read())
+        elif path == "/api/events":
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                after = int(query["after_seq"][0])
+                timeout = int(query.get("timeout_ms", ["20000"])[0])
+                instance = query["instance_id"][0]
+                if not 0 <= timeout <= 20000:
+                    raise ValueError("事件等待最长 20 秒")
+                self._json(self.server.engine.state.wait_events(instance, after, timeout))
+            except (KeyError, ValueError) as error:
+                self._json({"status": "error", "message": f"Invalid event cursor: {error}"}, 400)
         elif path.startswith("/api/"):
             self._json({"status": "error", "message": "Unknown endpoint"}, 404)
         else:
@@ -137,6 +123,14 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             path = urllib.parse.urlsplit(self.path).path
             content_type = self.headers.get("Content-Type", "").split(";")[0]
             if path == "/api/model/import":
+                if self.headers.get("X-OptiForge-Protocol") != str(PROTOCOL_VERSION):
+                    self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新工作台客户端（协议 v2）。"}, 409)
+                    return
+                expected = json.loads(urllib.parse.unquote(self.headers.get("X-Expected-Context", "null")))
+                conflict = self.server.engine.state.validate_context(expected)
+                if conflict:
+                    self._json({"operation_id": None, "result": conflict, "context": self.server.engine.state.context()})
+                    return
                 if content_type != "application/octet-stream":
                     raise ValueError("Expected optical file content")
                 name = urllib.parse.unquote(self.headers.get("X-File-Name", ""))
@@ -151,14 +145,24 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 folder.mkdir(parents=True, exist_ok=False)
                 destination = folder / name
                 destination.write_bytes(content)
-                self._json(self.server.engine.load_model(destination))
+                self._json(self.server.engine.load_model(destination, expected_context=expected))
             elif path == "/api/tool":
                 if content_type != "application/json":
                     raise ValueError("Expected JSON tool arguments")
                 data = json.loads(content, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
                 if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not isinstance(data.get("arguments", {}), dict):
                     raise ValueError("Invalid tool request")
-                self._json(self.server.engine.call(data["name"], data.get("arguments", {})))
+                if data.get("protocol_version") != PROTOCOL_VERSION:
+                    self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新 MCP 桥接器（协议 v2）。"}, 409)
+                    return
+                self._json(self.server.engine.call_envelope(data["name"], data.get("arguments", {}),
+                                                           expected_context=data.get("expected_context")))
+            elif path == "/api/refresh":
+                data = json.loads(content)
+                if not isinstance(data, dict) or data.get("protocol_version") != PROTOCOL_VERSION:
+                    self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新工作台客户端（协议 v2）。"}, 409)
+                    return
+                self._json(self.server.engine.refresh(), 202)
             else:
                 self._json({"status": "error", "message": "Unknown endpoint"}, 404)
         except (ValueError, OSError) as error:
@@ -168,4 +172,11 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 def write_service_file(server, path=SERVICE_FILE):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "token": server.token}), encoding="utf-8")
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "token": server.token,
+                                        "protocol_version": PROTOCOL_VERSION,
+                                        "service_instance_id": server.engine.state.context()["service_instance_id"]}), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)

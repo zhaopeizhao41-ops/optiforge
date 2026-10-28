@@ -267,15 +267,18 @@ class WorkerTests(unittest.TestCase):
                 if not release.wait(2):
                     raise RuntimeError("test synchronization timed out")
             return {"status": "success"}
-        engine = EngineWorker({"zemax_load_file": load, "zemax_get_workbench_snapshot": lambda: dict(state)})
+        engine = EngineWorker({"zemax_load_file": load, "zemax_get_workbench_snapshot": lambda: {"status": "success", **state}})
         self.addCleanup(engine.executor.shutdown)
         with ThreadPoolExecutor(max_workers=2) as clients:
-            a = clients.submit(engine.load_model, "a.zmx")
+            context = engine.state.context()
+            a = clients.submit(engine.load_model, "a.zmx", expected_context=context)
             self.assertTrue(entered.wait(2))
-            b = clients.submit(engine.load_model, "b.zmx")
+            b = clients.submit(engine.load_model, "b.zmx", expected_context=context)
             release.set()
-            self.assertEqual(a.result()["file"], "a.zmx")
-            self.assertEqual(b.result()["file"], "b.zmx")
+            self.assertEqual(a.result()["state"]["snapshot"]["file"], "a.zmx")
+            self.assertEqual(b.result()["result"]["code"], "WORKBENCH_CONTEXT_STALE")
+            latest = engine.load_model("b.zmx", expected_context=engine.state.context())
+            self.assertEqual(latest["state"]["snapshot"]["file"], "b.zmx")
 
     def test_errors_return_data_instead_of_dropping_http_request(self):
         def fail():
@@ -304,6 +307,7 @@ class TransportTests(unittest.TestCase):
             "echo": lambda value=7: {"status": "success", "value": value},
         })
         self.addCleanup(self.engine.executor.shutdown)
+        self.engine.call("zemax_get_workbench_snapshot")
         self.server = WorkbenchHTTPServer(("127.0.0.1", 0), self.engine, dist)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
         self.thread.start()
@@ -320,6 +324,8 @@ class TransportTests(unittest.TestCase):
     def request(self, path, method="GET", data=None, headers=None, token=True):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
         merged = {"X-OptiForge-Token": self.server.token} if token else {}
+        if path == "/api/model/import":
+            merged.update({"X-OptiForge-Protocol": "2", "X-Expected-Context": json.dumps(self.engine.state.context())})
         merged.update(headers or {})
         connection.request(method, path, data, merged)
         response = connection.getresponse()
@@ -341,16 +347,16 @@ class TransportTests(unittest.TestCase):
     def test_bad_json_and_tool_parameters_are_reported(self):
         for body in (b"{", b'[]', b'{"name":"echo","arguments":[]}', b'{"name":"echo","arguments":{"value":NaN}}'):
             self.assertEqual(self.request("/api/tool", "POST", body, {"Content-Type": "application/json"})[0], 400)
-        status, body = self.request("/api/tool", "POST", b'{"name":"missing"}', {"Content-Type": "application/json"})
+        status, body = self.request("/api/tool", "POST", b'{"protocol_version":2,"name":"missing"}', {"Content-Type": "application/json"})
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["code"], "UNKNOWN_TOOL")
+        self.assertEqual(json.loads(body)["result"]["code"], "UNKNOWN_TOOL")
 
     def test_file_import_uses_local_copy_and_atomic_read(self):
         with patch("core.workbench_service.ROOT", self.root):
             status, body = self.request("/api/model/import", "POST", b"local fixture",
                 {"Content-Type": "application/octet-stream", "X-File-Name": "sample.zmx"})
         self.assertEqual(status, 200)
-        self.assertTrue(json.loads(body)["native"])
+        self.assertTrue(json.loads(body)["state"]["snapshot"]["native"])
         loaded = Path(self.loaded[0])
         self.assertTrue(loaded.is_relative_to(self.root / "output"))
         self.assertEqual(loaded.read_bytes(), b"local fixture")

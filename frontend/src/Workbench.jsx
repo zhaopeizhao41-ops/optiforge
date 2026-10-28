@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, FileUp,
   Focus, Maximize2, Minus, Moon, Plus, RefreshCw, SlidersHorizontal, Sun } from 'lucide-react';
 import { Button, Modal, spring, useBox } from './ui.jsx';
-import { importModel, readSnapshot } from './workbench-api.js';
+import { useWorkbenchSync } from './use-workbench-sync.js';
 
 const format = (value) => value === 'Infinity' ? '∞' : value === '-Infinity' ? '−∞'
   : typeof value === 'number' ? value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 }) : '—';
@@ -92,9 +92,9 @@ function ModelDetails({ snapshot, selected }) {
 }
 
 export default function Workbench() {
-  const [snapshot, setSnapshot] = useState(null);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState('');
+  const sync = useWorkbenchSync();
+  const { snapshot, error } = sync;
+  const busy = sync.phase === 'running' || sync.phase === 'connecting' || sync.importing;
   const [selected, setSelected] = useState(1);
   const [page, setPage] = useState('design');
   const [zoom, setZoom] = useState(100);
@@ -104,25 +104,33 @@ export default function Workbench() {
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('optiforge-theme') || 'system'; } catch { return 'system'; } });
   const [systemDark, setSystemDark] = useState(window.matchMedia('(prefers-color-scheme: dark)').matches);
   const file = useRef(null);
-  const generation = useRef(0);
+  const previousModel = useRef(null);
+  const workspace = useRef(null);
+  const [clock, setClock] = useState(Date.now());
   const resolvedTheme = theme === 'system' ? systemDark ? 'dark' : 'light' : theme;
   const model = snapshot?.model;
   const last = model?.surfaces.at(-1).index;
+  useLayoutEffect(() => {
+    if (workspace.current && sync.engine) workspace.current.dataset.renderedAt = String(Date.now());
+  }, [sync.engine]);
 
-  async function load(operation) {
-    const request = ++generation.current;
-    setBusy(true); setError('');
-    try {
-      const result = await operation();
-      if (request !== generation.current) return;
-      setSnapshot(result);
-      setSelected((current) => result.model.surfaces.some((surface) => surface.index === current) ? current : result.model.surfaces[0].index);
-    } catch (failure) {
-      if (request !== generation.current) return;
-      setSnapshot(null); setError(failure.message || '连接本地服务失败');
-    } finally { if (request === generation.current) setBusy(false); }
-  }
-  useEffect(() => { load(readSnapshot); return () => { generation.current += 1; }; }, []);
+  useEffect(() => {
+    if (!snapshot) return;
+    const identity = `${snapshot.sync.service_instance_id}:${snapshot.sync.model_id}`;
+    if (previousModel.current !== identity) {
+      setSelected(snapshot.model.surfaces.find((surface) => surface.index === 1)?.index ?? snapshot.model.surfaces[0]?.index);
+      setZoom(100); setModal(null); previousModel.current = identity;
+    } else {
+      setSelected((current) => snapshot.model.surfaces.some((surface) => surface.index === current) ? current : snapshot.model.surfaces[0]?.index);
+    }
+  }, [snapshot]);
+  const task = sync.engine?.tasks.pending.find((item) => item.status === 'running') || sync.engine?.tasks.pending[0];
+  useEffect(() => {
+    if (!task) return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [task?.operation_id]);
   useEffect(() => {
     const query = window.matchMedia('(prefers-color-scheme: dark)');
     const change = () => setSystemDark(query.matches);
@@ -139,9 +147,16 @@ export default function Workbench() {
   const physical = model?.surfaces.filter((surface) => surface.index > 0 && surface.index < last) || [];
   const around = Math.max(0, physical.findIndex((surface) => surface.index === selected) - 2);
   const chips = physical.slice(Math.min(around, Math.max(0, physical.length - 5)), Math.min(around, Math.max(0, physical.length - 5)) + 5);
+  const taskName = task && ({ zemax_load_file: '载入模型', __refresh__: '读取模型', zemax_get_workbench_snapshot: '读取模型',
+    zemax_surface_operations: '修改表面', zemax_apply_prescription: '更新处方', zemax_run_optimization: '优化模型',
+    zemax_run_analysis_suite: '分析模型', zemax_set_project: '切换项目' }[task.tool] || '工程操作');
+  const elapsed = task ? Math.max(0, Math.floor((clock - Date.parse(task.started_at || task.queued_at)) / 1000)) : 0;
+  const syncLabel = task ? `正在更新 · ${taskName} · ${elapsed} s` : sync.phase === 'synced' ? '已同步'
+    : sync.phase === 'connecting' ? '正在连接' : sync.phase === 'reconnecting' ? '正在重连' : '视图待恢复';
 
   return <MotionConfig reducedMotion={reduceMotion ? 'always' : 'user'} transition={spring}>
-    <div className="studio-shell">
+    <div className="studio-shell" ref={workspace} data-service-instance={sync.engine?.service_instance_id}
+      data-model-id={sync.engine?.model_id} data-state-version={sync.engine?.state_version} data-model-revision={sync.engine?.model_revision}>
       <header className="studio-topbar"><div className="studio-brand"><span className="studio-brand-mark" aria-hidden="true" />OptiForge</div>
         <nav className="studio-navigation" aria-label="主要页面">{[['design', '光路'], ['analysis', '分析']].map(([id, label]) => <Button key={id} aria-pressed={page === id} onClick={() => setPage(id)}>
           {page === id && <motion.span className="studio-nav-highlight" layoutId="native-nav" />}<span>{label}</span>
@@ -150,10 +165,10 @@ export default function Workbench() {
           <Button className="studio-icon-button" aria-label="外观与动效设置" onClick={() => setModal('appearance')}><SlidersHorizontal size={18} /></Button></div>
       </header>
       <input type="file" ref={file} accept=".zmx,.zos" hidden aria-label="选择光学模型文件" onChange={(event) => {
-        const chosen = event.target.files[0]; event.target.value = ''; if (chosen) { setPage('design'); setZoom(100); load(() => importModel(chosen)); }
+        const chosen = event.target.files[0]; event.target.value = ''; if (chosen) { setPage('design'); sync.importModel(chosen); }
       }} />
       <AnimatePresence mode="wait" initial={false}>{page === 'design' ? <motion.main key="design" className="studio-design-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
-        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1><Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy}><FileUp size={17} />打开模型</Button></div>
+        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1><Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy || sync.phase === 'reconnecting'}><FileUp size={17} />打开模型</Button></div>
         {error && <div className="studio-live-error" role="alert">{error}</div>}
         <div className={`studio-design-board ${focus ? 'is-focused' : ''} ${busy ? 'is-syncing' : ''}`}>
           <div className="studio-canvas-panel"><div className="studio-canvas-top"><span>2D 光路</span>{model && <Button className="studio-model-info" aria-label="系统设置" onClick={() => setModal('details')}>{model.units}</Button>}</div>
@@ -172,7 +187,7 @@ export default function Workbench() {
           {!focus && (model ? <NativeInspector model={model} selected={selected} onSelect={setSelected} onDetails={() => setModal('details')} /> : <aside className="studio-inspector" aria-label="表面属性"><div className="studio-section-title">表面属性</div></aside>)}
           <div className="studio-sync-aura" aria-hidden="true" />
         </div>
-        <div className="studio-workspace-footer"><Button className="studio-agent-pill" onClick={() => load(readSnapshot)} disabled={busy} aria-label="刷新真实模型"><RefreshCw size={16} className={busy ? 'studio-refresh-active' : ''} /><span aria-live="polite">{busy ? '正在读取' : '刷新模型'}</span></Button>
+        <div className="studio-workspace-footer"><Button className="studio-agent-pill" onClick={sync.refresh} disabled={busy || sync.phase === 'reconnecting'} aria-label="刷新真实模型" data-sync-state={sync.phase} data-stale={sync.stale}><RefreshCw size={16} className={busy ? 'studio-refresh-active' : ''} /><span role="status" aria-live="polite">{syncLabel}</span></Button>
           <Button className="studio-icon-button studio-about" aria-label="关于工作台" onClick={() => setModal('about')}><CircleHelp size={17} /></Button></div>
       </motion.main> : <motion.section key="analysis" className="studio-analysis-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
         <div className="studio-analysis-title"><Button className="studio-icon-button studio-back" aria-label="返回光路" onClick={() => setPage('design')}><ArrowLeft size={19} /></Button><h1>像质分析</h1></div>
@@ -180,7 +195,7 @@ export default function Workbench() {
       </motion.section>}</AnimatePresence>
       {modal === 'appearance' && <Modal title="外观与动效" onClose={() => setModal(null)}><div className="studio-modal-label">界面主题</div><div className="studio-theme-options">{[['light', '浅色', Sun], ['dark', '深色', Moon], ['system', '跟随系统', Focus]].map(([value, label, Icon]) => <Button key={value} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={19} /><span>{label}</span>{theme === value && <Check size={14} />}</Button>)}</div><label className="studio-motion-option"><span>减少动态效果</span><input type="checkbox" checked={reduceMotion} onChange={(event) => setReduceMotion(event.target.checked)} /></label></Modal>}
       {modal === 'details' && model?.surfaces.some((surface) => surface.index === selected) && <Modal className="studio-model-dialog" title={`S${selected} · ${surfaceName(model.surfaces.find((surface) => surface.index === selected), last)}`} onClose={() => setModal(null)}><ModelDetails snapshot={snapshot} selected={selected} /></Modal>}
-      {modal === 'about' && <Modal title="本地光学工作台" onClose={() => setModal(null)}><p className="studio-about-copy">处方和二维轮廓来自当前 Zemax 模型。当前为只读显示，光线与分析尚未接入。</p><p className="studio-about-copy">对话继续在外部 Agent 中进行。打开的文件会复制到本地项目目录。</p>{snapshot && <dl className="studio-detail-list"><div><dt>模型版本</dt><dd>{snapshot.revision}</dd></div><div><dt>读取时间</dt><dd>{new Date(snapshot.observed_at).toLocaleTimeString()}</dd></div></dl>}<Button className="studio-modal-done" onClick={() => setModal(null)}>知道了<Check size={16} /></Button></Modal>}
+      {modal === 'about' && <Modal title="本地光学工作台" onClose={() => setModal(null)}><p className="studio-about-copy">处方和二维轮廓随外部 Agent 操作自动更新。当前为只读显示，光线与分析尚未接入。</p><p className="studio-about-copy">对话继续在外部 Agent 中进行。打开的文件会复制到本地项目目录。</p>{snapshot && <dl className="studio-detail-list"><div><dt>模型版本</dt><dd>{snapshot.sync.model_revision}</dd></div><div><dt>读取时间</dt><dd>{new Date(snapshot.observed_at).toLocaleTimeString()}</dd></div></dl>}<Button className="studio-modal-done" onClick={() => setModal(null)}>知道了<Check size={16} /></Button></Modal>}
     </div>
   </MotionConfig>;
 }

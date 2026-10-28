@@ -19,8 +19,10 @@ def main():
     print(f"OptiForge: http://127.0.0.1:{server.server_port}", flush=True)
     try:
         if args.model:
-            result = engine.call("zemax_load_file", {"filepath": os.path.abspath(args.model)})
-            print(f"Model: {result.get('status')} {result.get('message', '')}", flush=True)
+            engine.submit("zemax_load_file", {"filepath": os.path.abspath(args.model)},
+                          expected_context=engine.state.context(), source="startup")
+        else:
+            engine.refresh(source="startup")
         server.serve_forever(poll_interval=.25)
     except KeyboardInterrupt:
         pass

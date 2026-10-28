@@ -352,10 +352,12 @@ Add the server to your MCP client configuration, for example Claude Desktop or C
 }
 ```
 
-#### Run the integration tests (requires OpticStudio)
+#### Run offline regression tests
 ```powershell
-python tests/test_zemax_tools.py
+python -B tests/regression_stage_two.py
+python -B tests/regression_stage_three.py
 ```
+These tests use fake native objects; they do not open or modify an OpticStudio model.
 
 #### Repository Layout
 ```text
@@ -363,7 +365,7 @@ server.py        FastMCP entry point (tools, resources, prompt)
 core/            ZOS-API session and .NET converters
 domain/          Design templates, Zemax rules, operand knowledge base, expert manual
 tools/           Tool implementations (system, setup, surfaces, optimization, analysis, validation, CAD)
-tests/           Integration test suite
+tests/           Offline regression tests
 assets/          README figures and logo
 output/          Per-project workspaces (git-ignored)
 ```
@@ -703,10 +705,12 @@ pip install -r requirements.txt
 }
 ```
 
-#### 运行集成测试（需要本机安装 OpticStudio）
+#### 运行离线回归测试
 ```powershell
-python tests/test_zemax_tools.py
+python -B tests/regression_stage_two.py
+python -B tests/regression_stage_three.py
 ```
+这些测试使用模拟原生对象，不会打开或修改 OpticStudio 模型。
 
 ---
 

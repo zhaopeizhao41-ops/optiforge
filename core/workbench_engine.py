@@ -137,15 +137,36 @@ class EngineWorker:
             self.state.trace_update(key, operation_id, "running")
             result = None
             invoked = False
+            observation_failed = False
+
+            def observe(outcome):
+                nonlocal observation_failed
+                uncertainty = self.uncertainty
+                try:
+                    self._publish(operation_id, ToolEffect("trace", True), outcome, False)
+                    current = self.state.read()
+                    if current["snapshot"] is None:
+                        raise RuntimeError(current["error"] or "模型快照不可用")
+                    return current
+                except Exception as error:
+                    # Do not retry this boundary: a later successful read cannot
+                    # certify the identity that failed observation in this task.
+                    observation_failed = True
+                    if uncertainty is not None:
+                        self.uncertainty = uncertainty
+                    current = self.state.read()
+                    self.state.publish(metadata={k: current[k] for k in ("active_project", "model_project", "proposal_confirmed")},
+                                       snapshot=None, validity="unavailable", context_valid=False,
+                                       error=str(error), operation_id=operation_id)
+                    raise
+
             try:
                 conflict = self.state.validate_context(expected) or eligibility(self.state.read())
                 if conflict:
                     raise TraceError(conflict["code"], conflict["message"])
                 if self.trace_blocked:
                     raise TraceError("TRACE_CLEANUP_FAILED", self.trace_blocked)
-                effect = ToolEffect("trace", True)
-                self._publish(operation_id, effect, {"status": "success"}, False)
-                current = self.state.read()
+                current = observe({"status": "success"})
                 conflict = self.state.validate_context(expected) or eligibility(current)
                 if conflict or trace_key(current, settings) != key:
                     raise TraceError((conflict or {}).get("code", "WORKBENCH_CONTEXT_STALE"),
@@ -153,14 +174,17 @@ class EngineWorker:
                 source = {k: current[k] for k in ("service_instance_id", "model_id", "model_revision", "active_project", "model_project")}
                 source.update(source_state_version=current["state_version"], configuration=current["snapshot"]["model"]["configuration"])
                 result = self.state.cached_trace(key)
+                if result is not None and any(result["source"].get(k) != source[k] for k in source if k != "source_state_version"):
+                    # Equal optical keys need not have equal project ownership.
+                    # Recompute instead of rebinding an immutable old source.
+                    result = None
                 if result is None:
                     model = deepcopy(current["snapshot"]["model"])
                     model["fields"] = model.get("trace_fields", model["fields"])
                     invoked = True
                     result = (self.trace_adapter or trace_native)(model, settings)
                     result.update(key=key, result_id=str(uuid.uuid4()), source=source)
-                self._publish(operation_id, effect, {"status": "success"}, False)
-                after = self.state.read()
+                after = observe({"status": "success"})
                 conflict = self.state.validate_context(expected) or eligibility(after)
                 if conflict or trace_key(after, settings) != key:
                     raise TraceError("TRACE_RESULT_STALE", "计算期间模型或项目状态改变，结果不予发布")
@@ -169,14 +193,13 @@ class EngineWorker:
                 result = {"status": "error", "code": getattr(error, "code", "TRACE_NATIVE_FAILED"), "message": str(error)}
                 if result["code"] == "TRACE_CLEANUP_FAILED":
                     self.trace_blocked = str(error)
-                elif invoked:
+                elif invoked and not observation_failed:
                     # Failure also has an observation boundary; a tool error alone
                     # never increments the optical revision or clears uncertainty.
                     try:
-                        self._publish(operation_id, ToolEffect("trace", True), result, False)
-                    except Exception as observation_error:
-                        self.state.publish(metadata={k: self.state.read()[k] for k in ("active_project", "model_project", "proposal_confirmed")},
-                                           snapshot=None, validity="unavailable", context_valid=False, error=str(observation_error))
+                        observe(result)
+                    except Exception:
+                        pass  # observe already invalidated the untrusted context.
             status = "succeeded" if succeeded(result) else "failed"
             self.state.trace_update(key, operation_id, status, result)
             self.state.finish(operation_id, status, result)
@@ -254,11 +277,13 @@ class EngineWorker:
 
     def _execute(self, operation_id, name, arguments, expected):
         effect = ToolEffect(native=True, observes_context=True) if name == "__refresh__" else self._effect(name)
+        # Even a read can open a native analysis; context publication can also
+        # capture the native model. Neither is safe after unknown tool cleanup.
+        if self.trace_blocked and (effect.native or effect.observes_context or effect.kind == "context"):
+            result = {"status": "error", "code": "TRACE_CLEANUP_FAILED", "message": self.trace_blocked}
+            self.state.finish(operation_id, "rejected", result)
+            return self._envelope(result, operation_id)
         if effect.protected:
-            if self.trace_blocked and effect.native:
-                result = {"status": "error", "code": "TRACE_CLEANUP_FAILED", "message": self.trace_blocked}
-                self.state.finish(operation_id, "rejected", result)
-                return self._envelope(result, operation_id)
             conflict = self.state.validate_context(expected)
             if conflict is None and not self.state.read()["context_valid"] and effect.kind != "replace":
                 conflict = {"status": "error", "code": "WORKBENCH_STATE_UNCERTAIN",

@@ -18,28 +18,47 @@ export function matchesTrace(result, s, settings, phase) {
     && result.source.configuration === s.snapshot.model.configuration && settingsId(result.settings) === settingsId(settings));
 }
 const signature = (s, settings) => s?.snapshot && `${modelId(s)}:${s.model_revision}:${s.snapshot.model.configuration}:${s.active_project}:${s.model_project}:${s.proposal_confirmed}:${settingsId(settings)}`;
+const disconnected = phase => ['reconnecting','unavailable','connecting'].includes(phase);
+const transientReadError = error => error.code !== 'TRACE_NOT_FOUND'
+  && (!Number.isInteger(error.status) || [408,429].includes(error.status) || error.status >= 500);
+const maxResultReads = 2;
 
 export class TraceController {
   constructor(api, { debounce = 400 } = {}) {
     this.api = api; this.debounce = debounce; this.listeners = new Set(); this.active = true;
     this.view = { enabled: false, result: null, status: 'off', error: '' }; this.abort = new AbortController();
+    this.generation = 0; this.connectionGeneration = 0;
   }
   subscribe(f) { this.listeners.add(f); return () => this.listeners.delete(f); }
   emit(v) { if (!this.active) return; this.view = { ...this.view, ...v }; this.listeners.forEach(f=>f(this.view)); }
   update(state, phase, settings) {
     const id = modelId(state);
-    if (this.identity && id !== this.identity) { this.emit({ enabled: false, result: null, status: 'off', error: '' }); this.attempted = null; }
+    const reconnected = disconnected(this.phase) && !disconnected(phase);
+    if (reconnected) this.connectionGeneration++;
+    if (this.identity !== undefined && id !== this.identity) {
+      this.generation++; this.abort.abort(); this.abort = new AbortController(); clearTimeout(this.timer);
+      this.pending = null; this.inflight = false; this.reading = false; this.attempted = null;
+      this.emit({ enabled: false, result: null, status: 'off', error: '' });
+    }
     this.identity = id; this.state = state; this.phase = phase; this.settings = settings;
+    if (this.pending?.awaitReconnect && this.pending.signature !== signature(state, settings)) {
+      this.pending = null; this.inflight = false;
+    }
+    if (this.pending?.awaitReconnect && reconnected) this.pending.awaitReconnect = false;
     if (!this.pending && this.view.status === 'unknown') {
       const recovered = [...(state?.trace_summary || [])].reverse().find(s=>s.settings && s.source
         && matchesTrace(s,state,settings,phase));
-      if (recovered) { this.pending = recovered; this.inflight = true; }
+      if (recovered) { this.pending = { ...recovered, signature: signature(state, settings) }; this.inflight = true; }
     }
     if (this.pending) this.reconcile();
     this.schedule();
   }
   enable(enabled) { this.emit({ enabled, error: '', status: enabled ? 'waiting' : 'off' }); if (enabled) this.attempted = null; this.schedule(); }
-  retry() { this.attempted = null; this.emit({ error: '' }); this.schedule(); }
+  retry() {
+    this.emit({ error: '' });
+    if (this.pending) { this.pending.awaitReconnect = false; this.reconcile(); }
+    else { this.attempted = null; this.schedule(); }
+  }
   schedule() {
     clearTimeout(this.timer);
     if (!this.active || !this.view.enabled || this.inflight || !traceAllowed(this.state, this.phase)
@@ -51,20 +70,22 @@ export class TraceController {
   }
   async submit(sig) {
     if (!this.active || !this.view.enabled || sig !== signature(this.state, this.settings) || !traceAllowed(this.state,this.phase)) return;
+    const generation = this.generation;
     this.inflight = true; this.attempted = sig; this.emit({ status: 'queued', error: '' });
     try {
       const reply = await this.api.trace(this.settings, this.state, this.abort.signal);
-      if (!this.active) return;
+      if (!this.active || generation !== this.generation) return;
       this.pending = { ...reply, signature: sig }; this.reconcile();
     } catch(error) {
-      if (!this.active) return;
+      if (!this.active || generation !== this.generation) return;
       this.inflight = false; this.emit({ status: 'unknown', error: error.message }); this.schedule();
     }
   }
   async reconcile() {
     const pending = this.pending;
+    if (!pending || this.reading || disconnected(this.phase)) return;
+    const generation = this.generation;
     const summary = this.state?.trace_summary?.find(t=>t.operation_id === pending.operation_id && t.key === pending.key);
-    if (this.reading) return;
     if (!summary) {
       if (this.state?.tasks.recent.some(t=>t.operation_id===pending.operation_id && ['succeeded','failed','rejected'].includes(t.status))) {
         this.pending = null; this.inflight = false;
@@ -73,16 +94,30 @@ export class TraceController {
       return;
     }
     if (['queued','running'].includes(summary.status)) { this.emit({ status: summary.status }); return; }
+    if (pending.awaitReconnect && summary.status === 'succeeded' && summary.result_id) return;
     this.reading = true;
+    const connectionGeneration = this.connectionGeneration;
+    let readingResult = false, keepPending = false;
     try {
       if (summary.status !== 'succeeded' || !summary.result_id) throw new Error(summary.message || '追迹结果不可用');
+      readingResult = true; pending.readAttempts = (pending.readAttempts || 0) + 1;
       const result = await this.api.readTrace(summary.result_id, this.abort.signal);
-      if (this.active && result.key === pending.key && matchesTrace(result,this.state,this.settings,this.phase))
+      // The hook still hides cached results during a disconnection. Keeping a
+      // matching result here allows it to reappear after state synchronization.
+      if (this.active && generation === this.generation && result.key === pending.key && matchesTrace(result,this.state,this.settings,'synced'))
         this.emit({ result, status: 'ready', error: '' });
     } catch(error) {
-      if (this.active) this.emit({ status: 'failed', error: error.message });
+      if (this.active && generation === this.generation) {
+        keepPending = readingResult && transientReadError(error) && pending.readAttempts < maxResultReads;
+        if (keepPending) pending.awaitReconnect = connectionGeneration === this.connectionGeneration || disconnected(this.phase);
+        this.emit({ status: 'failed', error: error.message });
+      }
     } finally {
-      this.reading = false; this.inflight = false; this.pending = null; this.schedule();
+      // A retired request may settle even when its transport ignored abort.
+      if (this.active && generation === this.generation) {
+        this.reading = false; this.inflight = keepPending; this.pending = keepPending ? pending : null; this.schedule();
+        if (keepPending && !pending.awaitReconnect) this.reconcile();
+      }
     }
   }
   stop() { this.active = false; clearTimeout(this.timer); this.abort.abort(); }

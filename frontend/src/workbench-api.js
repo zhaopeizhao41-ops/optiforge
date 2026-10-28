@@ -42,8 +42,9 @@ export function createWorkbenchApi(fetcher = globalThis.fetch.bind(globalThis)) 
     }
     let result;
     try { result = await response.json(); }
-    catch { throw new Error(read ? '无法读取工程服务响应' : '结果未知，请刷新核对'); }
-    if (!response.ok) throw new Error(result.message || (read ? '工程服务暂不可用' : '结果未知，请刷新核对'));
+    catch { throw Object.assign(new Error(read ? '无法读取工程服务响应' : '结果未知，请刷新核对'), { status: response.status }); }
+    if (!response.ok) throw Object.assign(new Error(result.message || (read ? '工程服务暂不可用' : '结果未知，请刷新核对')),
+      { status: response.status, code: result.code });
     if (signal?.aborted) throw signal.reason || new Error('Aborted');
     return version(result);
   }

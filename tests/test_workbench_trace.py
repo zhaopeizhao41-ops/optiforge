@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.workbench_trace import (TraceError, assemble, display_point, eligibility, matrix_from_native,
                                   normalize_fields, records, settings_for, trace_session)
 from core.workbench_engine import EngineWorker
+from core.workbench_effects import ToolEffect
 from core.workbench_service import WorkbenchHTTPServer
 from core.workbench_snapshot import build_layout
 
@@ -161,6 +162,88 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(before['state_version'],after['state_version']);self.assertEqual(after['model_revision'],before['model_revision'])
         self.assertIsNone(self.engine.uncertainty)
 
+    def assert_observation_invalidated(self, before):
+        after = self.engine.state.read()
+        self.assertFalse(after['context_valid'])
+        self.assertNotEqual(after['validity'], 'valid')
+        self.assertIsNone(after['snapshot'])
+        self.assertIsNone(after['snapshot_context'])
+        self.assertEqual(after['model_revision'], before['model_revision'])
+        self.assertGreater(after['state_version'], before['state_version'])
+        writes = []
+        self.engine.registry['protected_write'] = lambda: writes.append('write')
+        self.engine.effects = {'protected_write': ToolEffect('modify', True)}
+        old = {k: before[k] for k in self.engine.state.context()}
+        self.assertEqual(self.engine.call('protected_write', expected_context=old)['code'], 'WORKBENCH_CONTEXT_STALE')
+        self.assertEqual(self.engine.call('protected_write', expected_context=self.engine.state.context())['code'], 'WORKBENCH_STATE_UNCERTAIN')
+        self.assertEqual(self.request()[1]['code'], 'WORKBENCH_STATE_UNCERTAIN')
+        self.assertEqual(writes, [])
+
+    def test_observation_failures_invalidate_before_after_compute_and_cache(self):
+        for cached in (False, True):
+            for boundary in (1, 2):
+                for reader in ('metadata', 'capture'):
+                    with self.subTest(cached=cached, boundary=boundary, reader=reader):
+                        self.engine.metadata = self.metadata
+                        self.engine.capture = self.capture
+                        self.engine.refresh(); self.engine.refresh_future.result(timeout=2)
+                        self.engine.state.trace_results.clear()
+                        if cached:
+                            self.request()
+                        before = self.engine.state.read()
+                        calls_before = self.calls
+                        read = getattr(self, reader)
+                        observations = []
+                        def fail_once():
+                            observations.append(reader)
+                            if len(observations) == boundary:
+                                raise RuntimeError(f'{reader} unavailable')
+                            return read()
+                        setattr(self.engine, reader, fail_once)
+                        _, result = self.request()
+                        self.assertEqual(result['status'], 'error')
+                        self.assert_observation_invalidated(before)
+                        # A later successful retry must not hide the failed boundary.
+                        self.assertEqual(len(observations), boundary)
+                        self.assertEqual(self.calls - calls_before, int(not cached and boundary == 2))
+
+    def test_failed_computation_observation_also_invalidates(self):
+        before = self.engine.state.read()
+        def fail(m, s):
+            self.engine.metadata = lambda: (_ for _ in ()).throw(RuntimeError('metadata unavailable'))
+            raise TraceError('TRACE_TIMEOUT', 'timeout')
+        self.engine.trace_adapter = fail
+        _, result = self.request()
+        self.assertEqual(result['code'], 'TRACE_TIMEOUT')
+        self.assert_observation_invalidated(before)
+
+    def test_observation_error_preserves_existing_uncertainty(self):
+        before = self.engine.state.read()
+        self.engine.uncertainty = 'unresolved previous write'
+        self.engine.metadata = lambda: (_ for _ in ()).throw(RuntimeError('metadata unavailable'))
+        self.request()
+        self.assert_observation_invalidated(before)
+        self.assertEqual(self.engine.uncertainty, 'unresolved previous write')
+
+    def test_same_physical_key_recomputes_for_changed_project_without_rebinding_old_source(self):
+        reply_a, result_a = self.request()
+        before = self.engine.state.read()
+        self.engine.metadata = lambda: {**self.metadata(), 'active_project': 'b', 'model_project': 'b'}
+        self.engine.refresh(); self.engine.refresh_future.result(timeout=2)
+        reply_b, result_b = self.request()
+        self.assertEqual(reply_a['key'], reply_b['key'])
+        self.assertNotEqual(result_a['result_id'], result_b['result_id'])
+        self.assertEqual(self.calls, 2)
+        self.assertEqual(result_b['source']['active_project'], 'b')
+        self.assertEqual(result_b['source']['model_project'], 'b')
+        self.assertEqual(self.engine.state.get_trace(result_a['result_id']), result_a)
+        after = self.engine.state.read()
+        self.assertEqual(after['model_revision'], before['model_revision'])
+        self.assertEqual(after['model_id'], before['model_id'])
+        _, again = self.request()
+        self.assertEqual(again['result_id'], result_b['result_id'])
+        self.assertEqual(self.calls, 2)
+
     def test_concurrent_same_key_merges_and_other_settings_do_not(self):
         started=threading.Event();release=threading.Event()
         def slow(m,s):started.set();release.wait(2);return self.trace(m,s)
@@ -214,6 +297,32 @@ class EngineTests(unittest.TestCase):
         self.engine.trace_adapter=fail;before=self.engine.state.read();_,r=self.request()
         self.assertEqual(r['code'],'TRACE_CLEANUP_FAILED');self.assertEqual(self.engine.state.read()['model_revision'],before['model_revision'])
         self.engine.trace_adapter=self.trace;self.assertEqual(self.request()[1]['code'],'TRACE_CLEANUP_FAILED');self.assertEqual(self.calls,0)
+
+    def test_cleanup_failure_blocks_native_reads_and_observation_but_not_knowledge_or_cached_state(self):
+        self.request()
+        cached = next(iter(self.engine.state.trace_results))
+        before = self.engine.state.read()
+        calls = []
+        self.engine.registry.update({name: lambda: calls.append('native') or {'status': 'success'}
+                                     for name in ('zemax_generate_folded_drawing', 'zemax_audit_retroreflection',
+                                                  'zemax_system_info', 'zemax_get_project', 'zemax_set_project',
+                                                  'zemax_run_analysis_suite', 'zemax_surface_operations')})
+        self.engine.registry['zemax_lookup_manual'] = lambda: {'status': 'success', 'text': 'cached manual'}
+        self.engine.trace_blocked = 'tool stop/close unknown'
+        with patch.object(self.engine, 'capture', side_effect=AssertionError('must not observe native model')):
+            for name in ('zemax_generate_folded_drawing', 'zemax_audit_retroreflection', 'zemax_system_info',
+                         'zemax_get_project', 'zemax_set_project', 'zemax_run_analysis_suite',
+                         'zemax_surface_operations', '__refresh__'):
+                with self.subTest(name=name):
+                    result = self.engine.call(name, expected_context=self.engine.state.context())
+                    self.assertEqual(result['code'], 'TRACE_CLEANUP_FAILED')
+            self.assertEqual(self.engine.call('zemax_lookup_manual')['text'], 'cached manual')
+            self.assertIsNotNone(self.engine.state.get_trace(cached))
+            self.assertTrue(self.engine.state.wait_events(before['service_instance_id'], before['event_seq'], 0)['events'])
+        self.assertEqual(calls, [])
+        after = self.engine.state.read()
+        for key in ('model_revision', 'state_version', 'snapshot'):
+            self.assertEqual(after[key], before[key])
 
 
 class LifecycleTests(unittest.TestCase):

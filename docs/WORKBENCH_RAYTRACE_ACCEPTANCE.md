@@ -9,7 +9,7 @@
 - 单引擎队列、受上下文保护的只读计算；前后原生观察、缓存命中和合并请求均需门禁。追迹本身不改工程/模型版本，也不解除已有 uncertain。
 - POST `/api/trace` 接受任务；GET `/api/traces/<id>` 只读结果。任务摘要按 operation_id 保留，物理缓存按 key 复用；最多 8 结果、32 MiB，Future 和事件不保存交点副本。
 - 前端 400ms 合并；最多一个在途请求，模型变更后隐藏旧结果并重算，模型/实例切换重置开启状态。POST 网络错误不重放，已接受任务可从摘要恢复。
-- 独立绘图组件，YZ/XZ 本地等比例投影、视场图例、本地隐藏、波长线型、错误/截光详情。D2 严格拒绝完整轮廓，同时显示真实光线诊断。
+- 独立绘图组件，YZ/XZ 本地等比例投影、视场图例、本地隐藏、波长线型、错误/截光详情。D2 初版严格拒绝完整轮廓；用户反馈后的原生显示修复见文末。
 - 沿用 Motion / React / Lucide 和自定义 SurfacePicker；没有新增前端依赖。未接入点列图、MTF、波前、优化或独立计算内核。
 
 ## 开发验证
@@ -82,3 +82,29 @@ python -B tests/verify_workbench_raytrace_native.py --model 'D:\mcp gemini zemax
 具体 API 与方案问题见 [WORKBENCH_RAYTRACE_DESIGN_QUESTIONS.md](WORKBENCH_RAYTRACE_DESIGN_QUESTIONS.md)。本轮交付后停止扩展，等待规划复审和用户验收。
 
 本地交付分支为 `codex/visual-workbench-stage-one`；初版提交为 `6d2d811`（`feat: add native workbench ray tracing and diagnostic views`），首轮复审修复以 `fix: isolate trace lifecycles and invalidate failed observations` 标识。均不含并行 styles.css 修改，修复提交 SHA 随交接回复提供。停在规划复审与用户验收点。
+
+## 用户反馈修复：完整轮廓与隐藏详情（2026-10-28）
+
+基于用户四条浏览器意见修复，不改外部 `D:\mcp gemini zemax\plan.md`：
+
+- 新增 `display_layout`，采用原生 `LDE.GetSag` 的主矢高、`MechanicalSemiDiameter` 和绘图标志生成交互 SVG。严格 `layout` 的实数定义域、碰撞与材料边界检查保留，作为详情中的诊断，不再因诊断而清空原生显示轮廓。不改半径、口径、厚度、求解或原件。
+- 原生 D2 的球面超定义域主矢高饱和为半径；机械口径处保留平直边缘。water 文件最后一段材料直到像面也可明确显示为材料区域（`ends_at_image`），不将其宣称为独立可制造镜片。
+- 主画布移除常驻计数、长错误段和重跑行；“光路详情”唤出浮窗，背景 blur(8px)，统计、重跑和几何诊断放在浮窗内。按钮使用既有 Motion 弹簧交互，弹窗使用既有进入动画。设置、投影仍就近保留。
+- 画布采用视口高度预算，场景允许 flex 收缩，工具栏、图例和底部控件保留空间；320px 自动换行、场景最小高度 280px。全图按横纵同尺度适配，放大仍允许局部查看。
+- 该显示适配限定同轴 Sequential Standard、Squared 边缘、无隐藏面/自定义孔径/局部变换/反射；最多 200 个目标面、97 个常规高度采样并加精确圆锥边界和机械边缘，5 秒协作式预算。原生属性或矢高读取失败只禁用此显示层，不发布局部轮廓。单次原生调用本身不可由该预算中断。
+
+使用公开 ZOS-API 与官方示例，无新增开源内核或产品依赖、未反编译 Zemax。官方 `CrossSectionExport` 两份 PNG 作为对照，未将位图当成交互绘图层。Windows 原生窗口捕获在恢复重试后仍超时，因此使用成功的官方布局导出；未操作或改变用户 Zemax 窗口。原生证据目录为 `output/workbench_raytrace_acceptance/layout-review/`，含两份 `*-zemax.png`、`*-probe.json`。
+
+最终代码的只读复核（每文件 45 条、3 波长、5 pupil）：
+
+- **coaxial_dermatoscope_35mm**：990 个逐面光线交点，最大差 0；22 个显示面、13 个材料区域。110 个轮廓采样点另以 GetSag + GetGlobalMatrix 独立复核，最大差 2.8422e-14 mm。首次完整刷新约 1563ms，原生追迹约 766ms。
+- **water_objective_na09_475mm_portable**：945 个逐面光线交点，最大差 0；21 个显示面、13 个材料区域。105 个轮廓采样点独立复核，最大差 0。最终预览复跑首次完整刷新约 1422ms，原生追迹约 625ms。源 SHA256 `0d11ba20f393743a2c538ebd3d50237910b125f8986cb578f3993f85b1715c09`。
+- 两文件、各自提案与 project.json 字节、前后原生处方、state_version/model_revision 均保持不变。water 原提案 confirmed=true、缺 confirmed_at，报告如实保留，没有补写确认。运行记录为两项目的 `native-acceptance.json` / `native-result.json`；不与初版点数重复累计。
+
+差异复核结论：本轮没有用新的数学近似修正追迹，已有实光线逐点对照一致。主要差异来自轮廓被整图拒绝、机械口径漏读，以及比较时的视场/波长/采样设置不同。UI 默认主波长、实际最小/中间/最大三个视场、5 pupil，与 Zemax 对比时应设成相同参数；当前路径从 S1 开始，不画物面到 S1 的入射段。
+
+浏览器最终构建实测：1254×892，D2 22 面/13 区域/15 光线，底部控件 bottom=819、面板 bottom=836，未被面板裁切；water 21 面/13 区域/15 光线，深浅主题均可见。320×780 的 innerWidth=320、scrollWidth=305、sceneHeight=280，无横向溢出；详情宽273、x=16，blur(8px)，Escape 关闭并恢复到“光路详情”按钮。截图位于 reports：`coaxial-layout-final.png`、`water-layout-light.png`、`water-layout-dark.png`、`water-layout-320-final.png`、`layout-details-blur.png`。用户对美观、顺滑的验收仍由用户决定。
+
+软件回归 **243 项通过**（工作台124、旧第二批33、旧第三批33、前端53），生产构建和 `git diff --check` 通过。新增9个显示测试覆盖原生读取异常、超域显示与严格检查并存、机械边缘、像面材料区域、坐标拒绝、采样预算、重复观察稳定性。计时仅进入验收报告，不进入状态快照，以免每次读取都增加 state_version、使追迹失效。
+
+本轮本地修复提交以 `fix: render native lens outlines and simplify trace controls` 标识；未 push，未触碰并行 `styles.css` 内容（SHA256仍为 `0F5EEE8725E82CDBA37A228C095E1FF4527254D00F384BD557D43275FE3B67A8`）。新预览 water 为 `http://127.0.0.1:8770/`、D2 为 `http://127.0.0.1:8771/`；旧8767进程加载旧Python模块，不代表本轮版本。展示策略差异供规划复审，见问题文档Q4。

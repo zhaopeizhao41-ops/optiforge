@@ -210,6 +210,9 @@ def capture_snapshot():
                  "wavelengths": data["wavelengths"], "settings": data["general"],
                  "layout_issues": native_layout_issues(system)}
         layout = build_layout(model)
+        from core.workbench_display import native_display_layout
+        display = native_display_layout(system, model)
+        display["validation_issues"] = layout["issues"]
         safe_model = json_safe(model)
         from core.workbench_trace import native_field_table
         fields, normalization = native_field_table(system)
@@ -221,5 +224,5 @@ def capture_snapshot():
         return {"status": "success", "schema_version": 1, "revision": revision,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "connection": {"state": "connected", "engine": "zemax", "mode": session.mode},
-                "model": safe_model, "layout": json_safe(layout),
+                "model": safe_model, "layout": json_safe(layout), "display_layout": json_safe(display),
                 "capabilities": {"ray_trace": True, "analysis": False, "editing": False}}

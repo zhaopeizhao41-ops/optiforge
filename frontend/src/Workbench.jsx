@@ -142,8 +142,8 @@ export default function Workbench() {
         {error && <div className="studio-live-error" role="alert">{error}</div>}
         <div className={`studio-design-board ${focus ? 'is-focused' : ''} ${busy ? 'is-syncing' : ''}`}>
           <div className="studio-canvas-panel"><div className="studio-canvas-top"><span>2D 光路</span>{model && <Button className="studio-model-info" aria-label="系统设置" onClick={() => setModal('details')}>{model.units}</Button>}</div>
-            {snapshot && <TraceControls trace={trace} model={model} plane={plane} setPlane={setPlane} />}
-            {snapshot ? <NativeScene layout={snapshot.layout} trace={trace.result} plane={plane} selected={selected} onSelect={setSelected} zoom={zoom} />
+            {snapshot && <TraceControls trace={trace} model={model} plane={plane} setPlane={setPlane} layout={snapshot.display_layout || snapshot.layout} />}
+            {snapshot ? <NativeScene layout={snapshot.display_layout || snapshot.layout} trace={trace.result} plane={plane} selected={selected} onSelect={setSelected} zoom={zoom} />
               : <div className="studio-live-empty" role="status"><p>{busy ? '正在读取模型' : error ? '模型未连接' : '打开一个光学模型'}</p></div>}
             <div className="studio-surface-chips" aria-label="光学表面">{chips.map((surface) => <Button key={surface.index} aria-pressed={selected === surface.index} onClick={() => setSelected(surface.index)}>
               {selected === surface.index && <motion.span className="studio-chip-highlight" layoutId="native-surface" />}<span>S{surface.index}</span><span>{surfaceName(surface, last)}</span>

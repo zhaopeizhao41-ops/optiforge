@@ -1,12 +1,13 @@
 import React, { useMemo, useState, useLayoutEffect } from 'react';
 import { motion } from 'motion/react';
+import { Activity, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { Button, Modal, useBox } from './ui.jsx';
 import { SurfacePicker } from './SurfacePicker.jsx';
 import { projection } from './workbench-trace.js';
 import './workbench-trace.css';
 
 const colors = ['#c33f46', '#198868', '#bf841a', '#3974c5', '#bd5291', '#268f9c', '#9a722e', '#64852e', '#9a5e49'];
-export function TraceControls({ trace, model, plane, setPlane }) {
+export function TraceControls({ trace, model, plane, setPlane, layout }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const settings = trace.settings;
@@ -18,21 +19,20 @@ export function TraceControls({ trace, model, plane, setPlane }) {
   };
   const labels = { waiting: '准备追迹', queued: '追迹排队中', running: '正在追迹', unknown: '结果待核对', failed: '追迹未完成' };
   const count = trace.result?.counts;
+  const issues = [...new Set([...(layout?.issues || []), ...(layout?.validation_issues || [])])];
   return <>
     <div className="trace-toolbar">
       <Button className="trace-toggle" aria-pressed={trace.enabled} onClick={()=>trace.enable(!trace.enabled)}>
         <span className="trace-switch"><motion.span animate={{ x: trace.enabled ? 14 : 0 }} /></span>显示光线
       </Button>
       {trace.enabled && <>
-        <Button onClick={()=>setSettingsOpen(true)}>追迹设置</Button>
+        <Button onClick={()=>setSettingsOpen(true)} aria-label="追迹设置"><SlidersHorizontal size={16} /><span>设置</span></Button>
         <div className="trace-projections" aria-label="光线投影">{['YZ','XZ'].map(p=><Button key={p} aria-pressed={plane===p} onClick={()=>setPlane(p)}>{p}</Button>)}</div>
       </>}
+      <Button className="trace-info-button" onClick={()=>setDetailsOpen(true)} aria-label="光路详情">
+        <Activity size={16} /><span>光路详情</span>{(issues.length>0||trace.error)&&<span className="trace-info-dot" />}
+      </Button>
     </div>
-    {trace.enabled && <div className="trace-status" role="status" aria-live="polite">
-      {count ? <Button onClick={()=>setDetailsOpen(true)}>到达像面 {count.complete} · 截光 {count.vignetted} · 错误 {count.error}</Button>
-        : <span>{trace.blocked || trace.error || (!trace.result && trace.status === 'ready' ? '结果已过期' : labels[trace.status]) || '等待可追迹模型'}</span>}
-      <Button onClick={trace.retry} disabled={['running','queued'].includes(trace.status)}>重新追迹</Button>
-    </div>}
     {settingsOpen && <Modal title="光线追迹" className="trace-settings-dialog" onClose={()=>setSettingsOpen(false)}>
       <h3>视场</h3><div className="trace-options">{(model.trace_fields || model.fields).filter(f=>!f.ignore&&f.is_active!==false).map(f=><Button key={f.index}
         aria-pressed={settings.fields.includes(f.index)} onClick={()=>toggle('fields',f.index,9)}>F{f.index} · {f.x}, {f.y}</Button>)}</div>
@@ -41,12 +41,21 @@ export function TraceControls({ trace, model, plane, setPlane }) {
       <p>Px = 0 · Py = −1 至 1 · S1 → 像面</p>
       <Button className="studio-modal-done" onClick={()=>setSettingsOpen(false)}>完成</Button>
     </Modal>}
-    {detailsOpen && trace.result && <Modal title="追迹结果" onClose={()=>setDetailsOpen(false)}>
+    {detailsOpen && <Modal title="光路详情" className="trace-details-dialog" onClose={()=>setDetailsOpen(false)}>
+      {trace.enabled && <>
+        {count ? <div className="trace-result-counts">{[['到达像面',count.complete],['截光',count.vignetted],['错误',count.error]].map(([label,value])=><div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div>
+          : <p className="trace-dialog-status" role="status">{trace.blocked || trace.error || labels[trace.status] || '等待可追迹模型'}</p>}
+        <Button className="trace-rerun" onClick={trace.retry} disabled={['running','queued'].includes(trace.status)}><RefreshCw size={16} />重新追迹</Button>
+      </>}
+      {trace.result && <>
       <p>{trace.result.elapsed_ms.toFixed(0)} ms · {trace.result.counts.total} 条 · {trace.result.units}</p>
       {trace.result.counts.both > 0 && <p>{trace.result.counts.both} 条同时报告错误和截光，两项统计重叠</p>}
       <div className="trace-diagnostics">{trace.result.rays.filter(r=>r.termination.kind!=='complete').map(r=><p key={r.id}>
         F{r.field.index} · {r.wavelength_um} μm · Py {r.py}：{r.termination.kind==='vignetted'?'截光':'追迹错误'}，首见 S{r.termination.first_observed_surface}，错误码 {r.termination.error_code} / 渐晕码 {r.termination.vignette_code}
-      </p>)}{trace.result.counts.complete===trace.result.counts.total && <p>全部采样光线到达像面</p>}</div>
+      </p>)}{trace.result.counts.complete===trace.result.counts.total && <p>全部采样光线到达像面</p>}</div></>}
+      <h3>截面显示</h3><p>{layout?.status==='ready' ? layout.source==='zemax-primary-sag' ? 'Zemax 主矢高与机械半口径' : '处方截面' : '当前轮廓不可用'}</p>
+      {issues.length>0&&<div className="trace-diagnostics"><h3>几何检查</h3>{issues.map((issue,i)=><p key={i}>{issue}</p>)}</div>}
+      {!trace.enabled&&<p>开启“显示光线”后读取真实追迹结果</p>}
     </Modal>}
   </>;
 }
@@ -58,7 +67,6 @@ export function NativeScene({ layout, trace, selected, onSelect, zoom, plane = '
   const view = useMemo(()=>projection(layout,trace,plane),[layout,trace,plane]);
   const fields = trace ? [...new Set(trace.rays.map(r=>r.field.index))] : [];
   const projected = trace?.rays.some(r=>r.points.some(p=>Math.abs(p.xyz[plane==='YZ'?0:1])>1e-8));
-  const diagnostic = !view.contours;
   const bounds = view.bounds;
   let path = ()=>'';
   let x = ()=>0, y = ()=>0;
@@ -71,10 +79,6 @@ export function NativeScene({ layout, trace, selected, onSelect, zoom, plane = '
     path = points=>points.map(([z,v],i)=>`${i?'L':'M'}${x(z)} ${y(v)}`).join(' ');
   }
   return <>
-    {diagnostic && <div className="trace-layout-diagnostic" role="status">
-      <p>{trace?.counts.drawable ? '光线诊断视图 · 镜片轮廓未显示' : plane==='XZ' ? 'XZ 光线投影' : '二维轮廓暂不可用'}</p>
-      {plane==='YZ' && <p>{layout.issues.join('；')}</p>}
-    </div>}
     <div className="studio-scene trace-scene" ref={ref} data-result-id={trace?.result_id}>
       {view.issue && <div className="trace-no-rays" role="status">{view.issue}</div>}
       {bounds && <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${plane} ${projected?'三维路径投影':'光路'}，横纵同尺度，单位 ${layout.units}；${trace?'原生实光线 S1 至像面':'未绘制光线'}`}>
@@ -91,6 +95,7 @@ export function NativeScene({ layout, trace, selected, onSelect, zoom, plane = '
         </g>)}
       </svg>}
       {trace && !trace.counts.drawable && <div className="trace-no-rays" role="status">没有可绘制的连续光线，请查看追迹结果</div>}
+      {!bounds&&!trace&&<div className="trace-no-rays" role="status">{plane==='XZ'?'开启光线以查看 XZ 投影':'暂无可用轮廓，请查看光路详情'}</div>}
     </div>
     {trace && <div className="trace-legend" aria-label="视场图例">{fields.map(f=><Button key={f} aria-pressed={!hidden.includes(f)} onClick={()=>setHidden(h=>h.includes(f)?h.filter(x=>x!==f):[...h,f])}>
       <span style={{background:colors[(f-1)%colors.length]}} />F{f}</Button>)}<span>{trace.settings.wavelengths.map(w=>trace.rays.find(r=>r.wave_index===w)?.wavelength_um).join(' / ')} μm · {projected?'三维投影 · ':''}{plane}</span></div>}

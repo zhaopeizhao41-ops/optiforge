@@ -56,6 +56,21 @@ export function createWorkbenchApi(fetcher = globalThis.fetch.bind(globalThis)) 
   }
   return {
     handshake,
+    async trace(settings, context, signal) {
+      const value = await request('/api/trace', { method: 'POST', signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protocol_version: VERSION, expected_context: contextOf(context), settings }) });
+      check(value.status === 'accepted' && typeof value.operation_id === 'string' && typeof value.key === 'string', value.message || '追迹请求未接受');
+      return value;
+    },
+    async readTrace(id, signal) {
+      const value = await request(`/api/traces/${encodeURIComponent(id)}`, { read: true, signal });
+      check(value.trace_schema_version === 1 && typeof value.settings_hash === 'string' && value.source
+        && Array.isArray(value.rays) && value.rays.length <= 243 && value.units
+        && value.rays.every((ray) => Array.isArray(ray.points) && ray.points.length <= 200
+          && ray.points.every((p) => Number.isInteger(p.surface) && Array.isArray(p.xyz) && p.xyz.length === 3 && p.xyz.every(Number.isFinite))), '追迹结果格式不兼容');
+      return value;
+    },
     async readState(signal) { return validateState(await request('/api/state', { signal, read: true })); },
     async events(instance, after, signal) {
       const value = await request(`/api/events?instance_id=${encodeURIComponent(instance)}&after_seq=${after}&timeout_ms=20000`, { signal, read: true });

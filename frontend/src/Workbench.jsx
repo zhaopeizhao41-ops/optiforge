@@ -5,45 +5,13 @@ import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, Fi
 import { Button, Modal, spring, useBox } from './ui.jsx';
 import { useWorkbenchSync } from './use-workbench-sync.js';
 import { SurfacePicker } from './SurfacePicker.jsx';
+import { NativeScene, TraceControls } from './NativeScene.jsx';
+import { useWorkbenchTrace } from './use-workbench-trace.js';
 
 const format = (value) => value === 'Infinity' ? '∞' : value === '-Infinity' ? '−∞'
   : typeof value === 'number' ? value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 }) : '—';
 const surfaceName = (surface, last) => surface.index === 0 ? '物面' : surface.index === last ? '像面'
   : surface.comment || (surface.is_stop ? '光阑' : '表面');
-
-function NativeScene({ layout, selected, onSelect, zoom }) {
-  if (layout.status !== 'ready') return <div className="studio-live-empty" role="status">
-    <p>二维轮廓暂不可用</p><p>{layout.issues.join('；')}</p>
-  </div>;
-  return <NativeGeometry layout={layout} selected={selected} onSelect={onSelect} zoom={zoom} />;
-}
-
-function NativeGeometry({ layout, selected, onSelect, zoom }) {
-  const [ref, { width, height }] = useBox();
-  const [z0, y0, z1, y1] = layout.bounds;
-  const scale = Math.min(Math.max(1, width - 76) / Math.max(z1 - z0, Number.EPSILON),
-    Math.max(1, height - 70) / Math.max(y1 - y0, Number.EPSILON)) * zoom / 100;
-  const centre = zoom > 100 ? layout.surfaces.find((surface) => surface.index === selected)?.vertex_z ?? (z0 + z1) / 2 : (z0 + z1) / 2;
-  const x = (z) => width / 2 + (z - centre) * scale;
-  const y = (v) => height / 2 - v * scale;
-  const path = (points) => points.map(([z, v], i) => `${i ? 'L' : 'M'}${x(z)} ${y(v)}`).join(' ');
-  return <div className="studio-scene" ref={ref}>
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`真实处方 YZ 轮廓，横纵同尺度，单位 ${layout.units}；当前 S${selected}。未绘制光线。`}>
-      <line x1="16" x2={width - 16} y1={y(0)} y2={y(0)} className="studio-axis" strokeDasharray="3 7" />
-      {layout.elements.map((element) => <path key={element.front} d={`${path(element.points)} Z`} className="studio-native-glass" />)}
-      {layout.surfaces.map((surface) => <g key={surface.index}>
-        <path d={path(surface.points)} className={surface.is_image ? 'studio-image-plane' : 'studio-native-surface'}
-          style={{ stroke: selected === surface.index ? 'var(--st-text)' : undefined, strokeWidth: selected === surface.index ? 2.4 : undefined }} />
-        <path d={path(surface.points)} className="studio-native-hit cursor-interaction" onClick={() => onSelect(surface.index)} />
-        {surface.is_stop && !surface.is_image && <>
-          <line x1={x(surface.vertex_z)} x2={x(surface.vertex_z)} y1={y(surface.points[0][1])} y2={y(surface.points[0][1]) + 9} className="studio-native-stop" />
-          <line x1={x(surface.vertex_z)} x2={x(surface.vertex_z)} y1={y(surface.points.at(-1)[1])} y2={y(surface.points.at(-1)[1]) - 9} className="studio-native-stop" />
-        </>}
-        {surface.is_image && <text x={x(surface.vertex_z)} y={y(surface.points[0][1]) + 26} textAnchor="middle" className="studio-scene-label">像面</text>}
-      </g>)}
-    </svg>
-  </div>;
-}
 
 function NativeInspector({ model, selected, onSelect, onDetails }) {
   const position = model.surfaces.findIndex((surface) => surface.index === selected);
@@ -93,6 +61,8 @@ function ModelDetails({ snapshot, selected }) {
 
 export default function Workbench() {
   const sync = useWorkbenchSync();
+  const trace = useWorkbenchTrace(sync);
+  const [plane, setPlane] = useState('YZ');
   const { snapshot, error } = sync;
   const busy = sync.phase === 'running' || sync.phase === 'connecting' || sync.importing;
   const [selected, setSelected] = useState(1);
@@ -147,7 +117,7 @@ export default function Workbench() {
   const physical = model?.surfaces.filter((surface) => surface.index > 0 && surface.index < last) || [];
   const around = Math.max(0, physical.findIndex((surface) => surface.index === selected) - 2);
   const chips = physical.slice(Math.min(around, Math.max(0, physical.length - 5)), Math.min(around, Math.max(0, physical.length - 5)) + 5);
-  const taskName = task && ({ zemax_load_file: '载入模型', __refresh__: '读取模型', zemax_get_workbench_snapshot: '读取模型',
+  const taskName = task && ({ __trace__: '原生追迹', zemax_load_file: '载入模型', __refresh__: '读取模型', zemax_get_workbench_snapshot: '读取模型',
     zemax_surface_operations: '修改表面', zemax_apply_prescription: '更新处方', zemax_run_optimization: '优化模型',
     zemax_run_analysis_suite: '分析模型', zemax_set_project: '切换项目' }[task.tool] || '工程操作');
   const elapsed = task ? Math.max(0, Math.floor((clock - Date.parse(task.started_at || task.queued_at)) / 1000)) : 0;
@@ -172,7 +142,8 @@ export default function Workbench() {
         {error && <div className="studio-live-error" role="alert">{error}</div>}
         <div className={`studio-design-board ${focus ? 'is-focused' : ''} ${busy ? 'is-syncing' : ''}`}>
           <div className="studio-canvas-panel"><div className="studio-canvas-top"><span>2D 光路</span>{model && <Button className="studio-model-info" aria-label="系统设置" onClick={() => setModal('details')}>{model.units}</Button>}</div>
-            {snapshot ? <NativeScene layout={snapshot.layout} selected={selected} onSelect={setSelected} zoom={zoom} />
+            {snapshot && <TraceControls trace={trace} model={model} plane={plane} setPlane={setPlane} />}
+            {snapshot ? <NativeScene layout={snapshot.layout} trace={trace.result} plane={plane} selected={selected} onSelect={setSelected} zoom={zoom} />
               : <div className="studio-live-empty" role="status"><p>{busy ? '正在读取模型' : error ? '模型未连接' : '打开一个光学模型'}</p></div>}
             <div className="studio-surface-chips" aria-label="光学表面">{chips.map((surface) => <Button key={surface.index} aria-pressed={selected === surface.index} onClick={() => setSelected(surface.index)}>
               {selected === surface.index && <motion.span className="studio-chip-highlight" layoutId="native-surface" />}<span>S{surface.index}</span><span>{surfaceName(surface, last)}</span>
@@ -195,7 +166,7 @@ export default function Workbench() {
       </motion.section>}</AnimatePresence>
       {modal === 'appearance' && <Modal title="外观与动效" onClose={() => setModal(null)}><div className="studio-modal-label">界面主题</div><div className="studio-theme-options">{[['light', '浅色', Sun], ['dark', '深色', Moon], ['system', '跟随系统', Focus]].map(([value, label, Icon]) => <Button key={value} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={19} /><span>{label}</span>{theme === value && <Check size={14} />}</Button>)}</div><label className="studio-motion-option"><span>减少动态效果</span><input type="checkbox" checked={reduceMotion} onChange={(event) => setReduceMotion(event.target.checked)} /></label></Modal>}
       {modal === 'details' && model?.surfaces.some((surface) => surface.index === selected) && <Modal className="studio-model-dialog" title={`S${selected} · ${surfaceName(model.surfaces.find((surface) => surface.index === selected), last)}`} onClose={() => setModal(null)}><ModelDetails snapshot={snapshot} selected={selected} /></Modal>}
-      {modal === 'about' && <Modal title="本地光学工作台" onClose={() => setModal(null)}><p className="studio-about-copy">处方和二维轮廓随外部 Agent 操作自动更新。当前为只读显示，光线与分析尚未接入。</p><p className="studio-about-copy">对话继续在外部 Agent 中进行。打开的文件会复制到本地项目目录。</p>{snapshot && <dl className="studio-detail-list"><div><dt>模型版本</dt><dd>{snapshot.sync.model_revision}</dd></div><div><dt>读取时间</dt><dd>{new Date(snapshot.observed_at).toLocaleTimeString()}</dd></div></dl>}<Button className="studio-modal-done" onClick={() => setModal(null)}>知道了<Check size={16} /></Button></Modal>}
+      {modal === 'about' && <Modal title="本地光学工作台" onClose={() => setModal(null)}><p className="studio-about-copy">处方和二维轮廓随外部 Agent 操作自动更新。已接入原生几何实光线，像质分析将在后续接入。</p><p className="studio-about-copy">对话继续在外部 Agent 中进行。打开的文件会复制到本地项目目录。</p>{snapshot && <dl className="studio-detail-list"><div><dt>模型版本</dt><dd>{snapshot.sync.model_revision}</dd></div><div><dt>读取时间</dt><dd>{new Date(snapshot.observed_at).toLocaleTimeString()}</dd></div></dl>}<Button className="studio-modal-done" onClick={() => setModal(null)}>知道了<Check size={16} /></Button></Modal>}
     </div>
   </MotionConfig>;
 }

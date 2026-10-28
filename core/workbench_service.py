@@ -84,6 +84,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._json({"token": self.server.token, "service_instance_id": self.server.engine.state.context()["service_instance_id"]})
         elif path == "/api/state":
             self._json(self.server.engine.state.read())
+        elif path.startswith("/api/traces/"):
+            result = self.server.engine.state.get_trace(path.removeprefix("/api/traces/"))
+            self._json(result or {"status": "error", "code": "TRACE_NOT_FOUND", "message": "结果不存在或已淘汰"}, 200 if result else 404)
         elif path == "/api/events":
             try:
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -157,6 +160,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     return
                 self._json(self.server.engine.call_envelope(data["name"], data.get("arguments", {}),
                                                            expected_context=data.get("expected_context")))
+            elif path == "/api/trace":
+                if content_type != "application/json":
+                    raise ValueError("Expected JSON trace settings")
+                data = json.loads(content, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+                if not isinstance(data, dict) or data.get("protocol_version") != PROTOCOL_VERSION:
+                    self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新工作台客户端（协议 v2）。"}, 409)
+                    return
+                result = self.server.engine.request_trace(data.get("settings"), expected_context=data.get("expected_context"))
+                self._json(result, 202 if result.get("status") == "accepted" else 200)
             elif path == "/api/refresh":
                 data = json.loads(content)
                 if not isinstance(data, dict) or data.get("protocol_version") != PROTOCOL_VERSION:

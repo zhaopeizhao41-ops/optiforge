@@ -246,13 +246,13 @@ class GeometryTests(unittest.TestCase):
         fake = SimpleNamespace(last_recovery_error=None, current_filepath="example.zmx", model_project="example", mode="Standalone",
             system=SimpleNamespace(Mode="Sequential", MCE=SimpleNamespace(CurrentConfiguration=1, NumberOfConfigurations=2),
                                    SystemData=SimpleNamespace(Units=SimpleNamespace(LensUnits="Inches"))))
-        with patch("core.zos_session.ZOSSession.get_instance", return_value=fake), patch("tools.system_tools.zemax_get_system_data", return_value=data), patch("core.workbench_snapshot.native_layout_issues", return_value=[]):
+        with patch("core.zos_session.ZOSSession.get_instance", return_value=fake), patch("tools.system_tools.zemax_get_system_data", return_value=data), patch("core.workbench_snapshot.native_layout_issues", return_value=[]), patch("core.workbench_trace.native_field_table", return_value=([], "Radial")):
             first, second = capture_snapshot(), capture_snapshot()
         self.assertEqual(data, original)
         self.assertEqual(first["revision"], second["revision"])
         self.assertEqual(first["model"]["units"], "in")
         self.assertEqual(first["model"]["configuration_count"], 2)
-        self.assertFalse(any(first["capabilities"].values()))
+        self.assertEqual(first["capabilities"], {"ray_trace": True, "analysis": False, "editing": False})
         json.dumps(first, allow_nan=False)
 
 

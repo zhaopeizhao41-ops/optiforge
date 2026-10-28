@@ -3,6 +3,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 import inspect
 import threading
+import uuid
+from contextlib import nullcontext
 
 from core.workbench_effects import TOOL_EFFECTS, ToolEffect, check_tool_coverage
 from core.workbench_snapshot import json_safe
@@ -27,7 +29,7 @@ def succeeded(result):
 
 
 class EngineWorker:
-    def __init__(self, registry=None, *, effects=None, capture=None, metadata=None, state=None):
+    def __init__(self, registry=None, *, effects=None, capture=None, metadata=None, state=None, trace=None):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="optiforge-engine")
         self.registry = registry
         self.effects = effects
@@ -40,6 +42,9 @@ class EngineWorker:
         self.observed_model = None
         self.closed = False
         self.capture = capture
+        self.trace_adapter = trace
+        self.trace_pending = {}
+        self.trace_blocked = None
         fake_session = object()
         self.metadata = metadata or (native_metadata if registry is None else lambda: {
             "active_project": None, "model_project": None, "proposal_confirmed": False,
@@ -93,6 +98,91 @@ class EngineWorker:
         # The response state must be the state captured at THAT operation boundary,
         # not a later cache read after another queued import has run.
         return envelope
+
+    def request_trace(self, settings=None, *, expected_context=None, source="ui"):
+        from core.workbench_trace import eligibility, settings_for, trace_key, TraceError
+        with self.submit_lock:
+            current = self.state.read()
+            conflict = self.state.validate_context(expected_context) or eligibility(current)
+            if conflict:
+                return conflict
+            try:
+                normalized = settings_for(current["snapshot"]["model"], settings)
+                key = trace_key(current, normalized)
+            except (TraceError, KeyError, TypeError, ValueError) as error:
+                return {"status": "error", "code": getattr(error, "code", "TRACE_SETTINGS_INVALID"), "message": str(error)}
+            pending_key = (key, current["state_version"])
+            pending = self.trace_pending.get(pending_key)
+            if pending and not pending[1].done():
+                operation_id = pending[0]
+            else:
+                operation_id = None if self.closed else self.state.enqueue("__trace__", source)
+                if not operation_id:
+                    return {"status": "error", "code": "WORKBENCH_BUSY", "message": "工程任务队列已满或正在停止"}
+                source_identity = {k: current[k] for k in ("service_instance_id", "model_id", "model_revision", "active_project", "model_project")}
+                source_identity.update(configuration=current["snapshot"]["model"]["configuration"], source_state_version=current["state_version"])
+                self.state.trace_update(key, operation_id, "queued", {"settings": normalized, "source": source_identity})
+                future = self.executor.submit(self._execute_trace, operation_id, key, normalized, deepcopy(expected_context))
+                self.trace_pending = {k: v for k, v in self.trace_pending.items() if not v[1].done()}
+                self.trace_pending[pending_key] = (operation_id, future)
+            return {"protocol_version": PROTOCOL_VERSION, "status": "accepted", "operation_id": operation_id,
+                    "key": key, "settings": normalized}
+
+    def _execute_trace(self, operation_id, key, settings, expected):
+        from core.workbench_trace import eligibility, trace_key, trace_native, TraceError
+        from core.zos_session import ZOSSession
+        # Observe, compute, reobserve and publish within ONE native ownership span.
+        with ZOSSession.operation_lock if self.trace_adapter is None else nullcontext():
+            self.state.start(operation_id)
+            self.state.trace_update(key, operation_id, "running")
+            result = None
+            invoked = False
+            try:
+                conflict = self.state.validate_context(expected) or eligibility(self.state.read())
+                if conflict:
+                    raise TraceError(conflict["code"], conflict["message"])
+                if self.trace_blocked:
+                    raise TraceError("TRACE_CLEANUP_FAILED", self.trace_blocked)
+                effect = ToolEffect("trace", True)
+                self._publish(operation_id, effect, {"status": "success"}, False)
+                current = self.state.read()
+                conflict = self.state.validate_context(expected) or eligibility(current)
+                if conflict or trace_key(current, settings) != key:
+                    raise TraceError((conflict or {}).get("code", "WORKBENCH_CONTEXT_STALE"),
+                                     (conflict or {}).get("message", "原生模型已改变，请重新读取"))
+                source = {k: current[k] for k in ("service_instance_id", "model_id", "model_revision", "active_project", "model_project")}
+                source.update(source_state_version=current["state_version"], configuration=current["snapshot"]["model"]["configuration"])
+                result = self.state.cached_trace(key)
+                if result is None:
+                    model = deepcopy(current["snapshot"]["model"])
+                    model["fields"] = model.get("trace_fields", model["fields"])
+                    invoked = True
+                    result = (self.trace_adapter or trace_native)(model, settings)
+                    result.update(key=key, result_id=str(uuid.uuid4()), source=source)
+                self._publish(operation_id, effect, {"status": "success"}, False)
+                after = self.state.read()
+                conflict = self.state.validate_context(expected) or eligibility(after)
+                if conflict or trace_key(after, settings) != key:
+                    raise TraceError("TRACE_RESULT_STALE", "计算期间模型或项目状态改变，结果不予发布")
+                self.state.store_trace(result)
+            except Exception as error:
+                result = {"status": "error", "code": getattr(error, "code", "TRACE_NATIVE_FAILED"), "message": str(error)}
+                if result["code"] == "TRACE_CLEANUP_FAILED":
+                    self.trace_blocked = str(error)
+                elif invoked:
+                    # Failure also has an observation boundary; a tool error alone
+                    # never increments the optical revision or clears uncertainty.
+                    try:
+                        self._publish(operation_id, ToolEffect("trace", True), result, False)
+                    except Exception as observation_error:
+                        self.state.publish(metadata={k: self.state.read()[k] for k in ("active_project", "model_project", "proposal_confirmed")},
+                                           snapshot=None, validity="unavailable", context_valid=False, error=str(observation_error))
+            status = "succeeded" if succeeded(result) else "failed"
+            self.state.trace_update(key, operation_id, status, result)
+            self.state.finish(operation_id, status, result)
+            # Completed Futures must not retain another unbounded set of paths
+            # outside the 8-result / 32 MiB cache. Coordinates are fetched by ID.
+            return self._envelope({k: v for k, v in result.items() if k != "rays"}, operation_id)
 
     def _capture(self):
         if self.capture:
@@ -165,6 +255,10 @@ class EngineWorker:
     def _execute(self, operation_id, name, arguments, expected):
         effect = ToolEffect(native=True, observes_context=True) if name == "__refresh__" else self._effect(name)
         if effect.protected:
+            if self.trace_blocked and effect.native:
+                result = {"status": "error", "code": "TRACE_CLEANUP_FAILED", "message": self.trace_blocked}
+                self.state.finish(operation_id, "rejected", result)
+                return self._envelope(result, operation_id)
             conflict = self.state.validate_context(expected)
             if conflict is None and not self.state.read()["context_valid"] and effect.kind != "replace":
                 conflict = {"status": "error", "code": "WORKBENCH_STATE_UNCERTAIN",

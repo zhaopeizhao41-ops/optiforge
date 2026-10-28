@@ -70,7 +70,7 @@ def main():
     native = successful(client.call("zemax_get_system_data", {}))
     checks = []
     for field, source in (("surfaces", "surfaces"), ("fields", "fields"), ("wavelengths", "wavelengths"), ("settings", "general")):
-        assert snapshot["model"][field] == native[source], field
+        assert all(snapshot["model"][field].get(k) == v for k, v in native[source].items()) if field == "settings" else snapshot["model"][field] == native[source], field
         checks.append(f"native_{field}_equal")
     second = successful(client.call("zemax_get_workbench_snapshot", {}))
     assert snapshot["revision"] == second["revision"]
@@ -92,7 +92,7 @@ def main():
     assert cached["model_revision"] == after_heartbeat["model_revision"]
     checks.append("cached_reads_and_heartbeat_do_not_advance_versions")
     assert snapshot["schema_version"] == 1
-    assert not any(snapshot["capabilities"].values())
+    assert snapshot["capabilities"] == {"ray_trace": True, "analysis": False, "editing": False}
     assert snapshot["layout"]["rays"] == []
     checks.append("no_fixture_rays_or_analysis")
     layout = snapshot["layout"]

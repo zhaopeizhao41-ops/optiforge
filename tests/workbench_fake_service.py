@@ -22,6 +22,7 @@ from core.workbench_state import now
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--trace", action="store_true", help="Enable simulated-only ray trace fixture")
     args = parser.parse_args()
     model = {"units": "mm", "lens_units": "Millimeters", "system_mode": "Sequential", "name": "同步验收 · 模拟引擎",
              "filepath": "fixture.zmx", "project": "同步验收", "configuration": 1, "configuration_count": 1,
@@ -32,13 +33,35 @@ def main():
         return {"index": index, "radius": radius, "thickness": thickness, "material": material, "semi_diameter": half,
                 "conic": 0., "type": "Standard", "comment": "", "is_stop": index == 1, "radius_solve": "Fixed", "thickness_solve": "Fixed"}
     model["surfaces"] = [row(0, math.inf, math.inf), row(1, 20., 4., "N-BK7"), row(2, -20., 30.), row(3, 0., 0., half=2.)]
+    if args.trace:
+        model["name"] = "光线验收 · 模拟引擎"
+        model["settings"]["field_normalization"] = "Radial"
+        model["fields"] = [{"index": i+1, "x": 0, "y": y, "weight": 1} for i,y in enumerate([0,3,5])]
+        model["wavelengths"] = [{"index":i+1,"wavelength_um":w,"weight":1,"is_primary":i==0} for i,w in enumerate([.55,.65])]
     session = object()
     project = ["同步验收"]
     def capture():
         return {"status": "success", "schema_version": 1, "revision": str(model["surfaces"][1]["radius"]),
                 "observed_at": now(), "connection": {"state": "connected", "engine": "fixture"},
                 "model": json_safe(deepcopy(model)), "layout": build_layout(model),
-                "capabilities": {"ray_trace": False, "analysis": False, "editing": False}}
+                "capabilities": {"ray_trace": args.trace, "analysis": False, "editing": False}}
+    def trace(m, settings):
+        from core.workbench_trace import assemble
+        time.sleep(.35)
+        mode=m["surfaces"][1]["comment"]
+        def batch(surface, rays):
+            output=[]
+            for number, ray in enumerate(rays,1):
+                error=9 if mode=="fixture-trace-fail" or mode=="fixture-trace-partial" and surface>=2 and number%3==0 else 0
+                vig=2 if mode=="fixture-trace-partial" and surface>=2 and number%3==1 else 0
+                z=[0,0,4,34][surface]
+                y=ray["py"]*4*(1-z/35)+ray["field"]["hy"]*z*.02
+                output.append((True,number,error,vig,0.,y,z,0.,0.,1.,0.,0.,1.,0.,1.))
+            return output
+        start=time.monotonic()
+        result=assemble(m,settings,batch,lambda s:([1,0,0,0,1,0,0,0,1],[0,0,0]))
+        result["elapsed_ms"]=(time.monotonic()-start+.35)*1000
+        return result
     def write(surface_index, **arguments):
         comment = arguments.get("comment", "")
         if comment == "fixture-fail":
@@ -59,9 +82,9 @@ def main():
                 "get_current_design_proposal": lambda: {"user_confirmed_to_simulate": False}}
     # Confirmation here is fixture metadata only; the real native gate is never opened.
     engine = EngineWorker(registry, metadata=lambda: {"active_project": project[0], "model_project": project[0],
-                                                     "proposal_confirmed": False, "session_identity": session})
+                                                     "proposal_confirmed": args.trace, "session_identity": session}, trace=trace if args.trace else None)
     server = WorkbenchHTTPServer(("127.0.0.1", args.port), engine)
-    credentials = ROOT / "output" / "workbench_sync_acceptance" / "fixtures" / "service.json"
+    credentials = ROOT / "output" / ("workbench_raytrace_acceptance" if args.trace else "workbench_sync_acceptance") / "fixtures" / "service.json"
     write_service_file(server, credentials)
     engine.call("zemax_get_workbench_snapshot", source="startup")
     print(f"SIMULATED engine: http://127.0.0.1:{server.server_port}\nService file: {credentials}", flush=True)

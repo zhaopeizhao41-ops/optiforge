@@ -10,7 +10,7 @@ class ToolEffect:
 
     @property
     def protected(self):
-        return self.kind in {"replace", "modify", "context", "calculate"}
+        return self.kind in {"replace", "modify", "context", "calculate", "trace"}
 
 
 # Metadata/knowledge calls must not open an optical session merely to publish a task.

@@ -17,5 +17,5 @@ export function useWorkbenchSync() {
       window.removeEventListener('online', resume);
     };
   }, [controller]);
-  return { ...view, refresh: () => controller.refresh(), importModel: (file) => controller.importModel(file) };
+  return { ...view, api: controller.api, refresh: () => controller.refresh(), importModel: (file) => controller.importModel(file) };
 }

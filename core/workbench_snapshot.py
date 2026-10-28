@@ -211,10 +211,15 @@ def capture_snapshot():
                  "layout_issues": native_layout_issues(system)}
         layout = build_layout(model)
         safe_model = json_safe(model)
+        from core.workbench_trace import native_field_table
+        fields, normalization = native_field_table(system)
+        # Preserve the legacy field table; trace metadata is additive.
+        safe_model["trace_fields"] = fields
+        safe_model["settings"]["field_normalization"] = normalization
         revision = hashlib.sha256(json.dumps(safe_model, sort_keys=True, ensure_ascii=False,
                                             allow_nan=False).encode("utf-8")).hexdigest()[:16]
         return {"status": "success", "schema_version": 1, "revision": revision,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "connection": {"state": "connected", "engine": "zemax", "mode": session.mode},
                 "model": safe_model, "layout": json_safe(layout),
-                "capabilities": {"ray_trace": False, "analysis": False, "editing": False}}
+                "capabilities": {"ray_trace": True, "analysis": False, "editing": False}}

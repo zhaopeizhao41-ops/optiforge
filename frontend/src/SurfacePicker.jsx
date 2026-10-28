@@ -9,7 +9,7 @@ function PickerMenu(props) {
   return <motion.div {...props} tabIndex={-1} inert={!present} aria-hidden={present ? undefined : true} />;
 }
 
-export function SurfacePicker({ options, value, onChange }) {
+export function SurfacePicker({ options, value, onChange, label = '选择表面' }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [placement, setPlacement] = useState({ side: 'below', height: 288 });
@@ -56,7 +56,7 @@ export function SurfacePicker({ options, value, onChange }) {
   }
 
   return <div className="studio-surface-picker" ref={container} data-open={open}>
-    <Button className="studio-picker-trigger" role="combobox" aria-label="选择表面"
+    <Button className="studio-picker-trigger" role="combobox" aria-label={label}
       aria-haspopup="listbox" aria-expanded={open} aria-controls={id}
       aria-activedescendant={open ? `${id}-${active}` : undefined} title={current?.label}
       onKeyDown={keyDown} onBlur={(event) => { if (!event.currentTarget.parentElement.contains(event.relatedTarget)) setOpen(false); }}
@@ -65,7 +65,7 @@ export function SurfacePicker({ options, value, onChange }) {
       <motion.span className="studio-picker-chevron" animate={{ rotate: open ? 180 : 0 }} transition={spring}><ChevronDown size={15} /></motion.span>
     </Button>
     <AnimatePresence>
-      {open && <PickerMenu id={id} ref={list} role="listbox" aria-label="光学表面" className="studio-picker-menu"
+      {open && <PickerMenu id={id} ref={list} role="listbox" aria-label={label} className="studio-picker-menu"
         data-side={placement.side} style={{ maxHeight: placement.height, transformOrigin: placement.side === 'above' ? 'bottom right' : 'top right' }}
         initial={reduced ? { opacity: 0 } : { opacity: 0, y: placement.side === 'above' ? 6 : -6, scale: .97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }} exit={reduced ? { opacity: 0 } : { opacity: 0, y: -3, scale: .98 }}

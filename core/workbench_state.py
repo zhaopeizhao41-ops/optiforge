@@ -1,10 +1,11 @@
 """Published memory state and bounded notifications. No optical engine imports."""
-from collections import deque
+from collections import deque, OrderedDict
 from copy import deepcopy
 from datetime import datetime, timezone
 import threading
 import time
 import uuid
+import json
 
 PROTOCOL_VERSION = 2
 CONTEXT_KEYS = ("service_instance_id", "state_version", "model_id", "active_project", "model_project")
@@ -23,6 +24,8 @@ class WorkbenchState:
         self.queue_limit = queue_limit
         self.seq = 0
         self.closed = False
+        self.trace_results = OrderedDict()
+        self.trace_summaries = OrderedDict()
         self.data = {"protocol_version": PROTOCOL_VERSION, "service_instance_id": str(uuid.uuid4()),
                      "state_version": 0, "model_id": None, "model_revision": 0,
                      "active_project": None, "model_project": None, "proposal_confirmed": False,
@@ -39,7 +42,49 @@ class WorkbenchState:
     def read(self):
         with self.condition:
             return deepcopy({**self.data, "event_seq": self.seq,
-                             "tasks": {"pending": list(self.pending.values()), "recent": list(self.history)}})
+                             "tasks": {"pending": list(self.pending.values()), "recent": list(self.history)},
+                             "trace_summary": list(self.trace_summaries.values())})
+
+    def trace_update(self, key, operation_id, status, result=None):
+        with self.condition:
+            summary = {**self.trace_summaries.get(operation_id, {}), "key": key, "operation_id": operation_id, "status": status}
+            if result:
+                for name in ("result_id", "counts", "code", "message", "source", "elapsed_ms", "settings"):
+                    if name in result:
+                        summary[name] = deepcopy(result[name])
+            self.trace_summaries[operation_id] = summary
+            self.trace_summaries.move_to_end(operation_id)
+            completed = [k for k, v in self.trace_summaries.items() if v["status"] not in {"queued", "running"}]
+            for old in completed[:-8]:
+                del self.trace_summaries[old]
+            self._event("trace_finished" if status in {"succeeded", "failed", "rejected"} else "trace_changed",
+                        key=key, result_id=summary.get("result_id"), operation_id=operation_id)
+
+    def store_trace(self, result):
+        from core.workbench_trace import MAX_BYTES, TraceError
+        encoded = json.dumps(result, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_BYTES:
+            raise TraceError("TRACE_RESULT_TOO_LARGE", "追迹结果超出 32 MiB 缓存预算")
+        with self.condition:
+            self.trace_results[result["result_id"]] = (deepcopy(result), len(encoded))
+            while len(self.trace_results) > 8 or sum(v[1] for v in self.trace_results.values()) > MAX_BYTES:
+                old, _ = self.trace_results.popitem(last=False)
+                for summary in self.trace_summaries.values():
+                    if summary.get("result_id") == old:
+                        summary.update(status="evicted", result_id=None)
+                        self._event("trace_changed", key=summary["key"], result_id=old)
+
+    def get_trace(self, result_id):
+        with self.condition:
+            value = self.trace_results.get(result_id)
+            return deepcopy(value[0]) if value else None
+
+    def cached_trace(self, key):
+        with self.condition:
+            for value, _ in reversed(self.trace_results.values()):
+                if value["key"] == key:
+                    return deepcopy(value)
+            return None
 
     def _event(self, kind, task=None, **extra):
         self.seq += 1

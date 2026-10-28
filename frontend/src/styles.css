@@ -94,7 +94,7 @@
 #optiforge-soft-studio h1 { font-size: 28px; line-height: 1.35; font-weight: 500; letter-spacing: -.8px; }
 #optiforge-soft-studio .studio-design-board { display: grid; grid-template-columns: minmax(0, 1fr) 256px; background: var(--st-panel); border: 1px solid color-mix(in srgb, var(--st-line) 72%, transparent); border-radius: 26px; box-shadow: var(--st-shadow); height: 476px; position: relative; }
 #optiforge-soft-studio .studio-design-board.is-focused { grid-template-columns: 1fr; }
-#optiforge-soft-studio .studio-canvas-panel { display: flex; flex-direction: column; min-width: 0; position: relative; padding: 22px 24px 17px; }
+#optiforge-soft-studio .studio-canvas-panel { display: flex; flex-direction: column; min-width: 0; position: relative; padding: 22px 24px 17px; overflow: hidden; }
 #optiforge-soft-studio .studio-canvas-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--st-muted); font-size: 15px; }
 #optiforge-soft-studio .studio-field-legend { display: flex; flex-wrap: wrap; gap: 16px; }
 #optiforge-soft-studio .studio-field-legend .studio-button { padding: 0; min-height: 32px; font-size: 14px; gap: 7px; background: transparent; }
@@ -112,10 +112,12 @@
 #optiforge-soft-studio .studio-surface-hit { position: absolute; width: 44px; height: 65%; padding: 0; translate: -50% -50%; pointer-events: auto; border-radius: 24px; min-height: 0; }
 #optiforge-soft-studio .studio-surface-hit:hover { background: color-mix(in srgb, var(--st-accent) 4%, transparent); }
 #optiforge-soft-studio .studio-surface-hit:focus-visible { outline-offset: -2px; }
-#optiforge-soft-studio .studio-surface-chips { display: flex; justify-content: center; gap: 8px; padding: 0 0 20px; }
-#optiforge-soft-studio .studio-surface-chips .studio-button { font-size: 14px; gap: 7px; color: var(--st-muted); padding: 8px 14px; border-radius: 14px; min-height: 36px; }
+#optiforge-soft-studio .studio-surface-chips { display: flex; justify-content: center; justify-content: safe center; align-items: center; gap: 8px; padding: 0 4px 20px; max-width: 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+#optiforge-soft-studio .studio-surface-chips::-webkit-scrollbar { display: none; }
+#optiforge-soft-studio .studio-surface-chips .studio-button { font-size: 14px; gap: 7px; color: var(--st-muted); padding: 8px 14px; border-radius: 14px; min-height: 36px; flex-shrink: 0; max-width: 200px; white-space: nowrap; }
 #optiforge-soft-studio .studio-surface-chips .studio-button[aria-pressed="true"] { color: var(--st-accent); }
 #optiforge-soft-studio .studio-surface-chips .studio-button > span:not(.studio-chip-highlight) { position: relative; z-index: 1; }
+#optiforge-soft-studio .studio-surface-chips .studio-button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #optiforge-soft-studio .studio-chip-highlight { position: absolute; inset: 0; border-radius: 14px; background: var(--st-accent-soft); }
 #optiforge-soft-studio .studio-canvas-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--st-muted); }
 #optiforge-soft-studio .studio-canvas-tools { display: flex; align-items: center; padding: 3px; gap: 1px; background: var(--st-soft); border: 1px solid var(--st-line); border-radius: 15px; }
@@ -221,7 +223,10 @@
 #optiforge-soft-studio .studio-native-surface { fill: none; stroke: var(--st-edge); stroke-width: 1.2; }
 #optiforge-soft-studio .studio-native-stop { stroke: var(--st-text); stroke-width: 2.5; }
 #optiforge-soft-studio .studio-native-hit { fill: none; stroke: transparent; stroke-width: 18; }
-#optiforge-soft-studio .studio-native-picker { border: 0; background: var(--st-panel); font-size: 22px; max-width: 130px; min-width: 0; padding: 4px 0; border-radius: 8px; }
+#optiforge-soft-studio .studio-native-picker { border: 1px solid var(--st-line); background: var(--st-soft); color: var(--st-text); font-size: 14px; font-weight: 500; line-height: 1.4; max-width: 180px; min-width: 0; padding: 4px 8px; border-radius: 8px; cursor: pointer; outline: none; text-overflow: ellipsis; white-space: nowrap; }
+#optiforge-soft-studio .studio-native-picker:hover { border-color: var(--st-accent); }
+#optiforge-soft-studio .studio-native-picker:focus-visible { border-color: var(--st-accent); box-shadow: 0 0 0 2px var(--st-accent-soft); }
+#optiforge-soft-studio .studio-native-picker option { font-size: 14px; font-weight: normal; background: var(--st-panel); color: var(--st-text); padding: 4px 8px; }
 #optiforge-soft-studio .studio-property-value { overflow-wrap: anywhere; }
 #optiforge-soft-studio .studio-analysis-pending { min-height: 390px; display: flex; flex-direction: column; gap: 24px; align-items: center; justify-content: center; color: var(--st-muted); }
 #optiforge-soft-studio .studio-model-dialog { max-height: min(85dvh, 760px); overflow-y: auto; }
@@ -233,7 +238,7 @@
 #optiforge-soft-studio .studio-data-table th { font-weight: 500; color: var(--st-muted); }
 #optiforge-soft-studio .studio-refresh-active { animation: studio-sync-turn .85s linear infinite; }
 @media (max-width: 850px) {
-  #optiforge-soft-studio .studio-native-picker { max-width: 102px; }
+  #optiforge-soft-studio .studio-native-picker { max-width: 140px; }
 }
 @media (max-width: 600px) {
   #optiforge-soft-studio .studio-live-heading { flex-wrap: wrap; gap: 14px; }

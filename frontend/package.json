@@ -7,8 +7,7 @@
     "test": "node --test tests/*.test.js",
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "node scripts/write-third-party-notices.mjs && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
-    "preview:inline": "node scripts/make-inline-preview.mjs"
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort"
   },
   "dependencies": {
     "lucide-react": "1.62.0",

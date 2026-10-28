@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.jsx';
+import Workbench from './Workbench.jsx';
 import './styles.css';
 
-createRoot(document.getElementById('optiforge-soft-studio')).render(<App />);
+createRoot(document.getElementById('optiforge-soft-studio')).render(<Workbench />);

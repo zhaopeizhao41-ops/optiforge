@@ -72,3 +72,21 @@ scratch/
 # later `git add -A` from putting it back. Note this is the copy that lives
 # inside the repo, not the agent's real memory directory outside it.
 .claude/
+
+# Local planning, UI research, review evidence and manual acceptance helpers
+/docs/
+/design-preview/
+/plan.md
+/PLAN.md
+/frontend/src/App.jsx
+/frontend/src/fixtures.js
+/frontend/scripts/make-inline-preview.mjs
+/tests/e2e_modeling_walkthrough.py
+/tests/exercise_workbench_sync_mcp.py
+/tests/test_zemax_tools.py
+/tests/verify_workbench_native.py
+/tests/verify_workbench_raytrace_native.py
+/tests/workbench_fake_service.py
+/tests/regression_stage_one.py
+/assets/intro.mp4
+/assets/intro_poster.png

@@ -77,6 +77,9 @@ def display_layout(model, read_surface, read_sag):
         result["bounds"] = [min(p[0] for p in coordinates), min(p[1] for p in coordinates),
                             max(p[0] for p in coordinates), max(p[1] for p in coordinates)]
         result["status"] = "ready"
+        # Only this verified axial, rotationally symmetric adapter can share
+        # its meridional contour across the two orthogonal section planes.
+        result["symmetric_planes"] = ["YZ", "XZ"]
     except Exception as error:
         # Display-only native reads can fail independently of the prescription.
         # Never retain a partial contour or discard an otherwise valid snapshot.

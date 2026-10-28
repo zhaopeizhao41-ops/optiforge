@@ -34,7 +34,7 @@ def normalize_fields(fields, normalization):
 
 def settings_for(model, settings=None):
     settings = {} if settings is None else settings
-    if not isinstance(settings, dict) or set(settings) - {"fields", "wavelengths", "pupil_count"}:
+    if not isinstance(settings, dict) or set(settings) - {"fields", "wavelengths", "pupil_count", "pupil_axis"}:
         raise TraceError("TRACE_SETTINGS_INVALID", "追迹设置包含未知项目")
     fields = [f for f in model["fields"] if not f.get("ignore", False) and f.get("is_active", True)]
     ordered = sorted(fields, key=lambda f: (math.hypot(f["x"], f["y"]), f["index"]))
@@ -51,9 +51,12 @@ def settings_for(model, settings=None):
     count = settings.get("pupil_count", 5)
     if type(count) is not int or count not in (3, 5, 9):
         raise TraceError("TRACE_SETTINGS_INVALID", "光瞳采样仅支持 3 / 5 / 9 条")
+    axis = settings.get("pupil_axis", "Y")
+    if axis not in ("X", "Y"):
+        raise TraceError("TRACE_SETTINGS_INVALID", "光瞳采样方向仅支持 X / Y")
     normalized = {"fields": indices("fields", default, [f["index"] for f in fields], 9),
                   "wavelengths": indices("wavelengths", primary[:1], [w["index"] for w in waves], 3),
-                  "pupil_count": count}
+                  "pupil_count": count, "pupil_axis": axis}
     targets = len(model["surfaces"]) - 1
     paths = len(normalized["fields"]) * len(normalized["wavelengths"]) * count
     if not 1 <= targets <= 200 or paths > 243 or targets * paths > 48600:
@@ -105,10 +108,11 @@ def ray_inputs(model, settings):
             continue
         for wave in settings["wavelengths"]:
             for sample in range(settings["pupil_count"]):
-                py = 2. * sample / (settings["pupil_count"] - 1) - 1.
+                pupil = 2. * sample / (settings["pupil_count"] - 1) - 1.
+                px, py = (pupil, 0.) if settings.get("pupil_axis", "Y") == "X" else (0., pupil)
                 rays.append({"id": f'f{field["index"]}:w{wave}:p{sample}', "field": deepcopy(field),
                              "wave_index": wave, "wavelength_um": waves[wave]["wavelength_um"],
-                             "px": 0., "py": py, "points": [], "termination": None})
+                             "px": px, "py": py, "points": [], "termination": None})
     return rays
 
 
@@ -175,7 +179,8 @@ def assemble(model, settings, batch, get_frame):
             "frame": {"origin": "S1", "axes": "S1 local xyz", "range": [1, len(model["surfaces"])-1]},
             "native_inputs": {"field_type": model["settings"]["field_type"],
                               "normalization": model["settings"]["field_normalization"],
-                              "ray_aiming": model["settings"]["ray_aiming"], "pupil": "Px=0; Py=-1..1"},
+                              "ray_aiming": model["settings"]["ray_aiming"],
+                              "pupil": "Py=0; Px=-1..1" if settings.get("pupil_axis", "Y") == "X" else "Px=0; Py=-1..1"},
             "rays": rays, "counts": counts,
             "bounds_xyz": [[min(p[i] for p in points), max(p[i] for p in points)] for i in range(3)] if points else None}
 

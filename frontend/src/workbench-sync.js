@@ -20,7 +20,7 @@ export class WorkbenchSync {
   constructor(api, { delay = abortableDelay, random = Math.random } = {}) {
     this.api = api; this.delay = delay; this.random = random;
     this.listeners = new Set(); this.epoch = 0; this.active = false; this.runGeneration = 0;
-    this.view = { phase: 'connecting', engine: null, snapshot: null, stale: true, error: '', importing: false };
+    this.view = { phase: 'connecting', engine: null, snapshot: null, stale: true, error: '', importing: false, canImportModel: true };
   }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(changes) { this.view = { ...this.view, ...changes }; for (const listener of this.listeners) listener(this.view); }
@@ -52,6 +52,7 @@ export class WorkbenchSync {
         if (!this.active || this.runGeneration !== runGeneration) return;
         if (epoch !== this.epoch || signal.aborted) continue;
         this.instance = session.service_instance_id; this.cursor = 0;
+        this.emit({ canImportModel: session.capabilities?.model_import !== false });
         const initial = await this.api.readState(signal);
         if (initial.service_instance_id !== this.instance) throw new Error('服务已重启，正在重新连接');
         this.adopt(initial, epoch);
@@ -85,7 +86,7 @@ export class WorkbenchSync {
     catch (error) { if (this.active && epoch === this.epoch && !signal.aborted) this.emit({ error: error.message }); }
   }
   async importModel(file) {
-    if (!this.active || !this.view.engine || this.view.importing || ['reconnecting', 'connecting'].includes(this.view.phase)) return;
+    if (!this.active || !this.view.engine || !this.view.canImportModel || this.view.importing || ['reconnecting', 'connecting'].includes(this.view.phase)) return;
     const epoch = this.epoch, signal = this.abort.signal, context = contextOf(this.view.engine);
     this.emit({ importing: true, error: '' });
     try {

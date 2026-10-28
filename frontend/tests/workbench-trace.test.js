@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { TraceController, defaultTraceSettings, matchesTrace, projection, settingsId } from '../src/workbench-trace.js';
 import { createWorkbenchApi } from '../src/workbench-api.js';
 
-const settings = {fields:[1],wavelengths:[1],pupil_count:5};
+const settings = {fields:[1],wavelengths:[1],pupil_count:5,pupil_axis:'Y'};
 const state = () => ({ service_instance_id:'i',model_id:'m',model_revision:1,state_version:1,context_valid:true,validity:'valid',
   active_project:'a',model_project:'a',proposal_confirmed:true,tasks:{pending:[],recent:[]},trace_summary:[],
   snapshot:{model:{configuration:1,fields:[{index:1,x:0,y:0},{index:2,x:-3,y:4},{index:3,x:6,y:8}],wavelengths:[{index:1,is_primary:true}]}} });
@@ -19,6 +19,14 @@ function fixture(api={}) {
 test('defaults select actual min/middle/max and primary; subset order is canonical',()=>{
   assert.deepEqual(defaultTraceSettings(state().snapshot.model),{...settings,fields:[1,2,3]});
   assert.equal(settingsId({...settings,fields:[3,1]}),settingsId({...settings,fields:[1,3]}));
+});
+test('orthogonal view is part of result identity and uses only symmetric contours',()=>{
+  assert.notEqual(settingsId({...settings,pupil_axis:'X'}),settingsId(settings));
+  const contour={status:'ready',symmetric_planes:['YZ','XZ'],surfaces:[{points:[[0,-2],[10,2]]}]};
+  assert.equal(projection(contour,{rays:[]},'XZ').contours,contour);
+  assert.equal(projection({status:'ready',surfaces:[]},{rays:[]},'XZ').contours,null);
+  const xz=projection(contour,{rays:[{px:1,py:0,points:[{xyz:[1,0,0]},{xyz:[2,0,5]}]}]},'XZ');
+  assert.deepEqual(xz.rays[0].projected,[[0,1],[5,2]]);
 });
 test('source/configuration/context/authorization/settings/connection all guard display',()=>{
   const s=state(),r=result();assert.equal(matchesTrace(r,s,settings,'synced'),true);
@@ -46,6 +54,22 @@ test('settings change during running keeps one in flight and submits only latest
   c.update(state(),'running',{...settings,pupil_count:3});c.update(state(),'running',{...settings,pupil_count:9});await tick();assert.equal(calls.length,1);
   const s=state();s.trace_summary=[{operation_id:'op',key:'key',status:'succeeded',result_id:'r'}];c.update(s,'synced',{...settings,pupil_count:9});await tick();await tick();
   assert.equal(calls.length,2);assert.equal(calls[1][0].pupil_count,9);assert.equal(c.view.result,null);c.stop();
+});
+
+test('switching YZ to XZ while pending rejects the old pupil fan and submits the new axis once',async(t)=>{
+  const pending=deferred(),calls=[],xz={...settings,pupil_axis:'X'};
+  const c=new TraceController({
+    trace:async cfg=>{calls.push(cfg);return {key:cfg.pupil_axis,operation_id:cfg.pupil_axis};},
+    readTrace:id=>id==='Y'?pending.promise:Promise.resolve({...result(state(),xz),key:'X'}),
+  },{debounce:1});t.after(()=>c.stop());
+  c.update(state(),'synced',settings);c.enable(true);await tick();
+  const complete={...state(),trace_summary:[{operation_id:'Y',key:'Y',status:'succeeded',result_id:'Y'}]};
+  c.update(complete,'synced',settings);await tick();c.update(complete,'synced',xz);
+  pending.resolve(result());await tick();await tick();
+  assert.equal(c.view.result,null);assert.equal(calls.length,2);assert.equal(calls[1].pupil_axis,'X');
+  assert.equal(matchesTrace(result(),state(),xz,'synced'),false);
+  c.update({...state(),trace_summary:[{operation_id:'X',key:'X',status:'succeeded',result_id:'X'}]},'synced',xz);await tick();
+  assert.equal(c.view.result.settings.pupil_axis,'X');assert.equal(calls.length,2);
 });
 test('late result cannot render after model change and enabling resets on new model/service',async()=>{
   const pending=deferred();const {c}=fixture({readTrace:()=>pending.promise});c.enable(true);await tick();

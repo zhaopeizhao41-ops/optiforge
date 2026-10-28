@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { TraceController, defaultTraceSettings, matchesTrace, modelId } from './workbench-trace.js';
-export function useWorkbenchTrace(sync) {
+export function useWorkbenchTrace(sync, plane = 'YZ') {
   const [controller, setController] = useState(null);
   const [view, setView] = useState({ enabled: false, status: 'off' });
   const identity = modelId(sync.engine);
   const [chosen, setChosen] = useState(null);
-  const settings = chosen?.identity === identity ? chosen.settings : sync.snapshot ? defaultTraceSettings(sync.snapshot.model) : null;
+  const baseSettings = chosen?.identity === identity ? chosen.settings : sync.snapshot ? defaultTraceSettings(sync.snapshot.model) : null;
+  const settings = baseSettings ? { ...baseSettings, pupil_axis: plane === 'XZ' ? 'X' : 'Y' } : null;
   useEffect(() => {
     const c = new TraceController(sync.api); setController(c);
     const off = c.subscribe(setView);

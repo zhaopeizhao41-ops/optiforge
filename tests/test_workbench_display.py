@@ -34,6 +34,7 @@ class DisplayTests(unittest.TestCase):
         m=model();before=deepcopy(m);view=self.display(m)
         self.assertEqual(view['status'],'ready');self.assertEqual(m,before)
         front=view['surfaces'][0];self.assertEqual(front['points'][0][1],-6.)
+        self.assertEqual(view['symmetric_planes'],['YZ','XZ'])
         self.assertAlmostEqual(front['points'][1][0],20-math.sqrt(375))
         self.assertEqual(front['points'][0][0],front['points'][1][0])
         self.assertEqual(front['points'][-1][1],6.)

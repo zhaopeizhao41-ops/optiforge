@@ -108,3 +108,23 @@ python -B tests/verify_workbench_raytrace_native.py --model 'D:\mcp gemini zemax
 软件回归 **243 项通过**（工作台124、旧第二批33、旧第三批33、前端53），生产构建和 `git diff --check` 通过。新增9个显示测试覆盖原生读取异常、超域显示与严格检查并存、机械边缘、像面材料区域、坐标拒绝、采样预算、重复观察稳定性。计时仅进入验收报告，不进入状态快照，以免每次读取都增加 state_version、使追迹失效。
 
 本轮本地修复提交以 `fix: render native lens outlines and simplify trace controls` 标识；未 push，未触碰并行 `styles.css` 内容（SHA256仍为 `0F5EEE8725E82CDBA37A228C095E1FF4527254D00F384BD557D43275FE3B67A8`）。新预览 water 为 `http://127.0.0.1:8770/`、D2 为 `http://127.0.0.1:8771/`；旧8767进程加载旧Python模块，不代表本轮版本。展示策略差异供规划复审，见问题文档Q4。
+
+## 继续验收修复：打开模型与 XZ 截面（2026-10-28）
+
+用户发现“打开模型”不可用，原因是上次交付的8770其实是固定模型的只读原生验收程序，注册表只有快照读取，UI却仍显示导入按钮，导致未知工具错误；不是ZMX格式或原文件损坏。8765普通工作台仍是旧Python进程，前端构建更新不会重载其原生适配代码。
+
+**当前入口已调整**：8770运行最新 `workbench.py` 普通工作台，支持真实文件选择与导入；8771运行water原工程的只读验收预览，不能换文件。服务握手新增 `capabilities.model_import`，新版固定预览明确返回false、UI隐藏按钮、控制器拒绝提交，HTTP在建立导入目录前返回 `MODEL_IMPORT_UNAVAILABLE`。普通服务默认为true，未提供该字段的旧普通服务保持兼容。验收预览不写服务发现文件，普通8770写入本工作区的服务发现供MCP桥接使用。
+
+实际浏览器测试：点击8770“打开模型”，通过系统文件选择器选择 `D:\mcp gemini zemax\output\water_objective_na09\water_objective_na09_475mm_portable.zmx`，读取完成后标题、水镜轮廓和表面参数切换成功，状态已同步。内容存于独立本地 `output/import_water_objective_na09_475mm_portable_c4a3a74f/source/`，新项目提案仍为false，没有复制原项目授权；原文件不改。截图 `reports/model-import-restored.png`。打开/看轮廓不受提案确认限制，原生追迹继续遵守现有项目确认规则。
+
+XZ旧行为是将 `Px=0, Py=-1..1` 的同一组子午光线改投影轴，X方向可能几乎完全重叠；且轮廓被固定排除。这符合旧计划的“纯本地投影”约定，但不满足用户期望的X方向光束截面。本轮按反馈改为：
+
+- 追迹设置增加 `pupil_axis`，默认Y保持兼容；YZ采样Px=0、Py=-1..1，XZ采样Py=0、Px=-1..1，真实视场与波长不变。不旋转或伪造视场坐标。
+- 切换截面会选择该方向的采样/缓存，方向进入设置哈希与显示身份，旧方向结果立即隐藏；仍以400ms合并、单在途任务完成后只处理最新方向，未扩大243条/200面预算。
+- 只有经过适配器确认的同轴旋转对称Standard轮廓声明 `symmetric_planes=[YZ,XZ]`，才在两截面共享；未知/局部变换/特殊面轮廓仍拒绝。离轴光线超出截面时继续标记“三维投影”。主光线判定同时检查Px与Py为0，避免XZ全部加粗。
+
+新增X方向原生只读对照：water 45条/945交点、D2 45条/990交点，全部到达像面，独立SingleRayNormUnpol最大差0。轮廓另外沿GetSag(x,0)和全局矩阵对照，共215个点，最大差2.8422e-14 mm；不是以Y方向公式自比。源文件、各自提案、project.json、原生处方及版本保持不变。两工程的 `native-acceptance-xz.json` / `native-result-xz.json` 保留在reports下，不覆盖Y方向记录。命令在既有验证脚本追加 `--pupil-axis X`。
+
+浏览器8771从YZ切XZ：旧线先消失，随后21面、13区域、15条主波长真实光线，图例标记三维投影/XZ；切回YZ再次先隐藏旧线。截图 `reports/water-xz-native-final.png`。只读页不再显示打开模型。新方向的几何显示已实测，未将两个模型外推为折叠/非旋转对称系统支持。
+
+完整受影响回归 **250项通过**（工作台127、旧第二批33、旧第三批33、前端57），生产构建与diff检查通过。新增测试包括只读导入在落盘前拒绝、普通/旧服务兼容、X光瞳实际输入、对称轮廓标志、方向结果隔离及切换中的迟到结果。`styles.css`并行差异仍保持原SHA，不纳入提交。改动本地提交以 `fix: restore model import and trace orthogonal pupil fans` 标识，不push；方案差异见Q5/Q6，仍待用户体验验收。

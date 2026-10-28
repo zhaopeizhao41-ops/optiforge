@@ -32,6 +32,7 @@ def main():
     parser.add_argument('--model',type=Path,required=True)
     parser.add_argument('--serve',action='store_true')
     parser.add_argument('--port',type=int,default=8767)
+    parser.add_argument('--pupil-axis',choices=['X','Y'],default='Y')
     args=parser.parse_args()
     source=args.model.resolve();folder=source.parent;proposal_path=folder/'design_proposal.json'
     def proposal():
@@ -65,7 +66,7 @@ def main():
         engine.refresh();engine.refresh_future.result(timeout=30)
         initial_refresh_ms=(time.monotonic()-capture_started)*1000
         before=engine.state.read()
-        m=before['snapshot']['model'];settings=settings_for(m,{'wavelengths':[w['index'] for w in m['wavelengths'][:3]]})
+        m=before['snapshot']['model'];settings=settings_for(m,{'wavelengths':[w['index'] for w in m['wavelengths'][:3]],'pupil_axis':args.pupil_axis})
         reply=engine.request_trace(settings,expected_context=engine.state.context(),source='native-validation')
         if reply['status']!='accepted':raise RuntimeError(reply)
         result=next(v[1] for v in engine.trace_pending.values() if v[0]==reply['operation_id']).result(timeout=120)['result']
@@ -123,12 +124,12 @@ def main():
                     # independently in global coordinates, rather than summing
                     # thicknesses as the axial display adapter does.
                     height=max(-contour['clear_semi_diameter'],min(contour['clear_semi_diameter'],point[1]))
-                    sag=session.system.LDE.GetSag(i,0.,height,Double(0),Double(0))
+                    sag=session.system.LDE.GetSag(i,height if args.pupil_axis=='X' else 0.,height if args.pupil_axis=='Y' else 0.,Double(0),Double(0))
                     assert sag[0] and math.isfinite(float(sag[1]))
-                    local=[0.,point[1],float(sag[1])]
+                    local=[point[1],0.,float(sag[1])] if args.pupil_axis=='X' else [0.,point[1],float(sag[1])]
                     world=[sum(float(matrix[1+3*a+b])*local[b] for b in range(3))+float(matrix[10+a]) for a in range(3)]
                     relative=[sum(float(reference[1+3*b+a])*(world[b]-float(reference[10+b])) for b in range(3)) for a in range(3)]
-                    for actual,expected in zip(point,[relative[2],relative[1]]):
+                    for actual,expected in zip(point,[relative[2],relative[0 if args.pupil_axis=='X' else 1]]):
                         assert math.isclose(actual,expected,abs_tol=1e-8,rel_tol=1e-8),(i,actual,expected)
                         worst=max(worst,abs(actual-expected))
                     checked+=1
@@ -149,11 +150,12 @@ def main():
                 'display_comparison':display_comparison,'result_id':result['result_id'],
                 'versions_unchanged':True,'source_bytes_and_proposal_unchanged':True}
         out=ROOT/'output/workbench_raytrace_acceptance/reports'/folder.name;out.mkdir(parents=True,exist_ok=True)
-        (out/'native-acceptance.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-        (out/'native-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        suffix='-xz' if args.pupil_axis=='X' else ''
+        (out/f'native-acceptance{suffix}.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+        (out/f'native-result{suffix}.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         print(json.dumps({k:v for k,v in report.items() if k not in {'layout','display_layout'}},ensure_ascii=False),flush=True)
         if args.serve:
-            server=WorkbenchHTTPServer(('127.0.0.1',args.port),engine)
+            server=WorkbenchHTTPServer(('127.0.0.1',args.port),engine,model_import=False)
             print(f'READ-ONLY original-project validation UI: http://127.0.0.1:{args.port}',flush=True)
             try:server.serve_forever(poll_interval=.1)
             except KeyboardInterrupt:pass

@@ -38,6 +38,23 @@ test('adoption uses instance, state version, and atomic event cursor', () => {
   assert.equal(canAdopt(state(3), state(1, 'instance-b'), 'instance-b'), true);
   assert.equal(canAdopt(state(1, 'instance-b'), state(99), 'instance-b'), false);
 });
+
+test('fixed preview hides and blocks import; normal handshake restores it after reconnect', async (t) => {
+  const api=fakeApi();let available=false;
+  api.handshake=async()=>({service_instance_id:api.current.service_instance_id,capabilities:{model_import:available}});
+  const {sync}=await running(t,api);
+  assert.equal(sync.view.canImportModel,false);
+  await sync.importModel({name:'sample.zmx'});assert.equal(api.imports,0);
+  available=true;sync.reconnect();await flush();
+  assert.equal(sync.view.canImportModel,true);
+  await sync.importModel({name:'sample.zmx'});assert.equal(api.imports,1);
+});
+
+test('older normal services keep their existing import entry', async (t) => {
+  const {sync,api}=await running(t);
+  assert.equal(sync.view.canImportModel,true);
+  await sync.importModel({name:'sample.zmx'});assert.equal(api.imports,1);
+});
 test('initial read cursor closes the read/subscribe race and live events update without refresh', async (t) => {
   const { sync, api } = await running(t);
   assert.equal(api.waits[0].after, 4);

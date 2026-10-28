@@ -27,7 +27,7 @@ export function TraceControls({ trace, model, plane, setPlane, layout }) {
       </Button>
       {trace.enabled && <>
         <Button onClick={()=>setSettingsOpen(true)} aria-label="追迹设置"><SlidersHorizontal size={16} /><span>设置</span></Button>
-        <div className="trace-projections" aria-label="光线投影">{['YZ','XZ'].map(p=><Button key={p} aria-pressed={plane===p} onClick={()=>setPlane(p)}>{p}</Button>)}</div>
+        <div className="trace-projections" aria-label="光路截面">{['YZ','XZ'].map(p=><Button key={p} aria-pressed={plane===p} onClick={()=>setPlane(p)}>{p}</Button>)}</div>
       </>}
       <Button className="trace-info-button" onClick={()=>setDetailsOpen(true)} aria-label="光路详情">
         <Activity size={16} /><span>光路详情</span>{(issues.length>0||trace.error)&&<span className="trace-info-dot" />}
@@ -37,8 +37,8 @@ export function TraceControls({ trace, model, plane, setPlane, layout }) {
       <h3>视场</h3><div className="trace-options">{(model.trace_fields || model.fields).filter(f=>!f.ignore&&f.is_active!==false).map(f=><Button key={f.index}
         aria-pressed={settings.fields.includes(f.index)} onClick={()=>toggle('fields',f.index,9)}>F{f.index} · {f.x}, {f.y}</Button>)}</div>
       <h3>波长</h3><div className="trace-options">{model.wavelengths.map(w=><Button key={w.index} aria-pressed={settings.wavelengths.includes(w.index)} onClick={()=>toggle('wavelengths',w.index,3)}>{w.wavelength_um} μm{w.is_primary ? ' · 主' : ''}</Button>)}</div>
-      <h3>子午光瞳采样</h3><SurfacePicker label="光瞳采样数量" value={settings.pupil_count} onChange={n=>trace.setSettings({...settings,pupil_count:n})} options={[3,5,9].map(value=>({value,label:`${value} 条 / 视场 / 波长`}))} />
-      <p>Px = 0 · Py = −1 至 1 · S1 → 像面</p>
+      <h3>光瞳采样</h3><SurfacePicker label="光瞳采样数量" value={settings.pupil_count} onChange={n=>trace.setSettings({...settings,pupil_count:n})} options={[3,5,9].map(value=>({value,label:`${value} 条 / 视场 / 波长`}))} />
+      <p>{settings.pupil_axis==='X'?'Py = 0 · Px = −1 至 1':'Px = 0 · Py = −1 至 1'} · S1 → 像面</p>
       <Button className="studio-modal-done" onClick={()=>setSettingsOpen(false)}>完成</Button>
     </Modal>}
     {detailsOpen && <Modal title="光路详情" className="trace-details-dialog" onClose={()=>setDetailsOpen(false)}>
@@ -51,7 +51,7 @@ export function TraceControls({ trace, model, plane, setPlane, layout }) {
       <p>{trace.result.elapsed_ms.toFixed(0)} ms · {trace.result.counts.total} 条 · {trace.result.units}</p>
       {trace.result.counts.both > 0 && <p>{trace.result.counts.both} 条同时报告错误和截光，两项统计重叠</p>}
       <div className="trace-diagnostics">{trace.result.rays.filter(r=>r.termination.kind!=='complete').map(r=><p key={r.id}>
-        F{r.field.index} · {r.wavelength_um} μm · Py {r.py}：{r.termination.kind==='vignetted'?'截光':'追迹错误'}，首见 S{r.termination.first_observed_surface}，错误码 {r.termination.error_code} / 渐晕码 {r.termination.vignette_code}
+        F{r.field.index} · {r.wavelength_um} μm · Px {r.px}, Py {r.py}：{r.termination.kind==='vignetted'?'截光':'追迹错误'}，首见 S{r.termination.first_observed_surface}，错误码 {r.termination.error_code} / 渐晕码 {r.termination.vignette_code}
       </p>)}{trace.result.counts.complete===trace.result.counts.total && <p>全部采样光线到达像面</p>}</div></>}
       <h3>截面显示</h3><p>{layout?.status==='ready' ? layout.source==='zemax-primary-sag' ? 'Zemax 主矢高与机械半口径' : '处方截面' : '当前轮廓不可用'}</p>
       {issues.length>0&&<div className="trace-diagnostics"><h3>几何检查</h3>{issues.map((issue,i)=><p key={i}>{issue}</p>)}</div>}
@@ -90,7 +90,7 @@ export function NativeScene({ layout, trace, selected, onSelect, zoom, plane = '
           {s.is_stop&&!s.is_image&&<>{[s.points[0],s.points.at(-1)].map((p,i)=><line key={i} x1={x(s.vertex_z)} x2={x(s.vertex_z)} y1={y(p[1])} y2={y(p[1])+(i?-9:9)} className="studio-native-stop" />)}</>}
         </g>)}
         {view.rays.filter(r=>!hidden.includes(r.field.index)&&r.projected.length>=2).map(r=><g key={r.id} className="trace-ray" style={{color:colors[(r.field.index-1)%colors.length]}}>
-          <path d={path(r.projected)} fill="none" stroke="currentColor" strokeWidth={r.py===0?1.9:1.1} strokeDasharray={trace.settings.wavelengths.indexOf(r.wave_index)%2?'5 3':undefined} opacity={r.py===0?1:.72} />
+          <path d={path(r.projected)} fill="none" stroke="currentColor" strokeWidth={r.px===0&&r.py===0?1.9:1.1} strokeDasharray={trace.settings.wavelengths.indexOf(r.wave_index)%2?'5 3':undefined} opacity={r.px===0&&r.py===0?1:.72} />
           {r.termination.kind!=='complete'&&<circle cx={x(r.projected.at(-1)[0])} cy={y(r.projected.at(-1)[1])} r="3" fill="var(--st-panel)" stroke="currentColor" />}
         </g>)}
       </svg>}

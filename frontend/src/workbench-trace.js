@@ -1,10 +1,10 @@
-export const settingsId = (s) => JSON.stringify(s ? { fields: [...s.fields].sort((a,b)=>a-b), wavelengths: [...s.wavelengths].sort((a,b)=>a-b), pupil_count: s.pupil_count } : null);
+export const settingsId = (s) => JSON.stringify(s ? { fields: [...s.fields].sort((a,b)=>a-b), wavelengths: [...s.wavelengths].sort((a,b)=>a-b), pupil_count: s.pupil_count, pupil_axis: s.pupil_axis || 'Y' } : null);
 export const modelId = (s) => s ? `${s.service_instance_id}:${s.model_id}` : '';
 export function defaultTraceSettings(model) {
   const fields = [...(model.trace_fields || model.fields)].filter(f => !f.ignore && f.is_active !== false)
     .sort((a,b) => Math.hypot(a.x,a.y) - Math.hypot(b.x,b.y) || a.index-b.index);
   return { fields: [...new Set([fields[0]?.index, fields[Math.floor(fields.length/2)]?.index, fields.at(-1)?.index].filter(Number.isInteger))],
-    wavelengths: model.wavelengths.filter(w => w.is_primary).slice(0,1).map(w => w.index), pupil_count: 5 };
+    wavelengths: model.wavelengths.filter(w => w.is_primary).slice(0,1).map(w => w.index), pupil_count: 5, pupil_axis: 'Y' };
 }
 const reads = new Set(['__refresh__', '__trace__', 'zemax_get_workbench_snapshot', 'zemax_system_info', 'zemax_get_system_data',
   'zemax_get_project', 'zemax_list_projects', 'get_current_design_proposal', 'zemax_audit_requirements', 'zemax_lookup_manual']);
@@ -124,7 +124,7 @@ export class TraceController {
 }
 
 export function projection(layout, trace, plane) {
-  const contours = plane === 'YZ' && layout?.status === 'ready' ? layout : null;
+  const contours = layout?.status === 'ready' && (plane === 'YZ' || layout.symmetric_planes?.includes(plane)) ? layout : null;
   const axis = plane === 'YZ' ? 1 : 0;
   const rays = (trace?.rays || []).map(ray=>({ ...ray, projected: ray.points.map(p=>[p.xyz[2],p.xyz[axis]]) }));
   const points = [...(contours?.surfaces.flatMap(s=>s.points) || []), ...rays.flatMap(r=>r.projected)];

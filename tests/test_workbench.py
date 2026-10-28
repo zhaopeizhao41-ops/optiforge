@@ -377,6 +377,22 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(loaded.is_relative_to(self.root / "output"))
         self.assertEqual(loaded.read_bytes(), b"local fixture")
 
+    def test_fixed_model_preview_advertises_no_import_and_never_stages_file(self):
+        self.server.model_import = False
+        session = json.loads(self.request('/api/session', token=False)[1])
+        self.assertFalse(session['capabilities']['model_import'])
+        with patch('core.workbench_service.ROOT', self.root), patch.object(self.engine, 'load_model') as loader:
+            status, body = self.request('/api/model/import', 'POST', b'local fixture',
+                {'Content-Type':'application/octet-stream', 'X-File-Name':'sample.zmx'})
+        self.assertEqual(status,403)
+        self.assertEqual(json.loads(body)['code'],'MODEL_IMPORT_UNAVAILABLE')
+        loader.assert_not_called()
+        self.assertFalse((self.root/'output').exists())
+
+    def test_normal_service_advertises_model_import(self):
+        session = json.loads(self.request('/api/session', token=False)[1])
+        self.assertTrue(session['capabilities']['model_import'])
+
     def test_invalid_import_names_never_reach_native_loader(self):
         for name in ("../sample.zmx", "CON.zmx", "sample.zmx.", "bad%3F.zmx", "file.txt"):
             self.assertEqual(self.request("/api/model/import", "POST", b"fixture",

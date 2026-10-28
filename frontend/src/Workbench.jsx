@@ -61,8 +61,8 @@ function ModelDetails({ snapshot, selected }) {
 
 export default function Workbench() {
   const sync = useWorkbenchSync();
-  const trace = useWorkbenchTrace(sync);
   const [plane, setPlane] = useState('YZ');
+  const trace = useWorkbenchTrace(sync, plane);
   const { snapshot, error } = sync;
   const busy = sync.phase === 'running' || sync.phase === 'connecting' || sync.importing;
   const [selected, setSelected] = useState(1);
@@ -138,7 +138,7 @@ export default function Workbench() {
         const chosen = event.target.files[0]; event.target.value = ''; if (chosen) { setPage('design'); sync.importModel(chosen); }
       }} />
       <AnimatePresence mode="wait" initial={false}>{page === 'design' ? <motion.main key="design" className="studio-design-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
-        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1><Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy || sync.phase === 'reconnecting'}><FileUp size={17} />打开模型</Button></div>
+        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1>{sync.canImportModel && <Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy || sync.phase === 'reconnecting'}><FileUp size={17} />打开模型</Button>}</div>
         {error && <div className="studio-live-error" role="alert">{error}</div>}
         <div className={`studio-design-board ${focus ? 'is-focused' : ''} ${busy ? 'is-syncing' : ''}`}>
           <div className="studio-canvas-panel"><div className="studio-canvas-top"><span>2D 光路</span>{model && <Button className="studio-model-info" aria-label="系统设置" onClick={() => setModal('details')}>{model.units}</Button>}</div>

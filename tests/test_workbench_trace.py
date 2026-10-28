@@ -50,8 +50,8 @@ class MathTests(unittest.TestCase):
 
     def test_defaults_primary_existing_fields_and_limits(self):
         m=model(); s=settings_for(m)
-        self.assertEqual(s,{"fields":[1,2,3],"wavelengths":[2],"pupil_count":5})
-        for invalid in ({"fields":[0]}, {"wavelengths":[9]}, {"pupil_count":True}, {"pupil_count":7}, {"fields":[]}, {"fields":[1,1]}, {"plane":"XZ"}):
+        self.assertEqual(s,{"fields":[1,2,3],"wavelengths":[2],"pupil_count":5,"pupil_axis":"Y"})
+        for invalid in ({"fields":[0]}, {"wavelengths":[9]}, {"pupil_count":True}, {"pupil_count":7}, {"fields":[]}, {"fields":[1,1]}, {"pupil_axis":"XZ"}, {"plane":"XZ"}):
             with self.subTest(invalid=invalid),self.assertRaises(TraceError):settings_for(m,invalid)
         m["surfaces"]*=60
         with self.assertRaises(TraceError):settings_for(m)
@@ -61,6 +61,14 @@ class MathTests(unittest.TestCase):
         self.assertEqual(r["rays"][0]["field"]["hx"],-.3)
         self.assertEqual([x["py"] for x in r["rays"]],[-1,-.5,0,.5,1])
         self.assertTrue(all(x["px"]==0 for x in r["rays"]))
+
+    def test_xz_trace_samples_native_x_pupil_and_keeps_y_input_zero(self):
+        m=model();settings=settings_for(m,{"fields":[2],"pupil_count":3,"pupil_axis":"X"})
+        result=assemble(m,settings,lambda s,r:[row(i,s,xyz=(ray['px'],ray['py'],s)) for i,ray in enumerate(r,1)],lambda s:I)
+        self.assertEqual([ray['px'] for ray in result['rays']],[-1.,0.,1.])
+        self.assertEqual([ray['py'] for ray in result['rays']],[0.,0.,0.])
+        self.assertEqual(result['native_inputs']['pupil'],'Py=0; Px=-1..1')
+        self.assertEqual([ray['points'][0]['xyz'] for ray in result['rays']],[[-1.,0.,1.],[0.,0.,1.],[1.,0.,1.]])
 
     def test_matrices_rotation_translation_and_s1_reference(self):
         rotated=([0,-1,0,1,0,0,0,0,1],[10,20,30])

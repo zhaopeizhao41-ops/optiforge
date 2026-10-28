@@ -19,8 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class WorkbenchHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, engine, dist=None):
+    def __init__(self, address, engine, dist=None, *, model_import=True):
         self.engine = engine
+        self.model_import = model_import
         self.token = secrets.token_urlsafe(32)
         self.dist = Path(dist or ROOT / "frontend" / "dist").resolve()
         super().__init__(address, WorkbenchHandler)
@@ -81,7 +82,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json({"status": "success", "service": "optiforge-workbench", "schema_version": 1})
         elif path == "/api/session":
-            self._json({"token": self.server.token, "service_instance_id": self.server.engine.state.context()["service_instance_id"]})
+            self._json({"token": self.server.token, "service_instance_id": self.server.engine.state.context()["service_instance_id"],
+                        "capabilities": {"model_import": self.server.model_import}})
         elif path == "/api/state":
             self._json(self.server.engine.state.read())
         elif path.startswith("/api/traces/"):
@@ -126,6 +128,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             path = urllib.parse.urlsplit(self.path).path
             content_type = self.headers.get("Content-Type", "").split(";")[0]
             if path == "/api/model/import":
+                if not self.server.model_import:
+                    self._json({"status": "error", "code": "MODEL_IMPORT_UNAVAILABLE",
+                                "message": "当前为固定模型的只读验收预览，请在正常工作台打开文件。"}, 403)
+                    return
                 if self.headers.get("X-OptiForge-Protocol") != str(PROTOCOL_VERSION):
                     self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新工作台客户端（协议 v2）。"}, 409)
                     return

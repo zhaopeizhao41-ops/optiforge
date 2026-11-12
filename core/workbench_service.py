@@ -12,6 +12,9 @@ from core.workbench_client import SERVICE_FILE
 from core.workbench_engine import EngineWorker
 from core.workbench_snapshot import json_safe
 from core.workbench_state import PROTOCOL_VERSION
+from core.workbench_ui import WorkbenchUIController, WorkbenchUIError
+from core.workbench_history import HistoryError
+from core.workbench_analysis_history import AnalysisHistoryError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,12 +26,22 @@ class WorkbenchHTTPServer(ThreadingHTTPServer):
         self.engine = engine
         self.model_import = model_import
         self.token = secrets.token_urlsafe(32)
+        self.collaboration_enabled = engine.registry is None or "zemax_design_workflow" in engine.registry
+        self.ui = WorkbenchUIController()
+        engine.navigator = lambda page, focus=None: (
+            self.ui.follow(page, focus) if page != "workflow" or self.collaboration_enabled else [])
         self.dist = Path(dist or ROOT / "frontend" / "dist").resolve()
         super().__init__(address, WorkbenchHandler)
 
     def shutdown(self):
         self.engine.state.close()
         super().shutdown()
+
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return  # A browser tab or MCP bridge closed mid-response (e.g. an open event long-poll).
+        super().handle_error(request, client_address)
 
     def server_close(self):
         self.engine.state.close()
@@ -83,12 +96,68 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._json({"status": "success", "service": "optiforge-workbench", "schema_version": 1})
         elif path == "/api/session":
             self._json({"token": self.server.token, "service_instance_id": self.server.engine.state.context()["service_instance_id"],
-                        "capabilities": {"model_import": self.server.model_import}})
+                        "capabilities": {"model_import": self.server.model_import,
+                                         "native_engine": self.server.engine.native_enabled,
+                                         "collaboration": self.server.collaboration_enabled,
+                                         "workflow_schema_version": 1 if self.server.collaboration_enabled else None,
+                                         "analysis": self.server.engine.analysis_enabled,
+                                         "analysis_schema_version": 1 if self.server.engine.analysis_enabled else None}})
         elif path == "/api/state":
             self._json(self.server.engine.state.read())
+        elif path == "/api/ui/status":
+            context = self.server.engine.state.context()
+            self._json({
+                "protocol_version": PROTOCOL_VERSION,
+                "service_instance_id": context["service_instance_id"],
+                "capabilities": {
+                    "model_import": self.server.model_import,
+                    "native_engine": self.server.engine.native_enabled,
+                    "collaboration": self.server.collaboration_enabled,
+                    "workflow_schema_version": 1 if self.server.collaboration_enabled else None,
+                    "analysis": self.server.engine.analysis_enabled,
+                    "analysis_schema_version": 1 if self.server.engine.analysis_enabled else None,
+                },
+                "context": context,
+                "ui": self.server.ui.status(),
+            })
+        elif path == "/api/history" or path.startswith("/api/history/"):
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
+                                             keep_blank_values=True)
+                if (set(query) != {"instance_id", "project_name"}
+                        or any(len(values) != 1 or not values[0] for values in query.values())):
+                    raise HistoryError("HISTORY_SCOPE_REQUIRED", "请提供明确的服务实例和活动工程", 400)
+                instance, project = query["instance_id"][0], query["project_name"][0]
+                if path == "/api/history":
+                    result = self.server.engine.state.history_list(instance, project)
+                else:
+                    entry_id = path.removeprefix("/api/history/")
+                    result = self.server.engine.state.history_detail(instance, project, entry_id)
+                self._json(result)
+            except HistoryError as error:
+                self._json({"status": "error", "code": error.code, "message": error.message}, error.status)
+        elif path == "/api/analysis-history" or path.startswith("/api/analysis-history/"):
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+                if (set(query) != {"instance_id", "project_name"}
+                        or any(len(values) != 1 or not values[0].strip() for values in query.values())):
+                    raise AnalysisHistoryError("ANALYSIS_HISTORY_SCOPE_REQUIRED",
+                                               "请提供明确的服务实例和活动工程", 400)
+                instance, project = query["instance_id"][0], query["project_name"][0]
+                if path == "/api/analysis-history":
+                    result = self.server.engine.state.analysis_history_list(instance, project)
+                else:
+                    result = self.server.engine.state.analysis_history_detail(
+                        instance, project, path.removeprefix("/api/analysis-history/"))
+                self._json(result)
+            except AnalysisHistoryError as error:
+                self._json({"status": "error", "code": error.code, "message": error.message}, error.status)
         elif path.startswith("/api/traces/"):
             result = self.server.engine.state.get_trace(path.removeprefix("/api/traces/"))
             self._json(result or {"status": "error", "code": "TRACE_NOT_FOUND", "message": "结果不存在或已淘汰"}, 200 if result else 404)
+        elif path.startswith("/api/analyses/"):
+            result = self.server.engine.state.get_analysis(path.removeprefix("/api/analyses/"))
+            self._json(result or {"status":"error","code":"ANALYSIS_NOT_FOUND","message":"分析结果不存在或已淘汰"},200 if result else 404)
         elif path == "/api/events":
             try:
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -127,6 +196,38 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 raise ValueError("请求内容不完整，请重新打开文件")
             path = urllib.parse.urlsplit(self.path).path
             content_type = self.headers.get("Content-Type", "").split(";")[0]
+            if path.startswith("/api/ui/"):
+                data = json.loads(content) if content else {}
+                if not isinstance(data, dict):
+                    raise ValueError("UI request must be a JSON object")
+                if data.get("protocol_version") != PROTOCOL_VERSION:
+                    raise WorkbenchUIError("WORKBENCH_PROTOCOL_INCOMPATIBLE", "需要工作台协议 v2")
+                context = self.server.engine.state.context()
+                if data.get("service_instance_id") != context["service_instance_id"]:
+                    raise WorkbenchUIError("SERVICE_INSTANCE_MISMATCH", "服务实例不匹配")
+                page = data.get("page")
+                actual_page = data.get("actual_page")
+                if page == "workflow" and not self.server.collaboration_enabled:
+                    raise WorkbenchUIError("PAGE_UNAVAILABLE", "当前服务未启用工程协作页面")
+                if actual_page == "workflow" and not self.server.collaboration_enabled:
+                    raise WorkbenchUIError("PAGE_UNAVAILABLE", "当前服务未启用工程协作页面")
+                if path == "/api/ui/session":
+                    result = self.server.ui.register(data.get("ui_session_id"), page)
+                elif path == "/api/ui/heartbeat":
+                    result = self.server.ui.heartbeat(data.get("ui_session_id"), page)
+                elif path == "/api/ui/ack":
+                    result = self.server.ui.ack(data.get("ui_session_id"), data.get("command_id"),
+                                                data.get("status"), data.get("actual_page"),
+                                                data.get("reason"), data.get("actual_focus"))
+                elif path == "/api/ui/navigate":
+                    result = self.server.ui.navigate(data.get("ui_session_id"), page,
+                                                     data.get("request_id"), data.get("focus"))
+                else:
+                    self._json({"status": "error", "message": "Unknown UI endpoint"}, 404)
+                    return
+                result["service_instance_id"] = context["service_instance_id"]
+                self._json(result)
+                return
             if path == "/api/model/import":
                 if not self.server.model_import:
                     self._json({"status": "error", "code": "MODEL_IMPORT_UNAVAILABLE",
@@ -166,14 +267,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     return
                 self._json(self.server.engine.call_envelope(data["name"], data.get("arguments", {}),
                                                            expected_context=data.get("expected_context")))
-            elif path == "/api/trace":
+            elif path in {"/api/trace", "/api/analysis"}:
                 if content_type != "application/json":
                     raise ValueError("Expected JSON trace settings")
                 data = json.loads(content, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
                 if not isinstance(data, dict) or data.get("protocol_version") != PROTOCOL_VERSION:
                     self._json({"status": "error", "code": "WORKBENCH_PROTOCOL_INCOMPATIBLE", "message": "请更新工作台客户端（协议 v2）。"}, 409)
                     return
-                result = self.server.engine.request_trace(data.get("settings"), expected_context=data.get("expected_context"))
+                submit = self.server.engine.request_analysis if path == "/api/analysis" else self.server.engine.request_trace
+                result = submit(data.get("settings"), expected_context=data.get("expected_context"))
                 self._json(result, 202 if result.get("status") == "accepted" else 200)
             elif path == "/api/refresh":
                 data = json.loads(content)
@@ -183,6 +285,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self._json(self.server.engine.refresh(), 202)
             else:
                 self._json({"status": "error", "message": "Unknown endpoint"}, 404)
+        except WorkbenchUIError as error:
+            self._json({"status": "error", "code": error.code, "message": error.message}, 409)
         except (ValueError, OSError) as error:
             self._json({"status": "error", "message": str(error)}, 400)
 

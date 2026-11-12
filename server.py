@@ -16,13 +16,19 @@ MCP-compliant agent (Claude, Gemini, Antigravity, Codex, ...) can drive it.
 
 import json
 import os
+from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import StrictInt, StrictStr
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Image, MCPServer
+from core.workbench_control import WorkbenchControlClient, WorkbenchControlError, public_control_error
+from core.workbench_desktop import desktop_diagnostics
+from core.workbench_task_waiter import WorkbenchTaskWaiter
+
 from tools import (
     zemax_system_info as _system_info,
     zemax_new_file as _new_file,
@@ -37,6 +43,10 @@ from tools import (
     zemax_set_project as _set_project,
     zemax_get_project as _get_project,
     zemax_list_projects as _list_projects,
+    zemax_design_workflow as _design_workflow,
+    zemax_list_design_tasks as _list_design_tasks,
+    zemax_claim_design_task as _claim_design_task,
+    zemax_update_design_task as _update_design_task,
     zemax_set_aperture as _set_aperture,
     zemax_set_fields as _set_fields,
     zemax_set_wavelengths as _set_wavelengths,
@@ -139,6 +149,14 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
    - Stage 2: Pre-embed hard boundaries (MNCA, MXCA, MNEA, TTHI, MNEG), release thicknesses under DLS.
    - Stage 3: Switch to RMS Wavefront (Centroid) as spot approaches 1.5x Airy disk; substitute catalog glasses.
    - Stage 4: Hammer optimization with doubled boundary weights + RAID desensitization.
+   - RECORD EVERY STAGE: approving a proposal with `zemax_confirm_design_proposal` returns `model_handoff`
+     (request_id, version, lease_token). Wrap each stage in `zemax_design_workflow(action='milestone_start')` and
+     close it with `milestone_report` (archive_geometry=True plus the stage's quality_result_id), passing that
+     handoff. Unrecorded runs never appear in the workbench stage view; optimization results carry
+     `stage_record_hint` when no stage is open.
+   - WORKBENCH: when connected, the workbench follows Agent work by itself (model -> design page, analysis ->
+     analysis page, proposal/stages -> workflow page). If a result carries `workbench_connection`, tell the user
+     the workbench is not showing this session.
 
 2.7. [REFLECTIVE / FOLD / GRATING DISCIPLINE - NON-NEGOTIABLE]
    - FOLD MIRRORS: NEVER hand-build a fold from a bare CoordinateBreak tilt. A CB tilt only
@@ -194,9 +212,78 @@ MANDATORY_WORKFLOW_INSTRUCTIONS = """
 ======================================================================================
 """
 
+# MCP Apps (io.modelcontextprotocol/ui): hosts that support it render the view
+# tool as an inline, read-only panel; every other host gets text + PNG as before.
+from mcp.server.apps import Apps
+
+WORKBENCH_VIEW_APP = "ui://optiforge/workbench-view.html"
+_apps = Apps()
+_apps.add_html_resource(
+    WORKBENCH_VIEW_APP,
+    (Path(__file__).resolve().parent / "core" / "mcp_apps" / "workbench_view.html").read_text(encoding="utf-8"),
+    name="workbench_view_app", title="OptiForge 工作台视图",
+    description="Read-only workbench panel: lens, stage convergence or analysis picture with key numbers.",
+    prefers_border=True)
+
+
+@_apps.tool(resource_uri=WORKBENCH_VIEW_APP)
+def optiforge_workbench_view(service_instance_id: StrictStr,
+                             view: Literal['layout', 'stages', 'analysis'] = 'layout',
+                             project_name: Optional[StrictStr] = None) -> list[str | Image]:
+    """Show the user what the workbench shows: a text summary plus a PNG picture.
+
+    view=layout: current 2D lens section (+ cached real rays for this model, if any).
+    view=stages: four optimization stages from their immutable archives (lens overlay,
+      wavefront RMS / MTF@30 / spot RMS per stage). view=analysis: newest cached
+      analysis (MTF curves, worst-field spot with Airy circle).
+    Read-only: never runs a trace, analysis or native call, never changes approval.
+    Pictures of archived or cached results are not an optical acceptance; spot vs
+    Airy is diagnostic INFO. Get service_instance_id from optiforge_workbench_status.
+    The summary includes workbench_url so the user can open the live page.
+    Hosts with MCP Apps render it as an interactive read-only panel
+    (ui://optiforge/workbench-view.html); others get the same text + PNG.
+    """
+    from core.workbench_view import ViewError, render
+    try:
+        client = WorkbenchControlClient.from_environment()
+        summary, image = render(client, service_instance_id, view, project_name)
+    except WorkbenchControlError as error:
+        return [json.dumps(public_control_error(error), ensure_ascii=False, indent=2)]
+    except ViewError as error:
+        return [json.dumps({"status": "error", "code": error.code, "message": error.message}, ensure_ascii=False, indent=2)]
+    text = json.dumps({"status": "success", **summary}, ensure_ascii=False, indent=2, default=str)
+    return [text, Image(data=image, format="png")] if image else [text]
+
+
+from contextlib import asynccontextmanager
+from mcp.server.subscriptions import InMemorySubscriptionBus
+
+# Workbench resource change notifications (subscriptions/listen) flow through this bus.
+_resource_bus = InMemorySubscriptionBus()
+
+
+@asynccontextmanager
+async def _workbench_lifespan(_server):
+    """Watch the configured workbench and publish resource updates; idle otherwise."""
+    if not (os.environ.get("OPTIFORGE_SERVICE_URL") and os.environ.get("OPTIFORGE_SERVICE_FILE")):
+        yield {}
+        return
+    import anyio
+    from core.workbench_resources import ResourceWatcher
+    async with anyio.create_task_group() as group:
+        group.start_soon(ResourceWatcher(_resource_bus).run)
+        try:
+            yield {}
+        finally:
+            group.cancel_scope.cancel()
+
+
 app = MCPServer(
     name="optiforge",
     instructions=MANDATORY_WORKFLOW_INSTRUCTIONS,
+    subscriptions=_resource_bus,
+    lifespan=_workbench_lifespan,
+    extensions=[_apps],
 )
 
 
@@ -209,6 +296,92 @@ app = MCPServer(
 def zemax_get_workbench_snapshot() -> str:
     """Read the active model and its supported YZ contours for the local workbench."""
     return json.dumps(_get_workbench_snapshot(), ensure_ascii=False, indent=2)
+
+
+def _control_result(method, *args, **kwargs):
+    try:
+        client = WorkbenchControlClient.from_environment()
+        value = getattr(client, method)(*args, **kwargs)
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except WorkbenchControlError as error:
+        return json.dumps(public_control_error(error), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def optiforge_workbench_status() -> str:
+    """Read the local workbench service and its online frontend sessions.
+
+    Returns protocol, capabilities, context, each frontend's actual page, and
+    bounded navigation command receipts. No token or filesystem path is returned.
+    Works without a browser; reads the service through loopback HTTP.
+    """
+    return _control_result("status")
+
+
+@app.tool()
+def optiforge_workbench_desktop_diagnostics(service_instance_id: StrictStr,
+                                           browser: Literal['Auto', 'Chrome', 'Edge'] = 'Auto') -> str:
+    """Read profile-window candidates for the configured local service (Windows).
+
+    This never verifies a window's current URL or binds a frontend to a HWND.
+    URL binding is always unverified and window actions are unsupported. No path,
+    command, title, token, raw collector output or raw HTTP error is returned.
+    Does not start a service/browser or invoke optical operations.
+    """
+    return json.dumps(desktop_diagnostics(service_instance_id, browser), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def optiforge_workbench_events(service_instance_id: str, after_seq: int = 0, timeout_ms: int = 0) -> str:
+    """Read existing task/model events from the workbench service.
+
+    Reuses /api/events; after_seq is the event cursor and timeout_ms is 0..20000.
+    Events are a stream the host must read/claim explicitly; this does not wake
+    an arbitrary agent.
+    """
+    return _control_result("events", service_instance_id, after_seq, timeout_ms)
+
+
+@app.tool()
+def optiforge_workbench_wait_for_task(service_instance_id: StrictStr, project_name: StrictStr,
+                                    after_seq: StrictInt = 0, timeout_ms: StrictInt = 20000) -> str:
+    """Wait for existing design task candidates in the explicitly active project.
+
+    The host must call this tool; it does not wake a host or claim/execute work.
+    Returns ready/idle, pending task summaries, the exact workflow context and
+    next_seq. Events are hints; timeout/reset always re-read current authority.
+    timeout_ms is a strict integer 0..20000. Candidates are not optical
+    authorization: re-read/list and atomically claim their current versions,
+    then recheck proposal authorization and model identity before any handoff.
+    Only the configured loopback service is read; there is no native fallback.
+    """
+    try:
+        client = WorkbenchControlClient.from_environment()
+        value = WorkbenchTaskWaiter(client).wait_for_task(
+            service_instance_id, project_name, after_seq, timeout_ms)
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except WorkbenchControlError as error:
+        return json.dumps(public_control_error(error), ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def optiforge_workbench_navigate(service_instance_id: str, ui_session_id: str,
+                                  page: str, request_id: str,
+                                  focus: Optional[Dict[str, Any]] = None) -> str:
+    """Request one online frontend session to switch page, optionally to a target.
+
+    page is workflow/design/analysis. focus (optional) points inside the page:
+    design {"surface": 3}; analysis {"tab": "overview|mtf|wavefront|spot|ray_fan|
+    field_curvature", "field": 2}; workflow {"tab": "requirements|proposal|tasks|
+    milestones", "stage": "stage_1".."stage_4"} (stage only with milestones).
+    The receipt's actual_focus is what the browser really focused; a target the
+    current model/result lacks is reported as partial with a reason. Returns accepted + command_id only; verify
+    applied/rejected/expired through optiforge_workbench_status().commands.
+    optiforge_workbench_events only carries existing task/model events and does
+    not contain UI receipts. The service cannot ACK a command itself, and
+    accepted is not success.
+    """
+    return _control_result("navigate", service_instance_id, ui_session_id, page, request_id, focus)
 
 
 @app.tool()
@@ -252,6 +425,11 @@ def zemax_register_design_proposal(
     mechanical_constraints: Optional[str] = None,
     internal_air_spacing_budget: Optional[str] = None,
     user_confirmed_to_simulate: bool = False,
+    workflow_context: Optional[Dict[str, Any]] = None,
+    task_claim: Optional[Dict[str, Any]] = None,
+    topology: Optional[str] = None,
+    risks: Optional[str] = None,
+    structure_diagram: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Register, format, and audit a comprehensive optical design proposal before Zemax simulation.
@@ -260,6 +438,25 @@ def zemax_register_design_proposal(
     2. Perform deep optical thinking (first-order power distribution, Seidel aberration budget, glass pairing).
     3. Output this structured proposal to the user for formal review.
     4. Explicitly obtain user confirmation before setting user_confirmed_to_simulate=True and launching simulation.
+
+    structure_diagram (optional) is a non-proportional review diagram: labels only,
+    no coordinates, rays or markup. It is validated as a whole before anything is
+    written and never changes the confirmation gate. Omit it or pass None for
+    older proposals; inside the object, optional fields must have their exact
+    type and an explicit null is rejected.
+
+        {"schema_version": 1,
+         "nodes": [{"kind": "object", "label": "物方"},
+                   {"kind": "lens_group", "label": "前组", "element_count": 2},
+                   {"kind": "stop", "label": "光阑"},
+                   {"kind": "image", "label": "像方"}],
+         "caption": "optional text"}
+
+    kind: object | lens_group | stop | mirror | grating | module | image.
+    Rules: 2-24 nodes; first node object, last node image; at most one stop;
+    element_count only on lens_group, integer 1-64; label <=80, note <=240,
+    caption <=500 characters (Unicode code points). Invalid input is rejected
+    before any project activation or file write.
     """
     res = _register_design_proposal(
         project_name=project_name,
@@ -271,6 +468,8 @@ def zemax_register_design_proposal(
         mechanical_constraints=mechanical_constraints,
         internal_air_spacing_budget=internal_air_spacing_budget,
         user_confirmed_to_simulate=user_confirmed_to_simulate,
+        workflow_context=workflow_context, task_claim=task_claim, topology=topology, risks=risks,
+        structure_diagram=structure_diagram,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
@@ -279,6 +478,7 @@ def zemax_register_design_proposal(
 def zemax_confirm_design_proposal(
     project_name: Optional[str] = None,
     user_confirmed_to_simulate: bool = True,
+    workflow_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Open (or close) the Step 4 confirmation gate on an already-registered design proposal.
@@ -291,8 +491,70 @@ def zemax_confirm_design_proposal(
     res = _confirm_design_proposal(
         project_name=project_name,
         user_confirmed_to_simulate=user_confirmed_to_simulate,
+        workflow_context=workflow_context,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+@app.tool()
+def zemax_design_workflow(action: str = 'view', project_name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None, expected_workflow: Optional[Dict[str, Any]] = None) -> str:
+    """Persistent native-independent project/requirements/proposal workflow.
+
+    View first; use returned context as expected_workflow on writes.
+    Actions: view, select ({create}), save ({system_type,specs,sources,user_prompt,constraints}),
+    audit, submit ({request_id,kind,user_text,target?}), confirm ({request_id}), retry ({request_id,version}).
+    Sources are user/recommended. Submit kinds: initial_proposal, proposal_revision, surface_question.
+    confirm explicitly authorizes this exact proposal and queues a model handoff;
+    invoke ONLY after explicit human approval. Pending != delivered to any host.
+    milestone_start: {request_id,version,lease_token,stage_id,attempt_id,note};
+    milestone_report: {request_id,version,lease_token,attempt_id,status,operation_ids,note,
+    archive_geometry?,quality_result_id?}.
+    archive_geometry defaults false; true preserves existing cached geometry for
+    needs_review without new native observation or simulation.
+    quality_result_id defaults null; an explicit existing analysis result_id computed
+    after this stage started, on the reported model revision, is stored verbatim.
+    Never picks the latest result or runs analysis; archiving is not a quality pass.
+    milestone_artifact / milestone_quality_artifact: {source:{service_instance_id,project_name},
+    artifact_id} read a persistent immutable artifact without a model or approval.
+    Stages stage_1..stage_4 are explicit records, never automatic optical passes.
+    Reports are needs_review/failed; they do not run native tools or grant approval.
+    """
+    return json.dumps(_design_workflow(action,project_name,payload,expected_workflow),ensure_ascii=False)
+
+
+@app.tool()
+def zemax_list_design_tasks(project_name: str, history: Optional[Dict[str, Any]] = None) -> str:
+    """List current tasks, or explicitly read older terminal history.
+
+    history: {source:{service_instance_id,project_name},limit?:1..50,cursor?:str}.
+    History is read-only and requires the current trusted host source. Its cursor
+    fixes an insertion boundary; refresh to discover later status changes.
+    """
+    return json.dumps(_list_design_tasks(project_name,history),ensure_ascii=False)
+
+
+@app.tool()
+def zemax_claim_design_task(project_name: str, request_id: str, version: int,
+                            worker_id: str, lease_seconds: int = 300) -> str:
+    """Atomically claim a pending task; token is returned only to the claimant.
+
+    Task claim never grants optical simulation authority. Use the frozen specs
+    for research, register a real proposal with workflow_context/task_claim,
+    then report its proposal_hash. Expiry requires explicit retry, no auto replay.
+    """
+    return json.dumps(_claim_design_task(project_name,request_id,version,worker_id,lease_seconds),ensure_ascii=False)
+
+
+@app.tool()
+def zemax_update_design_task(project_name: str, request_id: str, version: int, lease_token: str,
+                            status: str, result_text: str = '', result_proposal_hash: Optional[str] = None) -> str:
+    """Report progress/completed/failed with exact claim version and lease token.
+
+    Research completion requires the current proposal hash registered for this
+    task. Explanation completion requires text. Does not auto-renew a lease.
+    """
+    return json.dumps(_update_design_task(project_name,request_id,version,lease_token,status,result_text,result_proposal_hash),ensure_ascii=False)
 
 
 @app.tool()
@@ -1042,13 +1304,17 @@ def zemax_run_optimization(
     cores: int = 8,
     stagnation_threshold: float = 0.005,
     max_rounds: int = 6,
+    round_timeout_seconds: float = 120.0,
 ) -> str:
     """
     Run Local Optimization on the current optical system.
     algorithm: 'DLS' (Damped Least Squares) or 'OD' (Orthogonal Descent).
     cycles: 'Automatic', '1', '5', '10', '50'.
     stagnation_threshold: In 'Automatic' mode, stop when a 10-cycle round improves MF by less than this fraction (0.005 = 0.5%).
-    max_rounds: In 'Automatic' mode, maximum number of 10-cycle rounds.
+    max_rounds: In 'Automatic' mode, maximum number of 10-cycle rounds (1..50).
+    round_timeout_seconds: Per-round wall-clock budget (default 120 s); the whole call is also capped
+      at 900 s. On timeout the native optimizer is cancelled, the model is restored to the start of
+      that round, and the call returns status "partial" with the rounds completed.
 
     [SOP PREREQUISITE GATE]: Optimization runs MUST be preceded by web search of initial structures,
     deep optical thinking, design proposal review, and explicit user approval.
@@ -1059,6 +1325,7 @@ def zemax_run_optimization(
         cores=cores,
         stagnation_threshold=stagnation_threshold,
         max_rounds=max_rounds,
+        round_timeout_seconds=round_timeout_seconds,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
@@ -1163,6 +1430,7 @@ def zemax_run_analysis_suite(
     mtf_min_at_30lp_mm: Optional[float] = None,
     distortion_max_pct: Optional[float] = None,
     config: Optional[int] = None,
+    include_details: bool = False,
 ) -> str:
     """
     PREFERRED WAY TO JUDGE IMAGE QUALITY: run the whole analysis battery in ONE call and get back a
@@ -1173,7 +1441,7 @@ def zemax_run_analysis_suite(
     analyses: any of 'wavefront', 'spot', 'mtf', 'ray_fan', 'field_curvature'. Default: the first
       three, run in the order given.
     max_frequency / sample_size: passed through to the FFT MTF run.
-    max_wavefront_fields: run the wavefront map on at most this many fields (the first N); the
+    max_wavefront_fields: run on at most this many magnitude-spaced actual fields, including endpoints; the
       verdict is taken from the worst field. Bounds the suite's cost on a many-field system.
     mtf_min_at_30lp_mm: optional tangential/sagittal MTF floor at 30 lp/mm. Omit it and the MTF row
       is reported as INFO (raw numbers, no verdict) -- pass it when the spec sets an MTF target.
@@ -1193,6 +1461,7 @@ def zemax_run_analysis_suite(
         mtf_min_at_30lp_mm=mtf_min_at_30lp_mm,
         distortion_max_pct=distortion_max_pct,
         config=config,
+        include_details=include_details,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 
@@ -1324,7 +1593,7 @@ def zemax_export_optical_drawing(
     Generate standard optical engineering manufacturing drawings complying with Chinese National Standards
     (GB/T 13323-2009, GB/T 903-2019, GB/T 2831-2009) and ISO 10110.
     Directly exports editable .dxf CAD vector drawings (via ezdxf) and PNG/Markdown reports.
-    Completely removes company/unit name block ('去掉单位名称') and removes redundant 'mm' on dimension lines.
+    Preserves the standard Chinese GB/T 13323 / GB/T 10609.1 title block with the '单位' header while leaving its value completely blank ('单位栏留空'), and omits redundant 'mm' on linear dimension lines.
 
     Args:
         element_index: Specific element index (1-based). If omitted, exports drawings for all lens elements and assembly.
@@ -1439,6 +1708,65 @@ def get_expert_design_guide_resource() -> str:
     return "Expert manual file not found."
 
 
+# Workbench resources: attach as context (@-mention) or subscribe for updates.
+# Read-only; they mirror optiforge_workbench_status / optiforge_workbench_view.
+
+@app.resource("optiforge://workbench/status", name="workbench_status", title="工作台状态",
+              mime_type="application/json")
+def workbench_status_resource() -> str:
+    """Service, active project, current model, online pages, running work and pending design tasks."""
+    from core.workbench_resources import status_resource
+    return status_resource()
+
+
+@app.resource("optiforge://workbench/model", name="workbench_model", title="当前模型与光路",
+              mime_type="application/json")
+def workbench_model_resource() -> str:
+    """Current model surfaces, revision and cached ray trace summary (read-only)."""
+    from core.workbench_resources import model_resource
+    return model_resource()
+
+
+@app.resource("optiforge://workbench/stages", name="workbench_stages", title="四阶段归档",
+              mime_type="application/json")
+def workbench_stages_resource() -> str:
+    """Per-stage metrics read from immutable archives; archived is not accepted."""
+    from core.workbench_resources import stages_resource
+    return stages_resource()
+
+
+@app.resource("optiforge://workbench/analysis", name="workbench_analysis", title="最近像质分析",
+              mime_type="application/json")
+def workbench_analysis_resource() -> str:
+    """Newest cached analysis with its original verdicts and whether it is current."""
+    from core.workbench_resources import analysis_resource
+    return analysis_resource()
+
+
+@app.resource("optiforge://workbench/layout.png", name="workbench_layout_png", title="光路截面图",
+              mime_type="image/png")
+def workbench_layout_png() -> bytes:
+    """Current 2D lens section with cached real rays, as PNG."""
+    from core.workbench_resources import picture
+    return picture("layout")
+
+
+@app.resource("optiforge://workbench/stages.png", name="workbench_stages_png", title="阶段收敛图",
+              mime_type="image/png")
+def workbench_stages_png() -> bytes:
+    """Lens overlay and per-stage wavefront / MTF / spot charts, as PNG."""
+    from core.workbench_resources import picture
+    return picture("stages")
+
+
+@app.resource("optiforge://workbench/analysis.png", name="workbench_analysis_png", title="像质分析图",
+              mime_type="image/png")
+def workbench_analysis_png() -> bytes:
+    """MTF curves and worst-field spot of the newest cached analysis, as PNG."""
+    from core.workbench_resources import picture
+    return picture("analysis")
+
+
 # ==============================================================================
 # MCP Prompts
 # ==============================================================================
@@ -1462,6 +1790,42 @@ def optical_design_workflow_prompt(target_optical_task: str) -> str:
         "3. Design Proposal Review: Call `zemax_register_design_proposal` and present the complete proposal to the user.\n"
         "4. User Confirmation Gate: HALT and ask the user for confirmation. DO NOT call Zemax simulation/optimization "
         "tools until explicit approval is granted."
+    )
+
+
+@app.prompt("optiforge_show_workbench")
+def optiforge_show_workbench_prompt(view: str = "layout") -> str:
+    """Show the local OptiForge workbench (lens / stages / analysis) inside this chat."""
+    return (
+        "Show me the OptiForge workbench in this conversation.\n"
+        "1. Call `optiforge_workbench_status` and read `service_instance_id`, the active project and "
+        "which page each online frontend shows.\n"
+        f"2. Call `optiforge_workbench_view` with that service_instance_id and view=\"{view}\" "
+        "(layout, stages or analysis). Display the returned picture and summarize it in a few lines, "
+        "keeping the tool's verdicts exactly as returned (spot vs Airy is diagnostic INFO).\n"
+        "3. Give me the `workbench_url` so I can open the live page. If a frontend is online and you point "
+        "at something specific (a surface, an analysis tab and field, a stage), call "
+        "`optiforge_workbench_navigate` with `focus` and tell me the receipt's actual_focus and reason.\n"
+        "4. This view is read-only: do not run traces, analyses or modeling tools, and do not treat "
+        "archived results as acceptance."
+    )
+
+
+@app.prompt("optiforge_pick_up_task")
+def optiforge_pick_up_task_prompt() -> str:
+    """Pick up the next request I submitted from the OptiForge workbench UI."""
+    return (
+        "Pick up the next task I submitted in the OptiForge workbench.\n"
+        "1. Call `optiforge_workbench_status` for service_instance_id and the active project.\n"
+        "2. Call `optiforge_workbench_wait_for_task` (timeout_ms up to 20000). If idle, tell me and stop.\n"
+        "3. Re-read with `zemax_design_workflow(action=\"view\")` and `zemax_list_design_tasks`, then "
+        "claim the exact current version with `zemax_claim_design_task`. Claiming is not optical approval.\n"
+        "4. Follow the task kind: research tasks follow Steps 0-3 of the mandatory workflow and end with "
+        "`zemax_register_design_proposal`; never confirm a proposal yourself. Model handoffs require a "
+        "proposal I confirmed in the workbench; you MUST open every optimization stage with `milestone_start` and close it with `milestone_report` "
+        "(archive_geometry and an explicit quality_result_id).\n"
+        "5. After each meaningful step call `optiforge_workbench_view` so I can see the result here, and "
+        "report progress with `zemax_update_design_task`."
     )
 
 

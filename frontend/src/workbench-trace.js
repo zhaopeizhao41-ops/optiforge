@@ -37,7 +37,7 @@ export function traceMessage(view, state, phase, settings) {
   return { waiting:'等待真实追迹结果',queued:'真实光线正在排队',running:'正在计算真实光线',
     unknown:'正在核对追迹结果，请稍候',failed:'追迹未完成，请查看光路详情' }[view.status] || '';
 }
-const reads = new Set(['__refresh__', '__trace__', 'zemax_get_workbench_snapshot', 'zemax_system_info', 'zemax_get_system_data',
+const reads = new Set(['__refresh__', '__trace__', '__analysis__', 'zemax_run_analysis_suite', 'zemax_get_workbench_snapshot', 'zemax_system_info', 'zemax_get_system_data',
   'zemax_get_project', 'zemax_list_projects', 'get_current_design_proposal', 'zemax_audit_requirements', 'zemax_lookup_manual']);
 export const modelBusy = (s) => s?.tasks.pending.some(t => !reads.has(t.tool));
 export function traceAllowed(s, phase) {

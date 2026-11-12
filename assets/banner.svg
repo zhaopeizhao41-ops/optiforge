@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" width="960" height="240" role="img" aria-label="OptiForge">
-  <title>OptiForge: AI-native optical engineering platform over the Zemax ZOS-API</title>
+  <title>OptiForge: AI-native optical engineering platform with a visual workbench, over the Zemax ZOS-API</title>
   <defs>
     <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#081629"/>
@@ -59,16 +59,18 @@
   <!-- wordmark -->
   <g font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">
     <text x="256" y="104" font-size="50" font-weight="700" fill="#FFFFFF">Opti<tspan fill="#7FDBFF">Forge</tspan></text>
-    <text x="258" y="146" font-size="21" fill="#A9C7E8">AI-native optical engineering platform over the Zemax ZOS-API</text>
+    <text x="258" y="146" font-size="21" fill="#A9C7E8">AI-native optical design · visual workbench · Zemax ZOS-API</text>
     <g font-size="15" font-weight="600" fill="#DDEBFA">
-      <rect x="258" y="166" width="96" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
-      <text x="306" y="186" text-anchor="middle">35 tools</text>
-      <rect x="364" y="166" width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
-      <text x="439" y="186" text-anchor="middle">DLS · Hammer</text>
-      <rect x="524" y="166" width="170" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
-      <text x="609" y="186" text-anchor="middle">Airy-disk analysis</text>
-      <rect x="704" y="166" width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
-      <text x="779" y="186" text-anchor="middle">STEP · DXF</text>
+      <rect x="258" y="166" width="150" height="30" rx="15" fill="#7FDBFF" fill-opacity="0.18" stroke="#7FDBFF" stroke-opacity="0.55"/>
+      <text x="333" y="186" text-anchor="middle">Visual workbench</text>
+      <rect x="418" y="166" width="132" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="484" y="186" text-anchor="middle">Live ray trace</text>
+      <rect x="560" y="166" width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="635" y="186" text-anchor="middle">MTF · OPD · Spot</text>
+      <rect x="720" y="166" width="112" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="776" y="186" text-anchor="middle">MCP agents</text>
+      <rect x="842" y="166" width="104" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text x="894" y="186" text-anchor="middle">STEP · DXF</text>
     </g>
   </g>
 </svg>

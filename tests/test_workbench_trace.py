@@ -334,11 +334,11 @@ class EngineTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
-    def run_adapter(self, *, timeout=False, close=True, occupied=False):
+    def run_adapter(self, *, timeout=False, close=True, occupied=False, stuck=False):
         calls=[];tool=NS(IsRunning=False,CanCancel=True,Succeeded=True,ErrorMessage='')
         def run(seconds):calls.append('run');tool.IsRunning=timeout
         def cancel():calls.append('cancel');return True
-        def wait(seconds):calls.append('wait');tool.IsRunning=False
+        def wait(seconds):calls.append('wait');tool.IsRunning=stuck
         def closing():calls.append('close');return close
         tool.RunAndWaitWithTimeout=run;tool.Cancel=cancel;tool.WaitWithTimeout=wait;tool.Close=closing
         def create(count,kind,surface):
@@ -359,6 +359,13 @@ class LifecycleTests(unittest.TestCase):
     def test_cleanup_failure_and_existing_tool(self):
         error,calls=self.run_adapter(close=False);self.assertEqual(error.code,'TRACE_CLEANUP_FAILED')
         error,calls=self.run_adapter(occupied=True);self.assertIn('already open',str(error));self.assertEqual(calls,[])
+    def test_stuck_trace_has_bounded_cleanup_and_quarantines_native_owner(self):
+        from core.zos_session import ZOSSession
+        counter=iter(range(100));owner=NS()
+        with patch.object(ZOSSession,'_instance',owner),patch('core.workbench_trace.time.monotonic',side_effect=lambda:next(counter)):
+            error,calls=self.run_adapter(timeout=True,stuck=True)
+        self.assertEqual(error.code,'TRACE_CLEANUP_FAILED');self.assertTrue(owner.native_cleanup_error)
+        self.assertNotIn('close',calls);self.assertLessEqual(calls.count('wait'),2)
     def test_normal_closes_each_target(self):
         result,calls=self.run_adapter();self.assertEqual(result['counts']['complete'],15);self.assertEqual(calls.count('close'),3)
     def test_grin_rejected_without_opening_tool(self):

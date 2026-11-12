@@ -5,13 +5,15 @@ Local Optimization (DLS/OD), and Hammer global search.
 """
 
 import math
+import time
 from typing import Any, Dict, List, Optional
 
 from core.zos_session import ZOSSession
 from core.operands import _operand
 from core.operation_guard import model_operation
 from core.editor_cells import write_cell
-from core.analysis_runner import run_analysis
+from core.analysis_runner import close_tool, quarantine, run_analysis, run_tool_bounded, stop_tool
+from core.optimization_progress import report as report_progress
 from domain.zemax_rules import OpticalRuleCheck
 
 # Spot operands the optimization wizard emits for each field. The wizard stamps each one with
@@ -213,6 +215,9 @@ def zemax_setup_merit_function(
 
         for s_idx in range(first_g, last_g):
             surf = lde.GetSurfaceAt(s_idx)
+            comm = (surf.Comment or "").upper()
+            if any(kw in comm for kw in ["RELAY", "INTERMEDIATE", "CONJUGATE", "4F"]):
+                continue
             mat = surf.Material.strip()
             # If this surface is an air space inside the lens group
             if not mat or mat.upper() == "AIR":
@@ -493,9 +498,13 @@ def zemax_quick_focus(
             qf.Criterion = zos.Tools.General.QuickFocusCriterion.SpotSizeRadial
 
         qf.UseCentroid = bool(use_centroid)
-        qf.RunAndWaitForCompletion()
+        timed_out = run_tool_bounded(qf, _QUICK_FOCUS_TIMEOUT_S)
     finally:
-        qf.Close()
+        close_tool(qf)
+    if timed_out:
+        # model_operation restores its snapshot on error, so no half-focused model remains.
+        return {"status": "error", "code": "QUICK_FOCUS_TIMEOUT",
+                "message": f"Quick Focus 超过 {_QUICK_FOCUS_TIMEOUT_S:g} s 未完成，已取消并恢复调用前的模型。"}
 
     # Get resulting image surface distance
     last_lens_idx = sys.LDE.NumberOfSurfaces - 2
@@ -510,12 +519,52 @@ def zemax_quick_focus(
     }
 
 
+_ROUND_TIMEOUT_S = 120.0
+_TOTAL_TIMEOUT_S = 900.0
+_QUICK_FOCUS_TIMEOUT_S = 60.0
+
+# Kept as module names for the existing call sites; the bounded logic is shared
+# with every other native tool in core.analysis_runner.
+_stop_tool = stop_tool
+_run_bounded = run_tool_bounded
+_bounded_close = close_tool
+
+
+def _round_snapshot(session):
+    """Copy the model before a round so a cancelled round can be undone."""
+    try:
+        return session.system.CopySystem()
+    except Exception:
+        return None
+
+
+def _restore_round(session, snapshot):
+    """Reload the pre-round copy. Returns (rolled_back, recovery_file, error)."""
+    if snapshot is None:
+        return False, None, "轮前快照不可用"
+    try:
+        path = session._save_snapshot(snapshot)
+        session._restore_recovery(path)
+        return True, path, None
+    except Exception as error:
+        return False, getattr(session, "last_recovery_file", None), str(error)
+
+
+def _close_snapshot(snapshot):
+    if snapshot is not None:
+        try:
+            snapshot.Close(False)
+        except Exception:
+            pass
+
+
 def zemax_run_optimization(
     algorithm: str = "DLS",
     cycles: str = "Automatic",
     cores: int = 8,
     stagnation_threshold: float = 0.005,
     max_rounds: int = 6,
+    round_timeout_seconds: float = _ROUND_TIMEOUT_S,
 ) -> Dict[str, Any]:
     """
     Run Local Optimization on the current optical system with pre-flight ray feasibility
@@ -524,6 +573,8 @@ def zemax_run_optimization(
     cycles: 'Automatic', '1', '5', '10', '50'.
     stagnation_threshold: Minimum relative improvement required to continue (default: 0.005 = 0.5%).
     max_rounds: Maximum number of stepped cycle rounds when running Automatic (default: 6).
+    round_timeout_seconds: Wall-clock budget per round before the native optimizer is
+      cancelled and the run reports partial results (default: 120 s).
     """
     import math
     session = ZOSSession.get_instance()
@@ -582,72 +633,157 @@ def zemax_run_optimization(
     cycles_clean = cycles.lower().strip()
     history = []
     early_stopped = False
+    stop_reason = None
+    timed_out = False
+    started = time.monotonic()
+    total_budget = _TOTAL_TIMEOUT_S
+    round_budget = max(0.001, float(round_timeout_seconds))
+    max_rounds = max(1, int(max_rounds))
+    threshold = max(0.0, float(stagnation_threshold))
 
-    # 3. Stepped Execution with Stagnation Guard
-    if cycles_clean in ["automatic", "auto"]:
-        best_mf = init_mf
-        for r in range(1, max_rounds + 1):
-            sub_opt = session.open_tool("OpenLocalOptimization")
-            try:
-                sub_opt.Algorithm = algo_enum
-                sub_opt.Cycles = zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles
-                sub_opt.NumberOfCores = int(cores)
-                sub_opt.RunAndWaitForCompletion()
-                new_mf = float(sub_opt.CurrentMeritFunction)
-            finally:
-                sub_opt.Close()
-
-            rel_imp = (best_mf - new_mf) / best_mf if best_mf > 0 else 0.0
-            history.append({
-                "round": r,
-                "cycles": 10,
-                "mf_before": round(best_mf, 6),
-                "mf_after": round(new_mf, 6),
-                "improvement_pct": round(rel_imp * 100.0, 2),
-            })
-
-            if rel_imp < stagnation_threshold:
-                early_stopped = True
-                best_mf = new_mf
-                break
-            best_mf = new_mf
-
-        final_mf = best_mf
-    else:
-        cycle_map = {
-            "1": zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle,
-            "5": zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles,
-            "10": zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles,
-            "50": zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles,
-        }
-        fixed_opt = session.open_tool("OpenLocalOptimization")
+    def _finite(value):
         try:
-            fixed_opt.Algorithm = algo_enum
-            fixed_opt.NumberOfCores = int(cores)
-            fixed_opt.Cycles = cycle_map.get(
-                cycles_clean, zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles
-            )
-            fixed_opt.RunAndWaitForCompletion()
-            final_mf = float(fixed_opt.CurrentMeritFunction)
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    init_mf = _finite(init_mf)
+    if init_mf is None:
+        return {
+            "status": "error",
+            "code": "MERIT_FUNCTION_NON_FINITE",
+            "message": "初始评价函数不是有限数值；请先检查视场/光瞳是否截光或求解是否发散。",
+            "variables": num_vars,
+        }
+
+    # 3. Stepped execution. Both paths wait with a deadline: RunAndWaitForCompletion
+    # has none, and a diverging DLS run or a modal dialog would hold the session lock
+    # forever. The stagnation guard treats a non-finite merit function as terminal.
+    cycle_map = {
+        "1": zos.Tools.Optimization.OptimizationCycles.Fixed_1_Cycle,
+        "5": zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles,
+        "10": zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles,
+        "50": zos.Tools.Optimization.OptimizationCycles.Fixed_50_Cycles,
+    }
+    automatic = cycles_clean in {"automatic", "auto"}
+    planned_rounds = max_rounds if automatic else 1
+    round_copy = None
+    rollback = None
+
+    for r in range(1, planned_rounds + 1):
+        remaining = total_budget - (time.monotonic() - started)
+        if remaining <= 0:
+            stop_reason = "total_timeout"
+            break
+        allowance = min(round_budget, remaining)
+        _close_snapshot(round_copy)
+        round_copy = _round_snapshot(session)
+        sub_opt = session.open_tool("OpenLocalOptimization")
+        try:
+            sub_opt.Algorithm = algo_enum
+            sub_opt.Cycles = (zos.Tools.Optimization.OptimizationCycles.Fixed_10_Cycles if automatic
+                              else cycle_map.get(cycles_clean, zos.Tools.Optimization.OptimizationCycles.Fixed_5_Cycles))
+            sub_opt.NumberOfCores = int(cores)
+            hit_deadline = _run_bounded(sub_opt, allowance)
+            new_mf = _finite(sub_opt.CurrentMeritFunction)
         finally:
-            fixed_opt.Close()
+            _bounded_close(sub_opt)
+
+        if hit_deadline or new_mf is None:
+            # The cancelled or diverged round may have left half-updated variables in
+            # the model; reload the copy taken before it so the reported state is real.
+            rollback = _restore_round(session, round_copy)
+        if hit_deadline:
+            timed_out = True
+            stop_reason = "total_timeout" if allowance < round_budget else "round_timeout"
+            report_progress(round=r, rounds=planned_rounds, stop_reason=stop_reason, timed_out=True,
+                            tool="zemax_run_optimization")
+            break
+        if new_mf is None:
+            stop_reason = "merit_function_non_finite"
+            report_progress(round=r, rounds=planned_rounds, stop_reason=stop_reason,
+                            tool="zemax_run_optimization")
+            break
+
+        rel_imp = (init_mf - new_mf) / init_mf if init_mf > 0 else 0.0
+        history.append({
+            "round": r,
+            "cycles": 10 if automatic else int(cycles_clean),
+            "mf_before": round(init_mf, 6),
+            "mf_after": round(new_mf, 6),
+            "improvement_pct": round(rel_imp * 100.0, 2),
+        })
+        report_progress(round=r, rounds=planned_rounds, merit_before=round(init_mf, 6),
+                        merit_after=round(new_mf, 6), improvement_pct=round(rel_imp * 100.0, 2),
+                        tool="zemax_run_optimization")
+
+        init_mf = new_mf
+        if not automatic:
+            stop_reason = "fixed_cycles"
+            break
+        if rel_imp < threshold:
+            early_stopped = True
+            stop_reason = "stagnated"
+            break
+    else:
+        stop_reason = "max_rounds"
+    _close_snapshot(round_copy)
+    final_mf = init_mf
 
     improvement_pct = 0.0
-    if init_mf > 0:
-        improvement_pct = max(0.0, (init_mf - final_mf) / init_mf * 100.0)
+    if history:
+        first_mf = history[0]["mf_before"]
+        if first_mf > 0:
+            improvement_pct = max(0.0, (first_mf - final_mf) / first_mf * 100.0)
 
+    status = "success"
+    if stop_reason in {"round_timeout", "total_timeout"}:
+        status = "partial"
+    elif stop_reason == "merit_function_non_finite":
+        status = "warning"
     result: Dict[str, Any] = {
-        "status": "success",
+        "status": status,
         "algorithm": algo_name,
         "variables_count": num_vars,
         "targets_count": num_targets,
-        "initial_merit_function": round(init_mf, 6),
+        "initial_merit_function": round(history[0]["mf_before"] if history else final_mf, 6),
         "final_merit_function": round(final_mf, 6),
         "improvement_percentage": round(improvement_pct, 2),
         "early_stop_triggered": early_stopped,
-        "stagnation_guard_threshold_pct": stagnation_threshold * 100.0,
+        "stop_reason": stop_reason,
+        "timed_out": timed_out,
+        "round_timeout_seconds": round_budget,
+        "total_timeout_seconds": total_budget,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "stagnation_guard_threshold_pct": threshold * 100.0,
         "history": history,
     }
+    if rollback is not None:
+        rolled_back, recovery_file, rollback_error = rollback
+        result["round_rolled_back"] = rolled_back
+        if recovery_file:
+            result["recovery_file"] = recovery_file
+        if rollback_error:
+            result["rollback_error"] = rollback_error
+    if timed_out:
+        result["message"] = (
+            ("优化在时限内未收敛，原生优化器已被取消，模型已恢复到被取消那一轮开始前的状态；"
+             if result.get("round_rolled_back") else
+             "优化在时限内未收敛，原生优化器已被取消；轮前快照恢复失败，模型停在取消时的状态，请重新载入核对；")
+            + "请检查视场/光瞳截光或增加约束后重试。"
+        )
+    elif stop_reason == "merit_function_non_finite":
+        result["message"] = (
+            ("评价函数出现非有限值（通常由光线追迹失败引起），模型已恢复到该轮开始前的状态；"
+             if result.get("round_rolled_back") else
+             "评价函数出现非有限值（通常由光线追迹失败引起），轮前快照恢复失败，请重新载入核对；")
+            + "请先修复截光或发散面再优化。"
+        )
+    if rollback is not None and not result.get("round_rolled_back"):
+        # Unknown model state: fail closed so model_operation restores its own snapshot.
+        result["status"] = "error"
+        result["code"] = "OPTIMIZATION_ROLLBACK_FAILED"
 
     # A low merit function does not by itself prove a usable design. When the system
     # carries a wide off-axis field the optimizer may minimise the sum at a defocused
@@ -691,10 +827,11 @@ def zemax_run_optimization(
                 try:
                     qf.Criterion = zos.Tools.General.QuickFocusCriterion.SpotSizeRadial
                     qf.UseCentroid = True
-                    qf.RunAndWaitForCompletion()
+                    diag_timed_out = run_tool_bounded(qf, _QUICK_FOCUS_TIMEOUT_S)
                 finally:
-                    qf.Close()
-                reachable_um = _on_axis_rms_um(copy)
+                    close_tool(qf)
+                # A timed-out refocus leaves "reachable" unknown rather than wrong.
+                reachable_um = None if diag_timed_out else _on_axis_rms_um(copy)
             finally:
                 copy.Close(False)
         except Exception:
@@ -762,6 +899,39 @@ def zemax_run_optimization(
     except Exception as diag_error:
         result["focus_diagnostic"] = {"verdict": "unavailable", "message": str(diag_error)}
 
+    return _stage_reminder(result)
+
+
+def _stage_reminder(result):
+    """Attach a reminder when an optimization ran outside a recorded stage.
+
+    The four-stage view only has data for runs wrapped in milestone_start /
+    milestone_report. This never changes status or the model.
+    """
+    if not isinstance(result, dict) or result.get("status") == "error":
+        return result
+    try:
+        from core.design_milestones import stage_status
+        from tools.project_manager import get_active_project_name
+        status = stage_status(get_active_project_name())
+    except Exception:
+        return result
+    if status["stage"]:
+        result["recorded_stage"] = status["stage"]
+    elif status["handoff"]:
+        handoff = status["handoff"]
+        result["stage_record_hint"] = (
+            "本次优化不在任何已登记阶段内，工作台“优化阶段”视图不会显示它。若这是四阶段路径的一步，"
+            f"请用 zemax_design_workflow(action='milestone_start')，payload 带 request_id='{handoff['request_id']}'、"
+            f"version={handoff['version']} 与确认时返回的 lease_token；结束后用 milestone_report"
+            "（archive_geometry=True 并附 quality_result_id）登记。"
+        )
+    else:
+        result["stage_record_hint"] = (
+            "本次优化不在任何已登记阶段内，且当前没有有效的建模交接任务，因此无法登记阶段。"
+            "阶段记录需要用户在对话或工作台确认本版提案（确认会返回 model_handoff 与 lease_token）；"
+            "租约过期时需在工作台重试。"
+        )
     return result
 
 
@@ -774,20 +944,34 @@ def zemax_run_hammer(timeout_seconds: int = 10) -> Dict[str, Any]:
     sys = session.system
     zos = session.ZOSAPI
 
+    budget = max(1, int(timeout_seconds))
     hammer = session.open_tool("OpenHammerOptimization")
     try:
-        hammer.RunAndWaitWithTimeout(timeout_seconds)
-        hammer.Cancel()
-        hammer.WaitForCompletion()
+        hammer.RunAndWaitWithTimeout(budget)
+        # Hammer has no natural end: it searches until stopped, so reaching the budget
+        # is the normal outcome, not a partial one. WaitForCompletion has no deadline
+        # of its own, so the stop is bounded (and quarantined if it fails).
+        stopped_at_budget = bool(getattr(hammer, "IsRunning", False))
+        stop_tool(hammer)
         final_mf = float(hammer.CurrentMeritFunction)
     finally:
-        hammer.Close()
+        close_tool(hammer)
 
-    return {
+    final_mf = final_mf if math.isfinite(final_mf) else None
+    if final_mf is None:
+        # model_operation restores its snapshot on error.
+        return {"status": "error", "code": "MERIT_FUNCTION_NON_FINITE",
+                "message": "Hammer 结束时评价函数不是有限数值，已恢复调用前的模型。"}
+    result = {
         "status": "success",
-        "message": f"Hammer optimization completed after {timeout_seconds}s.",
+        "message": (f"Hammer optimization stopped at its {budget}s budget." if stopped_at_budget
+                    else f"Hammer optimization finished within {budget}s."),
+        "stopped_at_budget": stopped_at_budget,
+        "timeout_seconds": budget,
         "final_merit_function": round(final_mf, 6),
+        "note": "Hammer 是有限时长的全局搜索，结束不代表已达全局最优；以分析套件的门禁行判定像质。",
     }
+    return _stage_reminder(result)
 
 
 for _name in ("zemax_setup_merit_function", "zemax_add_operand", "zemax_add_operands",

@@ -25,6 +25,11 @@ from tools.project_manager import (
     _within,
 )
 from core.operation_guard import model_operation, serialized_operation
+from core.proposal_diagram import (
+    StructureDiagramError,
+    describe_structure_diagram,
+    validate_structure_diagram,
+)
 
 
 def zemax_system_info() -> Dict[str, Any]:
@@ -503,6 +508,11 @@ def zemax_register_design_proposal(
     mechanical_constraints: Optional[str] = None,
     internal_air_spacing_budget: Optional[str] = None,
     user_confirmed_to_simulate: bool = False,
+    workflow_context: Optional[Dict[str, Any]] = None,
+    task_claim: Optional[Dict[str, Any]] = None,
+    topology: Optional[str] = None,
+    risks: Optional[str] = None,
+    structure_diagram: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Register and format a comprehensive optical design proposal before Zemax simulation.
@@ -511,7 +521,18 @@ def zemax_register_design_proposal(
     2. Deep optical thinking & Seidel aberration budget
     3. Structured proposal formulation (including strict internal air spacing & compactness budget)
     4. Explicit user decision gate before simulation
+
+    structure_diagram is an optional non-proportional node list for the review page
+    (labels only, no coordinates/rays/markup); invalid input is rejected before any
+    project activation or file write, and None keeps older callers working.
     """
+    # Validate before any project activation or file write: a rejected diagram
+    # must leave the previous proposal, requirements and approval untouched.
+    try:
+        structure = validate_structure_diagram(structure_diagram)
+    except StructureDiagramError as error:
+        return {"status": "error", "code": error.code, "message": str(error)}
+
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     proposal_doc = f"""# 《光学设计与仿真提案报告》: {project_name}
@@ -560,6 +581,16 @@ def zemax_register_design_proposal(
 {mechanical_constraints}
 """
 
+    if structure:
+        proposal_doc += f"""
+---
+
+### 方案结构示意（非比例 · 未仿真）
+{describe_structure_diagram(structure)}
+
+> 非比例示意，未仿真；不代表真实光路、通光或像质。
+"""
+
     # Automatically initialize dedicated project workspace
     proj_info = set_active_project(
         project_name,
@@ -584,6 +615,9 @@ def zemax_register_design_proposal(
         "mechanical_constraints": mechanical_constraints or "",
         "user_confirmed_to_simulate": user_confirmed_to_simulate,
         "formatted_proposal": proposal_doc,
+        "topology": topology,
+        "risks": risks,
+        "structure_diagram": structure,
     }
     _atomic_json(os.path.join(p_dir, "design_proposal.json"), proposal)
 
@@ -613,6 +647,8 @@ def zemax_register_design_proposal(
             "公差敏感度与工艺风险预警",
         ],
         "proposal_char_count": len(proposal_doc),
+        "structure_diagram": structure,
+        "structure_summary": describe_structure_diagram(structure) or None,
         "proposal_note": (
             "The full proposal Markdown was written to proposal_report_file; read that file if "
             "you need the text again. Present the design to the user from your own plan, not by "
@@ -624,7 +660,8 @@ def zemax_register_design_proposal(
 
 
 def zemax_confirm_design_proposal(project_name: Optional[str] = None,
-                                  user_confirmed_to_simulate: bool = True) -> Dict[str, Any]:
+                                  user_confirmed_to_simulate: bool = True,
+                                  workflow_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Open or re-close the Step 4 confirmation gate on an already-registered proposal.
 
     This is the ONLY supported way to release the gate. Call it after the user has been
@@ -662,6 +699,15 @@ def zemax_confirm_design_proposal(project_name: Optional[str] = None,
         return {"status": "error",
                 "message": f"Stored proposal belongs to '{proposal.get('project_name')}', not '{target}'."}
 
+    if user_confirmed_to_simulate:
+        from core.design_workflow import validate_confirmation,transaction,_draft,check_context,conversational
+        with transaction() as db:
+            draft = _draft(db, target)
+            # A conversation-recorded draft is approved in the conversation itself;
+            # workbench-managed drafts still require the exact workflow context.
+            if draft['revision'] and not (conversational(draft) and workflow_context is None):
+                check_context(db, target, workflow_context)
+        validate_confirmation(target, proposal)
     proposal["project_name"] = target
     proposal["user_confirmed_to_simulate"] = bool(user_confirmed_to_simulate)
     proposal["confirmed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -699,6 +745,11 @@ def get_current_design_proposal() -> Dict[str, Any]:
             with open(path, "r", encoding="utf-8") as f:
                 proposal = json.load(f)
             if proposal.get("project_name") == active:
+                from core.design_workflow import validate_confirmation
+                try:validate_confirmation(active, proposal,require_approval=proposal.get('user_confirmed_to_simulate') is True)
+                except ValueError:
+                    proposal["user_confirmed_to_simulate"] = False
+                    proposal["approval_invalidated"] = "workflow_evidence_changed"
                 return proposal
         except (OSError, ValueError):
             pass
@@ -708,7 +759,9 @@ def get_current_design_proposal() -> Dict[str, Any]:
         try:
             with open(report_md, "r", encoding="utf-8") as f:
                 content = f.read()
-            confirmed = "✅ 已获用户授权确认" in content or "user_confirmed_to_simulate" in content
+            # Text is not an authorization source. A missing JSON must never
+            # recover approval from a Markdown sentence or untrusted content.
+            confirmed = False
             proposal = {
                 "project_name": active,
                 "user_confirmed_to_simulate": confirmed,
@@ -740,8 +793,8 @@ SYSTEM_SPEC_TEMPLATES: Dict[str, Dict[str, Any]] = {
             },
             {
                 "key": "f_number",
-                "aliases": ["fno", "f_num", "f/#", "f_number", "光圈", "孔径", "f数", "相对孔径"],
-                "name": "工作光圈数 (F/#) 或 通光口径 (EPD)",
+                "aliases": ["fno", "f_num", "f/#", "f_number", "光圈", "f数", "相对孔径"],
+                "name": "工作光圈数 (F/#)",
                 "unit": "无量纲",
                 "desc": "决定集光能量、景深与衍射极限艾里斑尺寸",
                 "default": "2.8 (通用工业与摄影基准)",
@@ -820,9 +873,9 @@ SYSTEM_SPEC_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {
                 "key": "scan_angle_deg",
                 "aliases": ["scan_angle", "theta", "angle", "扫描角", "摆角", "偏转角"],
-                "name": "振镜最大光学扫描角 (θ)",
+                "name": "振镜最大光学扫描半角 (θ)",
                 "unit": "度",
-                "desc": "振镜最大出射光束光学半角或全角",
+                "desc": "振镜最大出射光束光学半角；不是机械摆角或全角",
                 "default": "± 15.0° (光学半角 15°，对应机械摆角 ±7.5°)",
                 "question": "请问激光振镜的最大光学扫描角度是多少？（如常用 ±10°, ±15°, ±20°）",
             },
@@ -991,6 +1044,50 @@ SYSTEM_SPEC_TEMPLATES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _field_spec_error(value: Any) -> Optional[str]:
+    """Parse one explicit field magnitude or positive sensor dimension.
+
+    Match the complete expression so minus signs, extra dimensions and mixed
+    full/half angle descriptions cannot be silently discarded by digit search.
+    Inch fractions denote sensor formats, rather than physical diagonal inches.
+    """
+    import unicodedata
+
+    message = ('请填写正的像面尺寸及单位（如 11 mm、2/3\"），或明确的正视场幅度'
+               '（如全视场 25 deg、半视场 12.5 deg）；有符号方向、角度范围或全/半角不明时请补充说明。')
+    if not isinstance(value, str):
+        return message
+    value = unicodedata.normalize('NFKC', value).strip().lower().replace('′′','"')
+    number = r'(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?'
+    label = r'(?:全视场(?:角)?|半视场(?:角)?|(?:full|half)(?:\s+(?:field(?:\s+of\s+view)?|fov))?)'
+    angle = re.fullmatch(
+        rf'(?:(?P<before>{label})\s*[:=]?\s*)?(?P<number>{number})\s*(?:deg(?:rees)?|°|度)'
+        rf'(?:\s*(?P<after>{label}))?', value)
+    if angle:
+        # One label, one unsigned positive magnitude; +/- or signed bounds
+        # express directions and must be clarified, never converted with abs().
+        labels = [angle[k] for k in ('before', 'after') if angle[k]]
+        magnitude = float(angle['number'])
+        return None if len(labels) == 1 and math.isfinite(magnitude) and magnitude > 0 else message
+    dimension_label = r'(?:像面(?:直径|尺寸)?|传感器(?:像面直径|靶面|对角线|尺寸)?|靶面(?:直径|尺寸)?|直径|对角线|sensor(?:\s+(?:format|diagonal))?)'
+    dimension = re.fullmatch(
+        rf'(?:{dimension_label}\s*[:=]?\s*)?(?P<numerator>[+-]?{number})'
+        rf'(?:\s*/\s*(?P<denominator>[+-]?{number}))?\s*'
+        rf'(?P<unit>mm|毫米|inch(?:es)?|in|英寸|[\"″])(?:\s*sensor)?', value)
+    if dimension:
+        numerator = float(dimension['numerator'])
+        denominator = float(dimension['denominator']) if dimension['denominator'] else 1.0
+        if (math.isfinite(numerator) and math.isfinite(denominator) and numerator > 0 and denominator > 0
+                and (not dimension['denominator'] or dimension['unit'] not in ('mm', '毫米'))):
+            return None
+    rectangle = re.fullmatch(
+        rf'(?:(?:像面尺寸|传感器(?:尺寸)?|靶面(?:尺寸)?|sensor(?:\s+size)?)\s*[:=]?\s*)?'
+        rf'(?P<width>{number})\s*(?:mm|毫米)?\s*[x×]\s*(?P<height>{number})\s*(?:mm|毫米)',value)
+    if rectangle and all(math.isfinite(float(rectangle[k])) and float(rectangle[k])>0 for k in ('width','height')):
+        return None
+    return message
+
+
 def zemax_audit_requirements(
     system_type: str = "imaging_lens",
     specs: Optional[Dict[str, Any]] = None,
@@ -1022,17 +1119,29 @@ def zemax_audit_requirements(
                     isinstance(v, (int, float)) and not isinstance(v, bool)
                     and math.isfinite(float(v)) and float(v) > 0 for v in value
                 )
-            return bool(re.search(r"\d", str(value)))
+            numbers=re.findall(r'(?<![\d.])\d+(?:\.\d+)?',str(value))
+            return (bool(numbers) and all(float(v)>0 for v in numbers)
+                    and bool(re.search(r'(?:nm|[uμµ]m|纳米|微米)',str(value),re.I))
+                    and not re.search(r'(^|\s)-\d',str(value)))
         if key in {"fov_or_sensor", "immersion_medium", "telecentricity_required"}:
             if key == "fov_or_sensor" and isinstance(value, (int, float)):
-                return math.isfinite(float(value)) and float(value) > 0
+                return False  # A bare number does not specify angle or sensor size.
+            if key == "fov_or_sensor":
+                return _field_spec_error(value) is None
             return bool(str(value).strip())
         positive_numeric = {
             "f_number", "scan_angle_deg", "beam_diameter_mm", "wavelength_nm",
             "magnification", "numerical_aperture_na", "clear_aperture_mm",
             "field_number_fn_mm",
         }
-        if key in positive_numeric or key.endswith("_mm"):
+        if key in positive_numeric or key.endswith("_mm") or key == 'pixel_pitch_um':
+            if isinstance(value, str):
+                # Accept only the field's own unit as a suffix ("50 mm" for efl_mm);
+                # any other unit stays invalid rather than being converted.
+                own_unit = {"_mm": r"mm|毫米", "_um": r"[uμµ]m|微米", "_deg": r"deg|degrees?|°|度"}
+                suffix = next((pattern for ending, pattern in own_unit.items() if key.endswith(ending)), None)
+                if suffix:
+                    value = re.sub(rf"\s*(?:{suffix})\s*$", "", value.strip(), flags=re.I)
             try:
                 number = float(value)
             except (TypeError, ValueError):
@@ -1041,6 +1150,7 @@ def zemax_audit_requirements(
                 return False
             if key == "efl_mm":
                 return number != 0.0
+            if key == 'coverslip_thickness_mm':return number >= 0.0
             return number > 0.0
         return True
 
@@ -1074,9 +1184,11 @@ def zemax_audit_requirements(
             user_specs["f_number"] = float(fno_m.group(1))
 
         # Scan for wavelength e.g. "830nm", "1064nm", "532nm"
-        wave_m = re.search(r'(\d{3,4})\s*nm', prompt_lower)
+        wave_m = re.search(r'(\d+(?:\.\d+)?)(?:\s*[~–—-]\s*(\d+(?:\.\d+)?))?\s*nm', prompt_lower)
         if wave_m and "wavelength" not in user_specs and "wavelength_range" not in user_specs:
-            user_specs["wavelength_range"] = f"{wave_m.group(1)} nm"
+            wave_key='wavelength_nm' if any(f['key']=='wavelength_nm' for f in tmpl['mandatory']) else 'wavelength_range'
+            if wave_key not in user_specs:
+                user_specs[wave_key] = float(wave_m[1]) if wave_key=='wavelength_nm' else wave_m[0]
 
     recognized_specs: Dict[str, Any] = {}
     missing_mandatory: List[Dict[str, Any]] = []
@@ -1092,7 +1204,9 @@ def zemax_audit_requirements(
                 recognized_specs[item["key"]] = val
                 continue
             if val is not None:
-                invalid_specs.append({"key": item["key"], "value": val, "message": "Value is missing, non-finite, or outside the allowed range."})
+                message = (_field_spec_error(val) if item['key']=='fov_or_sensor' else
+                           "Value is missing, non-finite, or outside the allowed range.")
+                invalid_specs.append({"key": item["key"], "value": val, "message": message})
             missing.append({
                 "key": item["key"],
                 "name": item["name"],
@@ -1106,7 +1220,19 @@ def zemax_audit_requirements(
                     f"- **{item['name']}**: {item['question']}\n  *(行业推荐默认值: `{item['default']}`)*"
                 )
 
-    is_complete = (len(missing_mandatory) == 0 and not invalid_specs)
+    conflicts=[]
+    def conflict(keys,message):conflicts.append({"keys":keys,"message":message})
+    if all(k in recognized_specs for k in ("max_total_track_mm","min_back_focal_length_mm")):
+        if float(recognized_specs['min_back_focal_length_mm'])>=float(recognized_specs['max_total_track_mm']):
+            conflict(['min_back_focal_length_mm','max_total_track_mm'],'最小后截距不能达到或超过最大光学总长')
+    if 'wavelength_range' in recognized_specs:
+        waves=re.findall(r'\d+(?:\.\d+)?',str(recognized_specs['wavelength_range']))
+        if len(waves)==2 and float(waves[0])>float(waves[1]):conflict(['wavelength_range'],'波长范围上限必须不小于下限')
+    if 'numerical_aperture_na' in recognized_specs and 'immersion_medium' in recognized_specs:
+        medium=str(recognized_specs['immersion_medium']).lower()
+        n=1.333 if 'water' in medium or '水' in medium else 1.515 if 'oil' in medium or '油' in medium else 1.0 if 'dry' in medium or 'air' in medium or '空气' in medium else None
+        if n and float(recognized_specs['numerical_aperture_na'])>n:conflict(['numerical_aperture_na','immersion_medium'],'数值孔径 NA 不能大于所选介质折射率')
+    is_complete = (len(missing_mandatory) == 0 and not invalid_specs and not conflicts)
     status = "READY_FOR_DESIGN" if is_complete else "NEEDS_CLARIFICATION"
 
     # Build Markdown Report
@@ -1125,6 +1251,7 @@ def zemax_audit_requirements(
         report += "\n#### 2. 已识别但非法的参数 (Invalid):\n"
         for item in invalid_specs:
             report += f"- **{item['key']}**: `{item['value']}` - {item['message']}\n"
+    for item in conflicts:report += f"- **规格矛盾**: {item['message']}\n"
 
     if missing_mandatory:
         report += "\n#### 3. 必须向用户追问确认的核心缺失参数 (Mandatory):\n"
@@ -1134,7 +1261,7 @@ def zemax_audit_requirements(
     if missing_recommended:
         report += "\n#### 4. 建议进一步明确的工程/探测器参数 (Recommended):\n"
         for item in missing_recommended:
-            report += f"- **{item['name']}**: {item['question']} *(若未指定，设计将默认采用 `{item['recommended_default']}`)*\n"
+            report += f"- **{item['name']}**: {item['question']} *(建议值 `{item['recommended_default']}`，未指定时不自动采用)*\n"
 
     if not is_complete:
         next_action = (
@@ -1155,6 +1282,7 @@ def zemax_audit_requirements(
         "missing_mandatory": missing_mandatory,
         "missing_recommended": missing_recommended,
         "invalid_specs": invalid_specs,
+        "conflicts": conflicts,
         "interactive_questions": interactive_questions,
         "next_action": next_action,
         "audit_report": report,
@@ -1162,6 +1290,9 @@ def zemax_audit_requirements(
 
 
 # Apply the same workflow boundary to direct Python calls and MCP wrappers.
+from core.design_workflow import proposal_registration, proposal_confirmation
+zemax_register_design_proposal = proposal_registration(zemax_register_design_proposal)
+zemax_confirm_design_proposal = proposal_confirmation(zemax_confirm_design_proposal)
 for _name in ("zemax_new_file", "zemax_load_template"):
     globals()[_name] = model_operation(globals()[_name])
 for _name in (

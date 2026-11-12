@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OptiForge 工作台视图</title>
+<style>
+  /* Own fallbacks; host style variables override when provided. */
+  :root { color-scheme: light dark; --bg:#ffffff; --text:#202429; --muted:#626970; --line:#dfe3e6; --soft:#f2f3f4; --accent:#2a78d6;
+    --pass:#1a7f37; --fail:#b42318; --warn:#9a6700; font-family: var(--font-sans, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif); }
+  :root[data-theme="dark"] { --bg:#1d2125; --text:#edf0f2; --muted:#adb6bd; --line:#3b434a; --soft:#2b3035; --accent:#6da7ec;
+    --pass:#5aca9b; --fail:#ff7b82; --warn:#e3b341; }
+  html, body { margin:0; background:var(--color-background-primary, var(--bg)); color:var(--color-text-primary, var(--text)); }
+  body { font-size:14px; line-height:1.55; }
+  main { padding:14px 16px 16px; display:grid; gap:12px; }
+  header { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; justify-content:space-between; }
+  h1 { font-size:15px; font-weight:600; margin:0; }
+  .meta { color:var(--muted); font-size:12px; }
+  nav { display:flex; gap:4px; padding:3px; border-radius:10px; background:var(--soft); }
+  button { font:inherit; font-size:13px; border:0; border-radius:8px; padding:5px 10px; background:transparent; color:inherit; cursor:pointer; }
+  button[aria-pressed="true"] { background:var(--bg); box-shadow:0 1px 3px #0002; }
+  button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .actions button { border:1px solid var(--line); }
+  figure { margin:0; }
+  img { display:block; width:100%; height:auto; border-radius:10px; border:1px solid var(--line); background:#fff; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; }
+  .tile { padding:10px 12px; border-radius:10px; background:var(--soft); display:grid; gap:2px; }
+  .tile span, .tile em { font-size:12px; color:var(--muted); font-style:normal; }
+  .tile strong { font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; }
+  table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  .scroll { overflow-x:auto; }
+  .verdict { display:inline-block; padding:0 6px; border-radius:6px; font-size:11px; border:1px solid currentColor; }
+  .v-PASS { color:var(--pass); } .v-FAIL, .v-ERROR { color:var(--fail); } .v-WARN { color:var(--warn); } .v-INFO { color:var(--muted); }
+  .note { font-size:12px; color:var(--muted); }
+  .error { padding:10px 12px; border-radius:10px; border:1px solid var(--fail); color:var(--fail); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main aria-live="polite">
+  <header>
+    <div><h1 id="title">OptiForge 工作台</h1><div class="meta" id="meta">等待工具结果…</div></div>
+    <nav aria-label="视图">
+      <button data-view="layout" aria-pressed="false">光路</button>
+      <button data-view="stages" aria-pressed="false">阶段</button>
+      <button data-view="analysis" aria-pressed="false">像质</button>
+    </nav>
+  </header>
+  <div class="error" id="error" role="alert" hidden></div>
+  <figure id="figure" hidden><img id="image" alt=""></figure>
+  <div class="tiles" id="tiles" hidden></div>
+  <div class="scroll" id="table" hidden></div>
+  <div class="actions">
+    <button id="refresh" disabled>刷新</button>
+    <button id="open" disabled>在工作台中打开</button>
+    <button id="fullscreen" hidden>全屏</button>
+  </div>
+  <p class="note" id="note">只读视图：显示已发布的状态、缓存与归档；不运行追迹或分析，不代表像质验收或仿真授权。</p>
+</main>
+<script>
+(() => {
+  "use strict";
+  const TOOL = "optiforge_workbench_view";
+  const pending = new Map();
+  let nextId = 1, state = { view: "layout", instance: null, url: null, busy: false, modes: [], mode: "inline" };
+  const $ = id => document.getElementById(id);
+
+  // ---- JSON-RPC over postMessage (View acts as client, Host as server) ----
+  function send(message) { window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*"); }
+  function request(method, params) {
+    const id = nextId++;
+    send({ id, method, params });
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      setTimeout(() => { if (pending.delete(id)) reject(new Error(method + " 超时")); }, 30000);
+    });
+  }
+  function notify(method, params) { send({ method, params }); }
+  window.addEventListener("message", event => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if ("id" in message && !("method" in message)) {           // response to our request
+      const waiter = pending.get(message.id);
+      if (!waiter) return;                                       // ignore unrelated responses
+      pending.delete(message.id);
+      message.error ? waiter.reject(new Error(message.error.message || "请求失败")) : waiter.resolve(message.result);
+      return;
+    }
+    const params = message.params || {};
+    switch (message.method) {
+      case "ui/notifications/tool-input":
+        if (["layout", "stages", "analysis"].includes(params.arguments?.view)) state.view = params.arguments.view;
+        if (typeof params.arguments?.service_instance_id === "string") state.instance = params.arguments.service_instance_id;
+        markView(); break;
+      case "ui/notifications/tool-result": render(params); break;
+      case "ui/notifications/host-context-changed": applyContext(params); break;
+      case "ui/notifications/tool-cancelled": showError("工具调用已取消：" + (params.reason || "")); break;
+      case "ui/resource-teardown": send({ id: message.id, result: {} }); break;
+      case "ping": if ("id" in message) send({ id: message.id, result: {} }); break;
+    }
+  });
+
+  function applyContext(context) {
+    if (context.theme === "dark" || context.theme === "light") document.documentElement.dataset.theme = context.theme;
+    const variables = context.styles?.variables;
+    if (variables && typeof variables === "object") {
+      for (const [name, value] of Object.entries(variables)) {
+        if (/^--[\w-]+$/.test(name) && typeof value === "string") document.documentElement.style.setProperty(name, value);
+      }
+    }
+    if (Array.isArray(context.availableDisplayModes)) state.modes = context.availableDisplayModes;
+    if (context.displayMode) state.mode = context.displayMode;
+    $("fullscreen").hidden = !state.modes.includes("fullscreen");
+    $("fullscreen").textContent = state.mode === "fullscreen" ? "退出全屏" : "全屏";
+  }
+
+  // ---- rendering (text via textContent only; host data is untrusted) ----
+  const fmt = value => value === null || value === undefined ? "—" : typeof value === "number" ? String(Number(value.toPrecision(4))) : String(value);
+  function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
+  function showError(text) { $("error").textContent = text; $("error").hidden = !text; }
+  function markView() { for (const button of document.querySelectorAll("nav button")) button.setAttribute("aria-pressed", String(button.dataset.view === state.view)); }
+  function tiles(rows) {
+    const box = $("tiles"); box.replaceChildren();
+    for (const [label, value, unit, note] of rows) {
+      const tile = el("div", undefined, "tile");
+      tile.append(el("span", label), el("strong", fmt(value) + (value !== null && value !== undefined && unit ? " " + unit : "")), el("em", note));
+      box.append(tile);
+    }
+    box.hidden = !rows.length;
+  }
+  function table(headers, rows) {
+    const box = $("table"); box.replaceChildren();
+    if (!rows.length) { box.hidden = true; return; }
+    const t = el("table"), head = el("tr");
+    headers.forEach(h => head.append(el("th", h)));
+    t.append(head);
+    for (const row of rows) {
+      const tr = el("tr");
+      for (const cell of row) {
+        const td = el("td");
+        if (cell && typeof cell === "object" && cell.verdict) td.append(el("span", cell.verdict, "verdict v-" + cell.verdict));
+        else td.textContent = fmt(cell);
+        tr.append(td);
+      }
+      t.append(tr);
+    }
+    box.append(t); box.hidden = false;
+  }
+  function render(result) {
+    const blocks = Array.isArray(result?.content) ? result.content : [];
+    const text = blocks.find(block => block.type === "text");
+    const image = blocks.find(block => block.type === "image" && block.mimeType === "image/png" && typeof block.data === "string");
+    let summary = null;
+    try { summary = text ? JSON.parse(text.text) : null; } catch { summary = null; }
+    if (!summary) { showError("无法解析工具结果"); return; }
+    if (summary.status !== "success") { showError(summary.message || summary.code || "读取失败"); $("figure").hidden = true; tiles([]); table([], []); return; }
+    showError(summary.message || "");
+    state.view = summary.view || state.view; state.url = summary.workbench_url || state.url;
+    if (summary.service_instance_id) state.instance = summary.service_instance_id;
+    markView();
+    $("title").textContent = summary.model?.name || summary.active_project || "OptiForge 工作台";
+    $("meta").textContent = [summary.active_project, summary.model ? "修订 " + summary.model.revision : null,
+      summary.view === "analysis" ? (summary.current ? "当前结果" : "历史结果") : null].filter(Boolean).join(" · ");
+    if (image) { $("image").src = "data:image/png;base64," + image.data; $("image").alt = "工作台" + ({ layout: "光路", stages: "阶段收敛", analysis: "像质分析" }[state.view] || "") + "图"; }
+    $("figure").hidden = !image;
+    if (summary.note) $("note").textContent = summary.note;
+    if (summary.view === "analysis" && summary.metrics) {
+      const m = summary.metrics;
+      tiles([["最差波前 RMS", m.worst_wavefront_rms, "λ", "门禁 ≤ 0.0714"], ["MTF@30 最低", m.min_mtf30, "", m.mtf_threshold != null ? "门禁 ≥ " + m.mtf_threshold : "未设阈值 · INFO"],
+        ["最差点列 RMS", m.worst_spot_rms_um, "μm", "诊断 INFO"]]);
+      const names = { mtf: "MTF", wavefront: "波前", spot: "点列", ray_fan: "光线像差", field_curvature: "场曲 / 畸变" };
+      table(["分析", "判定", "判据"], (summary.verdicts || []).map(v => [names[v.analysis] || v.analysis, { verdict: v.verdict }, v.criteria]));
+    } else if (summary.view === "stages" && Array.isArray(summary.stages)) {
+      tiles([]);
+      table(["阶段", "判定", "最差波前 / λ", "MTF@30", "最差点列 / μm"], summary.stages.map(s => [
+        "阶段 " + s.number + " · " + s.label, s.metrics ? { verdict: s.metrics.overall } : "—",
+        s.metrics?.worst_wavefront_rms, s.metrics?.min_mtf30, s.metrics?.worst_spot_rms_um]));
+    } else {
+      tiles([]);
+      table(["面", "曲率半径", "厚度", "材料"], (summary.surfaces || []).map(s => ["S" + s.index, s.radius, s.thickness, s.material]));
+    }
+    $("refresh").disabled = !state.instance; $("open").disabled = !state.url;
+  }
+
+  // ---- actions ----
+  async function show(view) {
+    if (!state.instance || state.busy) return;
+    state.busy = true; state.view = view; markView();
+    for (const button of document.querySelectorAll("button")) button.disabled = true;
+    try { render(await request("tools/call", { name: TOOL, arguments: { service_instance_id: state.instance, view } })); }
+    catch (error) { showError("读取失败：" + error.message); }
+    finally { state.busy = false; for (const button of document.querySelectorAll("nav button")) button.disabled = false;
+      $("refresh").disabled = !state.instance; $("open").disabled = !state.url; $("fullscreen").disabled = false; }
+  }
+  for (const button of document.querySelectorAll("nav button")) button.addEventListener("click", () => show(button.dataset.view));
+  $("refresh").addEventListener("click", () => show(state.view));
+  $("open").addEventListener("click", () => { if (state.url) request("ui/open-link", { url: state.url }).catch(error => showError(error.message)); });
+  $("fullscreen").addEventListener("click", async () => {
+    const mode = state.mode === "fullscreen" ? "inline" : "fullscreen";
+    try { applyContext({ displayMode: (await request("ui/request-display-mode", { mode })).mode }); } catch (error) { showError(error.message); }
+  });
+  new ResizeObserver(() => notify("ui/notifications/size-changed", {
+    width: Math.ceil(document.documentElement.scrollWidth), height: Math.ceil(document.documentElement.scrollHeight) })).observe(document.body);
+
+  request("ui/initialize", { appInfo: { name: "optiforge-workbench-view", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, protocolVersion: "2026-01-26" })
+    .then(result => { applyContext(result?.hostContext || {}); notify("ui/notifications/initialized", {}); })
+    .catch(error => showError("宿主未完成握手：" + error.message));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+#optiforge-soft-studio .task-provenance { margin:18px 0; min-width:0; }
+#optiforge-soft-studio .task-provenance-summary { display:flex; flex-wrap:wrap; gap:12px 24px; margin:0; font-size:13px; line-height:1.7; }
+#optiforge-soft-studio .task-provenance-summary>div { display:flex; gap:8px; min-width:0; }
+#optiforge-soft-studio .task-provenance dt { color:var(--st-muted); flex-shrink:0; }
+#optiforge-soft-studio .task-provenance dd { margin:0; overflow-wrap:anywhere; min-width:0; }
+#optiforge-soft-studio .task-provenance-relation { font-size:14px; line-height:1.7; margin:12px 0 6px; }
+#optiforge-soft-studio .task-provenance-note { font-size:13px; line-height:1.7; margin:6px 0; color:var(--st-muted); overflow-wrap:anywhere; }
+#optiforge-soft-studio .task-provenance .task-provenance-details { padding:6px 0; font-size:13px; line-height:1.7; }
+#optiforge-soft-studio .task-provenance-details summary { min-height:36px; display:list-item; padding:7px 0; cursor:pointer; color:var(--st-muted); }
+#optiforge-soft-studio .task-provenance-details summary:focus-visible { outline:none; border-radius:6px; box-shadow:0 0 0 3px var(--st-accent-soft); }
+#optiforge-soft-studio .task-provenance-details dl { display:grid; gap:10px; margin:12px 0; }
+#optiforge-soft-studio .task-provenance-details dl>div { display:grid; grid-template-columns:80px minmax(0,1fr); gap:14px; }
+#optiforge-soft-studio .task-message { border-top:1px solid var(--st-line); padding-top:16px; margin-top:16px; min-width:0; }
+#optiforge-soft-studio .task-message h4 { font-size:14px; font-weight:500; line-height:1.7; margin:0 0 8px; }
+#optiforge-soft-studio .task-message>p { font-size:14px; line-height:1.7; margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+#optiforge-soft-studio .task-message>p.task-provenance-note { font-size:13px; }
+@media(max-width:500px) {
+  #optiforge-soft-studio .task-provenance-summary { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+  #optiforge-soft-studio .task-provenance-summary>div { display:grid; grid-template-columns:72px minmax(0,1fr); gap:12px; }
+  #optiforge-soft-studio .task-provenance-details dl>div { grid-template-columns:72px minmax(0,1fr); gap:12px; }
+}

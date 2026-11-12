@@ -55,7 +55,7 @@ export function TraceControls({ trace, model, layout }) {
       <div className="trace-diagnostics">{trace.result.rays.filter(r=>r.termination.kind!=='complete').map(r=><p key={r.id}>
         F{r.field.index} · {r.wavelength_um} μm · Px {r.px}, Py {r.py}：{r.termination.kind==='vignetted'?'截光':'追迹错误'}，首见 S{r.termination.first_observed_surface}，错误码 {r.termination.error_code} / 渐晕码 {r.termination.vignette_code}
       </p>)}{trace.result.counts.complete===trace.result.counts.total && <p>全部采样光线到达像面</p>}</div></>}
-      <h3>截面显示</h3><p>{layout?.status==='ready' ? layout.source==='zemax-primary-sag' ? 'Zemax 主矢高与机械半口径' : '处方截面' : '当前轮廓不可用'}</p>
+      <h3>截面显示</h3><p>{layout?.status==='ready' ? layout.source==='zemax-primary-sag' ? 'Zemax 主矢高与机械半口径' : layout.source==='derived-display-aperture' ? '处方截面 · 半口径为显示推导值（未写入模型）' : '处方截面' : '当前轮廓不可用'}</p>
       {issues.length>0&&<div className="trace-diagnostics"><h3>几何检查</h3>{issues.map((issue,i)=><p key={i}>{issue}</p>)}</div>}
       {!trace.enabled&&<p>开启“显示光线”后读取真实追迹结果</p>}
     </Modal>}

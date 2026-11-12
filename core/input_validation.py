@@ -43,9 +43,20 @@ def choice(value, name, options):
 
 def validate_arguments(name, args):
     """No session access: malformed requests must not even open OpticStudio."""
+    if name in {"zemax_design_workflow", "zemax_list_design_tasks", "zemax_claim_design_task", "zemax_update_design_task"}:
+        from core.design_workflow import encoded
+        encoded(args)
     if args.get("config") is not None:
         integer(args["config"], "config")
-    if name == "zemax_load_file":
+    if name == "zemax_run_analysis_suite":
+        from core.analysis_data import validate_settings
+        validate_settings({"analyses":args.get("analyses") if args.get("analyses") is not None else ["wavefront","spot","mtf"],
+                           "sample_size":args["sample_size"],"max_frequency":args["max_frequency"],
+                           "mtf_min_at_30lp_mm":args.get("mtf_min_at_30lp_mm"),"distortion_max_pct":args.get("distortion_max_pct")})
+        integer(args["max_wavefront_fields"],"max_wavefront_fields",maximum=5)
+        if type(args.get("include_details",False)) is not bool:
+            raise ValueError("include_details must be boolean")
+    elif name == "zemax_load_file":
         _validate_path_argument(args.get("filepath"), "filepath")
     elif name == "zemax_save_file":
         _validate_path_argument(args.get("filepath"), "filepath", allow_none=True)
@@ -54,6 +65,10 @@ def validate_arguments(name, args):
         _validate_project_argument(args.get("project_name"))
         if name == "zemax_register_design_proposal" and not isinstance(args["user_confirmed_to_simulate"], bool):
             raise ValueError("user_confirmed_to_simulate must be boolean.")
+    elif name == 'zemax_confirm_design_proposal':
+        _validate_project_argument(args.get('project_name'))
+        if type(args['user_confirmed_to_simulate']) is not bool:
+            raise ValueError('user_confirmed_to_simulate must be boolean.')
     elif name == "zemax_export_optical_drawing":
         _validate_path_argument(args.get("output_dir"), "output_dir", allow_none=True)
         _validate_project_argument(args.get("project_name"))
@@ -139,11 +154,17 @@ def validate_arguments(name, args):
     elif name == "zemax_run_optimization":
         choice(args["algorithm"], "algorithm", ("dls", "od", "dampedleastsquares", "orthogonaldescent"))
         choice(args["cycles"], "cycles", ("automatic", "auto", "1", "5", "10", "50"))
-        integer(args["cores"], "cores")
-        integer(args["max_rounds"], "max_rounds")
-        number(args["stagnation_threshold"], "stagnation_threshold", minimum=0)
+        integer(args["cores"], "cores", minimum=1, maximum=64)
+        # A bounded round count keeps a mis-parameterized call from becoming an
+        # unbounded 10-cycle loop; a zero threshold would never detect stagnation.
+        integer(args["max_rounds"], "max_rounds", minimum=1, maximum=50)
+        number(args["stagnation_threshold"], "stagnation_threshold", minimum=0.0001)
+        if "round_timeout_seconds" in args:
+            number(args["round_timeout_seconds"], "round_timeout_seconds", positive=True)
+            if float(args["round_timeout_seconds"]) > 3600:
+                raise ValueError("round_timeout_seconds must be at most 3600.")
     elif name == "zemax_run_hammer":
-        integer(args["timeout_seconds"], "timeout_seconds")
+        integer(args["timeout_seconds"], "timeout_seconds", minimum=1, maximum=3600)
     elif name == "zemax_quick_focus":
         choice(args["criterion"], "criterion", ("spotsizeradial", "rmswavefront"))
     elif name == "zemax_setup_merit_function":

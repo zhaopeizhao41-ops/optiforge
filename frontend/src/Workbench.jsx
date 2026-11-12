@@ -1,13 +1,21 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, FileUp,
-  Focus, Maximize2, Minus, Moon, Plus, RefreshCw, SlidersHorizontal, Sun } from 'lucide-react';
+  Focus, History, Locate, LocateOff, Maximize2, Minus, Moon, Plus, RefreshCw, SlidersHorizontal, Sun } from 'lucide-react';
 import { Button, Modal, spring, useBox } from './ui.jsx';
 import { useWorkbenchSync } from './use-workbench-sync.js';
 import { SurfacePicker } from './SurfacePicker.jsx';
 import { NativeScene, TraceControls } from './NativeScene.jsx';
 import { useWorkbenchTrace } from './use-workbench-trace.js';
+import { useWorkbenchAnalysis } from './use-workbench-analysis.js';
+import AnalysisWorkspace from './AnalysisWorkspace.jsx';
 import { homeCamera, zoomCamera, MIN_ZOOM, MAX_ZOOM } from './workbench-camera.js';
+import DesignWorkflow, {WorkflowStrip} from './DesignWorkflow.jsx';
+import {useDesignWorkflow} from './use-design-workflow.js';
+import { useWorkbenchUI } from './use-workbench-ui.js';
+import HistoryWorkspace from './HistoryWorkspace.jsx';
+import { resolveFocus } from './workbench-ui.js';
+import { taskProgressLabel } from './task-progress.js';
 
 const format = (value) => value === 'Infinity' ? '∞' : value === '-Infinity' ? '−∞'
   : typeof value === 'number' ? value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 }) : '—';
@@ -68,11 +76,27 @@ function ModelDetails({ snapshot, selected }) {
 
 export default function Workbench() {
   const sync = useWorkbenchSync();
+  const flow = useDesignWorkflow(sync);
   const trace = useWorkbenchTrace(sync);
+  const analysis = useWorkbenchAnalysis(sync);
   const { snapshot, error } = sync;
   const busy = sync.phase === 'running' || sync.phase === 'connecting' || sync.importing;
   const [selected, setSelected] = useState(1);
   const [page, setPage] = useState('design');
+  // Agent deep links: {id, page, focus}. Each page answers through uiLink.reportFocus.
+  const [focusRequest, setFocusRequest] = useState(null);
+  // Follow Agent work: auto page jumps after Agent operations. Explicit navigation is unaffected.
+  const [followAgent, setFollowAgent] = useState(() => { try { return localStorage.getItem('optiforge-follow-agent') !== 'off'; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem('optiforge-follow-agent', followAgent ? 'on' : 'off'); } catch { /* Local storage may be disabled. */ } }, [followAgent]);
+  const uiLink = useWorkbenchUI(sync.api, sync.engine?.service_instance_id ?? null, page, setPage,
+    { canWorkflow: sync.canCollaborate === true, canAnalyze: sync.canAnalyze === true }, setFocusRequest, followAgent);
+  const handledFocus = useRef(null);
+  const openedInitialPage=useRef(false);
+  useEffect(()=>{
+    if(!openedInitialPage.current && sync.engine && sync.canCollaborate!==undefined){
+      openedInitialPage.current=true;if(!uiLink.navigated.current && !sync.engine.snapshot && sync.canCollaborate)setPage('workflow');
+    }
+  },[sync.engine,sync.canCollaborate]);
   const [camera, setCamera] = useState(homeCamera);
   const [focus, setFocus] = useState(false);
   const [modal, setModal] = useState(null);
@@ -100,6 +124,13 @@ export default function Workbench() {
       setSelected((current) => snapshot.model.surfaces.some((surface) => surface.index === current) ? current : snapshot.model.surfaces[0]?.index);
     }
   }, [snapshot]);
+  useEffect(() => {
+    if (focusRequest?.page !== 'design' || page !== 'design' || handledFocus.current === focusRequest.id) return;
+    handledFocus.current = focusRequest.id;
+    const result = resolveFocus('design', focusRequest.focus, { surfaces: model?.surfaces.map((surface) => surface.index) || [] });
+    if (result.actual) setSelected(result.actual.surface);
+    uiLink.reportFocus(focusRequest.id, result.actual, result.reason);
+  }, [focusRequest, page, model]);
   const task = sync.engine?.tasks.pending.find((item) => item.status === 'running') || sync.engine?.tasks.pending[0];
   useEffect(() => {
     if (!task) return;
@@ -123,28 +154,38 @@ export default function Workbench() {
   const physical = model?.surfaces.filter((surface) => surface.index > 0 && surface.index < last) || [];
   const around = Math.max(0, physical.findIndex((surface) => surface.index === selected) - 2);
   const chips = physical.slice(Math.min(around, Math.max(0, physical.length - 5)), Math.min(around, Math.max(0, physical.length - 5)) + 5);
-  const taskName = task && ({ __trace__: '原生追迹', zemax_load_file: '载入模型', __refresh__: '读取模型', zemax_get_workbench_snapshot: '读取模型',
-    zemax_surface_operations: '修改表面', zemax_apply_prescription: '更新处方', zemax_run_optimization: '优化模型',
+  const taskName = task && ({ __analysis__: '像质分析', __trace__: '原生追迹', zemax_load_file: '载入模型', __refresh__: '读取模型', zemax_get_workbench_snapshot: '读取模型',
+    zemax_surface_operations: '修改表面', zemax_apply_prescription: '更新处方', zemax_run_optimization: '优化模型', zemax_run_hammer: '全局寻优',
     zemax_run_analysis_suite: '分析模型', zemax_set_project: '切换项目' }[task.tool] || '工程操作');
   const elapsed = task ? Math.max(0, Math.floor((clock - Date.parse(task.started_at || task.queued_at)) / 1000)) : 0;
-  const syncLabel = task ? `正在更新 · ${taskName} · ${elapsed} s` : sync.phase === 'synced' ? '已同步'
+  const progressLabel = taskProgressLabel(task);
+  const syncLabel = task ? `正在更新 · ${taskName}${progressLabel ? ` · ${progressLabel}` : ''} · ${elapsed} s` : sync.phase === 'synced' ? '已同步'
     : sync.phase === 'connecting' ? '正在连接' : sync.phase === 'reconnecting' ? '正在重连' : '视图待恢复';
 
   return <MotionConfig reducedMotion={reduceMotion ? 'always' : 'user'} transition={spring}>
     <div className="studio-shell" ref={workspace} data-service-instance={sync.engine?.service_instance_id}
       data-model-id={sync.engine?.model_id} data-state-version={sync.engine?.state_version} data-model-revision={sync.engine?.model_revision}>
       <header className="studio-topbar"><div className="studio-brand"><span className="studio-brand-mark" aria-hidden="true" />OptiForge</div>
-        <nav className="studio-navigation" aria-label="主要页面">{[['design', '光路'], ['analysis', '分析']].map(([id, label]) => <Button key={id} aria-pressed={page === id} onClick={() => setPage(id)}>
+        <nav className="studio-navigation" aria-label="主要页面">{[...(sync.canCollaborate?[['workflow','工程']]:[]),['design', '光路'], ['analysis', '分析']].map(([id, label]) => <Button key={id} aria-pressed={page === id} onClick={() => setPage(id)}>
           {page === id && <motion.span className="studio-nav-highlight" layoutId="native-nav" />}<span>{label}</span>
         </Button>)}</nav>
-        <div className="studio-header-actions"><Button className="studio-icon-button" aria-label={resolvedTheme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>{resolvedTheme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</Button>
+        <div className="studio-header-actions"><Button className="studio-icon-button" aria-pressed={followAgent}
+            aria-label={followAgent ? '正在跟随 Agent：操作完成后自动切换页面，点击关闭' : '未跟随 Agent：点击开启自动切换页面'}
+            title={followAgent ? '跟随 Agent（开）' : '跟随 Agent（关）'} onClick={() => setFollowAgent((value) => !value)}>
+            {followAgent ? <Locate size={18} /> : <LocateOff size={18} />}</Button>
+          <Button className="studio-icon-button" aria-label={resolvedTheme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>{resolvedTheme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</Button>
           <Button className="studio-icon-button" aria-label="外观与动效设置" onClick={() => setModal('appearance')}><SlidersHorizontal size={18} /></Button></div>
       </header>
+      {sync.canCollaborate && <WorkflowStrip flow={flow} sync={sync} onOpen={()=>setPage('workflow')}/>}
+      {sync.canCollaborate && <div hidden={page!=='workflow'}><DesignWorkflow flow={flow} sync={sync} selected={selected} onBack={()=>setPage('design')}
+        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus}/></div>}
       <input type="file" ref={file} accept=".zmx,.zos" hidden aria-label="选择光学模型文件" onChange={(event) => {
         const chosen = event.target.files[0]; event.target.value = ''; if (chosen) { setPage('design'); sync.importModel(chosen); }
       }} />
-      <AnimatePresence mode="wait" initial={false}>{page === 'design' ? <motion.main key="design" className="studio-design-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
-        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1>{sync.canImportModel && <Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy || sync.phase === 'reconnecting'}><FileUp size={17} />打开模型</Button>}</div>
+      {/* No exit-gated swap: mounting the next page must not wait for animation
+          frames, which pause when the window is not painted (Agent app in front). */}
+      <>{page==='workflow'?null:page === 'design' ? <motion.main key="design" className="studio-design-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+        <div className="studio-page-heading studio-live-heading"><h1>{model?.name || '光学工作区'}</h1><div className="history-page-actions"><Button className="history-open-button" onClick={()=>setModal('history')}><History size={17}/>操作历史</Button>{sync.canImportModel && <Button className="studio-open-button" onClick={() => file.current.click()} disabled={busy || sync.phase === 'reconnecting'}><FileUp size={17} />打开模型</Button>}</div></div>
         {error && <div className="studio-live-error" role="alert">{error}</div>}
         <div className={`studio-design-board ${focus ? 'is-focused' : ''} ${busy ? 'is-syncing' : ''}`}>
           <div className="studio-canvas-panel"><div className="studio-canvas-top"><span>2D 光路</span>{model && <span className="studio-model-info">{model.units}</span>}</div>
@@ -164,14 +205,13 @@ export default function Workbench() {
           {!focus && (model ? <NativeInspector model={model} selected={selected} onSelect={setSelected} onDetails={() => setModal('details')} /> : <aside className="studio-inspector" aria-label="表面属性"><div className="studio-section-title">表面属性</div></aside>)}
           <div className="studio-sync-aura" aria-hidden="true" />
         </div>
-        <div className="studio-workspace-footer"><Button className="studio-agent-pill" onClick={sync.refresh} disabled={busy || sync.phase === 'reconnecting'} aria-label="刷新真实模型" data-sync-state={sync.phase} data-stale={sync.stale}><RefreshCw size={16} className={busy ? 'studio-refresh-active' : ''} /><span role="status" aria-live="polite">{sync.canImportModel ? '工作台模型' : '只读验收'} · {syncLabel}</span></Button>
+        <div className="studio-workspace-footer"><Button className="studio-agent-pill" onClick={sync.refresh} disabled={sync.canRefreshNative===false || busy || sync.phase === 'reconnecting'} aria-label="刷新真实模型" data-sync-state={sync.phase} data-stale={sync.stale}><RefreshCw size={16} className={busy ? 'studio-refresh-active' : ''} /><span role="status" aria-live="polite">{sync.canImportModel ? '工作台模型' : sync.canCollaborate?'协作模式':'只读验收'} · {syncLabel}</span></Button>
           <Button className="studio-icon-button studio-about" aria-label="关于工作台" onClick={() => setModal('about')}><CircleHelp size={17} /></Button></div>
-      </motion.main> : <motion.section key="analysis" className="studio-analysis-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-        <div className="studio-analysis-title"><Button className="studio-icon-button studio-back" aria-label="返回光路" onClick={() => setPage('design')}><ArrowLeft size={19} /></Button><h1>像质分析</h1></div>
-        <div className="studio-analysis-card studio-analysis-pending"><p>真实分析将在后续接入</p><Button onClick={() => setPage('design')}>返回光路<ArrowRight size={16} /></Button></div>
-      </motion.section>}</AnimatePresence>
+      </motion.main> : <AnalysisWorkspace key="analysis" sync={sync} analysis={analysis} onBack={()=>setPage('design')}
+        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus}/>}</>
       {modal === 'appearance' && <Modal title="外观与动效" onClose={() => setModal(null)}><div className="studio-modal-label">界面主题</div><div className="studio-theme-options">{[['light', '浅色', Sun], ['dark', '深色', Moon], ['system', '跟随系统', Focus]].map(([value, label, Icon]) => <Button key={value} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={19} /><span>{label}</span>{theme === value && <Check size={14} />}</Button>)}</div><label className="studio-motion-option"><span>减少动态效果</span><input type="checkbox" checked={reduceMotion} onChange={(event) => setReduceMotion(event.target.checked)} /></label></Modal>}
       {modal === 'details' && model?.surfaces.some((surface) => surface.index === selected) && <Modal className="studio-model-dialog" title={`S${selected} · ${surfaceName(model.surfaces.find((surface) => surface.index === selected), last)}`} onClose={() => setModal(null)}><ModelDetails snapshot={snapshot} selected={selected} /></Modal>}
+      {modal === 'history' && <Modal className="history-dialog" title="操作历史" onClose={()=>setModal(null)}><HistoryWorkspace sync={sync}/></Modal>}
       {modal === 'about' && <Modal title="本地光学工作台" onClose={() => setModal(null)}><p className="studio-about-copy">对话继续在外部 Agent 中进行。处方、轮廓和光线以当前工作台加载的模型为准。</p><p className="studio-about-copy">打开的文件会复制到本地项目目录。其他 Zemax 窗口或磁盘文件的更改需重新载入，当前不会自动跟随。</p>{snapshot && <dl className="studio-detail-list"><div><dt>模型版本</dt><dd>{snapshot.sync.model_revision}</dd></div><div><dt>读取时间</dt><dd>{new Date(snapshot.observed_at).toLocaleTimeString()}</dd></div></dl>}<Button className="studio-modal-done" onClick={() => setModal(null)}>知道了<Check size={16} /></Button></Modal>}
     </div>
   </MotionConfig>;

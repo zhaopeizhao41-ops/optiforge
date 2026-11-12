@@ -2,6 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { Check, ChevronDown } from 'lucide-react';
 import { Button, spring } from './ui.jsx';
+import { isOptionEnabled, nextEnabledIndex, resolveActiveIndex } from './surface-picker-options.js';
 import './surface-picker.css';
 
 function PickerMenu(props) {
@@ -11,7 +12,7 @@ function PickerMenu(props) {
 
 export function SurfacePicker({ options, value, onChange, label = '选择表面' }) {
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [activeChoice, setActiveChoice] = useState(null);
   const [placement, setPlacement] = useState({ side: 'below', height: 288 });
   const container = useRef(null);
   const list = useRef(null);
@@ -19,14 +20,49 @@ export function SurfacePicker({ options, value, onChange, label = '选择表面'
   const reduced = useReducedMotion();
   const selected = options.findIndex((option) => option.value === value);
   const current = options[selected];
+  const active = resolveActiveIndex(options, activeChoice);
+  // Persist a fallback in the same render so re-enabling an old row cannot revive it.
+  if (open && (active === -1 ? activeChoice !== null
+    : activeChoice === null || !Object.is(activeChoice.value, options[active].value))) {
+    setActiveChoice(active === -1 ? null : { value: options[active].value });
+  }
 
-  function show() {
-    const rect = container.current.getBoundingClientRect();
-    const below = window.innerHeight - rect.bottom - 20;
-    const above = rect.top - 20;
+  function measurePlacement() {
+    const element = container.current;
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop || 0;
+    let top = viewportTop + 20;
+    let bottom = viewportTop + (viewport?.height || window.innerHeight) - 20;
+    // An absolute menu also belongs to each ancestor's scrollport. Its z-index
+    // cannot escape a dialog's overflow, so intersect all visible boundaries.
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      if (!['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowY)) continue;
+      const bounds = parent.getBoundingClientRect();
+      const innerTop = bounds.top + parent.clientTop;
+      top = Math.max(top, innerTop);
+      bottom = Math.min(bottom, innerTop + parent.clientHeight);
+    }
+    const below = Math.max(0, bottom - rect.bottom - 8);
+    const above = Math.max(0, rect.top - top - 8);
     const side = below < 220 && above > below ? 'above' : 'below';
-    setPlacement({ side, height: Math.max(96, Math.min(288, side === 'above' ? above : below)) });
-    setActive(Math.max(0, selected));
+    const available = side === 'above' ? above : below;
+    const menuStyle = list.current ? getComputedStyle(list.current) : null;
+    const frame = menuStyle ? ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+      .reduce((sum, key) => sum + (parseFloat(menuStyle[key]) || 0), 0) : 14;
+    if (available <= frame) return null;
+    return { side, height: Math.min(288, available) };
+  }
+  function place(next) {
+    setPlacement(previous => previous.side === next.side && previous.height === next.height ? previous : next);
+  }
+  function show() {
+    const next = measurePlacement();
+    if (!next) return;
+    place(next);
+    const position = resolveActiveIndex(options, { value });
+    setActiveChoice(position === -1 ? null : { value: options[position].value });
     setOpen(true);
   }
   useEffect(() => {
@@ -38,7 +74,31 @@ export function SurfacePicker({ options, value, onChange, label = '选择表面'
   useEffect(() => {
     if (open) list.current?.querySelector(`[data-position="${active}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [active, open]);
-  function choose(position) {
+  useEffect(() => {
+    if (!open) return;
+    const reposition = (event) => {
+      // Scrolling options changes neither the trigger nor the clipping bounds.
+      if (event?.type === 'scroll' && event.target instanceof Node && list.current?.contains(event.target)) return;
+      const next = measurePlacement();
+      if (next) place(next); else setOpen(false);
+    };
+    const frame = requestAnimationFrame(reposition);
+    const viewport = window.visualViewport;
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    viewport?.addEventListener('resize', reposition);
+    viewport?.addEventListener('scroll', reposition);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+      viewport?.removeEventListener('resize', reposition);
+      viewport?.removeEventListener('scroll', reposition);
+    };
+  }, [open]);
+  function choose(choice) {
+    const position = choice === null ? -1 : options.findIndex(option => option.value === choice.value);
+    if (!isOptionEnabled(options, position)) return;
     onChange(options[position].value);
     setOpen(false);
   }
@@ -48,17 +108,22 @@ export function SurfacePicker({ options, value, onChange, label = '选择表面'
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
       if (!open) { show(); return; }
-      setActive((position) => event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
-        : (position + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length);
+      const currentActive = resolveActiveIndex(options, activeChoice);
+      const position = event.key === 'Home' ? nextEnabledIndex(options, -1, 1)
+        : event.key === 'End' ? nextEnabledIndex(options, -1, -1)
+          : nextEnabledIndex(options, currentActive, event.key === 'ArrowDown' ? 1 : -1);
+      setActiveChoice(position === -1 ? null : { value: options[position].value });
     } else if (open && ['Enter', ' '].includes(event.key)) {
-      event.preventDefault(); choose(active);
+      event.preventDefault();
+      const currentActive = resolveActiveIndex(options, activeChoice);
+      choose(currentActive === -1 ? null : { value: options[currentActive].value });
     }
   }
 
   return <div className="studio-surface-picker" ref={container} data-open={open}>
     <Button className="studio-picker-trigger" role="combobox" aria-label={label}
       aria-haspopup="listbox" aria-expanded={open} aria-controls={id}
-      aria-activedescendant={open ? `${id}-${active}` : undefined} title={current?.label}
+      aria-activedescendant={open && active !== -1 ? `${id}-${active}` : undefined} title={current?.label}
       onKeyDown={keyDown} onBlur={(event) => { if (!event.currentTarget.parentElement.contains(event.relatedTarget)) setOpen(false); }}
       onClick={() => open ? setOpen(false) : show()}>
       <span className="studio-picker-value">{current?.label}</span>
@@ -71,9 +136,13 @@ export function SurfacePicker({ options, value, onChange, label = '选择表面'
         animate={{ opacity: 1, y: 0, scale: 1 }} exit={reduced ? { opacity: 0 } : { opacity: 0, y: -3, scale: .98 }}
         transition={{ duration: reduced ? 0 : .18, ease: [.2, .8, .2, 1] }}
         onPointerDown={(event) => event.preventDefault()}>
-        {options.map((option, position) => <div key={option.value} id={`${id}-${position}`} role="option"
-          aria-selected={option.value === value} data-position={position} data-active={position === active}
-          className="studio-picker-option" onPointerMove={() => setActive(position)} onClick={() => choose(position)}>
+        {options.map((option, position) => <div key={`${typeof option.value}:${option.value}`} id={`${id}-${position}`} role="option"
+          aria-selected={option.value === value} aria-disabled={option.disabled === true ? true : undefined}
+          data-position={position} data-active={position === active}
+          className="studio-picker-option" onPointerMove={() => {
+            const currentPosition = options.findIndex(item => item.value === option.value);
+            if (isOptionEnabled(options, currentPosition)) setActiveChoice({ value: option.value });
+          }} onClick={() => choose({ value: option.value })}>
           {position === active && <motion.span className="studio-picker-highlight" layoutId={`${id}-highlight`} transition={spring} />}
           <span className="studio-picker-option-label">{option.label}</span>
           {option.value === value && <Check size={15} />}

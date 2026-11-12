@@ -637,16 +637,17 @@ class StageTwoRegression(unittest.TestCase):
             result = analysis.zemax_run_field_curvature_distortion(config=0)
         self.assertEqual(result["status"], "error")
 
-        fcd = FakeAnalysis(results=SimpleNamespace(NumberOfDataSeries=0))
+        self._proposal("model")
         mce = FakeMCE(total=3, current=1)
-        fake = SimpleNamespace(system=SimpleNamespace(
-            MCE=mce, Analyses=SimpleNamespace(New_FieldCurvatureAndDistortion=lambda: fcd)))
-        with patch.object(analysis.ZOSSession, "get_instance", return_value=fake):
+        fake = SimpleNamespace(system=SimpleNamespace(MCE=mce),is_connected=True,model_project="model")
+        def unavailable(settings):
+            self.assertEqual(mce.CurrentConfiguration,2)
+            return {"items":{"field_curvature":{"status":"error","code":"ANALYSIS_NO_DATA","message":"No native series"}}}
+        with patch.object(analysis.ZOSSession, "_instance", fake), patch.object(analysis.ZOSSession, "get_instance", return_value=fake), patch.object(analysis,"_suite",side_effect=unavailable):
             result = analysis.zemax_run_field_curvature_distortion(config=2)
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["config"], 2)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["code"], "ANALYSIS_NO_DATA")
         self.assertEqual(mce.history, [2, 1])
-        self.assertTrue(fcd.closed)
 
     def test_add_operand_writes_named_double_columns_and_rejects_bad_cells(self):
         self._proposal("model")

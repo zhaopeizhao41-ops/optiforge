@@ -121,10 +121,39 @@ class WorkbenchClient:
         return proxy
 
 
+# Tools whose results a user expects to see in the workbench.
+VISIBLE_TOOLS = frozenset({
+    "zemax_new_file", "zemax_load_file", "zemax_load_template", "zemax_apply_prescription",
+    "zemax_run_optimization", "zemax_run_hammer", "zemax_run_analysis_suite",
+    "zemax_register_design_proposal", "zemax_confirm_design_proposal",
+})
+STANDALONE_NOTE = ("未连接工作台：本次在独立的原生会话中执行，工作台不会显示这些结果。"
+                   "启动工作台后需在 Agent 应用中重新连接本 MCP 服务才能接入；运行中不会自动切换引擎。")
+
+
+def _note_standalone(function, reason):
+    @wraps(function)
+    def noted(*args, **kwargs):
+        result = function(*args, **kwargs)
+        if isinstance(result, dict):
+            result.setdefault("workbench_connection", f"{STANDALONE_NOTE}（{reason}）" if reason else STANDALONE_NOTE)
+        return result
+    return noted
+
+
 def route_tool_aliases(namespace):
     """Keep every existing MCP handler/schema; change only its execution target."""
     url = os.environ.get("OPTIFORGE_SERVICE_URL")
     if not url:
+        # Only the bridge sets the reason: plain server.py runs stay silent.
+        reason = os.environ.get("OPTIFORGE_STANDALONE_REASON")
+        if reason is None:
+            return
+        for name, function in list(namespace.items()):
+            if (name.startswith("_") and callable(function)
+                    and getattr(function, "__module__", "").startswith("tools.")
+                    and getattr(function, "__name__", "") in VISIBLE_TOOLS):
+                namespace[name] = _note_standalone(function, reason)
         return
     client = WorkbenchClient(url, os.environ.get("OPTIFORGE_SERVICE_FILE"))
     for name, function in list(namespace.items()):

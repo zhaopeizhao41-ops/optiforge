@@ -1,0 +1,509 @@
+#optiforge-soft-studio .workflow-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 38px 18px;
+  flex-wrap: wrap;
+  color: var(--st-muted);
+  font-size: 14px;
+}
+#optiforge-soft-studio .workflow-project {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  text-align: left;
+  color: var(--st-text);
+}
+#optiforge-soft-studio .workflow-project > span {
+  display: grid;
+  gap: 5px;
+}
+#optiforge-soft-studio .workflow-project > span > span {
+  font-size: 13px;
+  color: var(--st-muted);
+}
+#optiforge-soft-studio .workflow-model {
+  overflow-wrap: anywhere;
+}
+#optiforge-soft-studio .design-workflow {
+  max-width: 1176px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 12px 38px 40px;
+}
+#optiforge-soft-studio .workflow-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+#optiforge-soft-studio .workflow-heading h1 {
+  font-size: 28px;
+  font-weight: 500;
+  margin: 0;
+}
+#optiforge-soft-studio .workflow-heading p,
+.design-workflow p {
+  line-height: 1.6;
+  color: var(--st-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+#optiforge-soft-studio .workflow-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+#optiforge-soft-studio .workflow-actions .studio-button,
+.workflow-question {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 12px;
+  padding: 10px 14px;
+  min-height: 40px;
+  font-size: 14px;
+  line-height: 20px;
+  background: color-mix(in srgb, var(--st-text) 5%, transparent);
+  white-space: normal;
+}
+#optiforge-soft-studio .workflow-primary {
+  background: var(--st-text) !important;
+  color: var(--st-panel) !important;
+  padding: 12px 16px !important;
+  min-height: 44px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 12px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: normal;
+}
+#optiforge-soft-studio .design-workflow button:disabled {
+  opacity: 0.4;
+}
+#optiforge-soft-studio .workflow-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0 24px;
+}
+#optiforge-soft-studio .workflow-tabs button {
+  padding: 8px 20px;
+  min-height: 40px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 14px;
+}
+#optiforge-soft-studio .workflow-tabs button[aria-pressed="true"] {
+  background: var(--st-panel);
+  box-shadow: 0 3px 15px #00000008;
+}
+#optiforge-soft-studio .workflow-card {
+  border: 1px solid var(--st-line);
+  background: var(--st-panel);
+  border-radius: 24px;
+  padding: 28px;
+  min-width: 0;
+}
+#optiforge-soft-studio .workflow-card-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+#optiforge-soft-studio .workflow-card-title h2 {
+  font-size: 20px;
+  font-weight: 500;
+  margin: 0;
+}
+#optiforge-soft-studio .workflow-card-title > span {
+  color: var(--st-muted);
+  font-size: 14px;
+}
+#optiforge-soft-studio .workflow-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin: 22px 0 32px;
+}
+#optiforge-soft-studio .design-workflow h3 {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 24px 0 12px;
+}
+#optiforge-soft-studio .design-workflow label {
+  display: grid;
+  gap: 10px;
+  line-height: 1.6;
+  font-size: 14px;
+  min-width: 0;
+}
+#optiforge-soft-studio .workflow-field label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+#optiforge-soft-studio .workflow-field label > input {
+  flex: 1 0 100%;
+}
+#optiforge-soft-studio .workflow-field label > span {
+  color: var(--st-muted);
+  font-size: 13px;
+}
+#optiforge-soft-studio .design-workflow input,
+#optiforge-soft-studio .design-workflow textarea,
+#optiforge-soft-studio .design-workflow select,
+#optiforge-soft-studio .workflow-dialog input,
+#optiforge-soft-studio .workflow-dialog textarea,
+#optiforge-soft-studio .workflow-dialog select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--st-line);
+  background: var(--st-soft);
+  color: var(--st-text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  min-height: 44px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+#optiforge-soft-studio .design-workflow input:hover,
+#optiforge-soft-studio .design-workflow textarea:hover,
+#optiforge-soft-studio .design-workflow select:hover,
+#optiforge-soft-studio .workflow-dialog input:hover,
+#optiforge-soft-studio .workflow-dialog textarea:hover,
+#optiforge-soft-studio .workflow-dialog select:hover {
+  border-color: var(--st-edge);
+}
+#optiforge-soft-studio .design-workflow input:focus,
+#optiforge-soft-studio .design-workflow textarea:focus,
+#optiforge-soft-studio .workflow-dialog input:focus,
+#optiforge-soft-studio .workflow-dialog textarea:focus {
+  border-color: var(--st-edge);
+}
+#optiforge-soft-studio .workflow-picker-field { display:grid; gap:10px; min-width:0; font-size:14px; line-height:1.6; }
+#optiforge-soft-studio .workflow-dialog .workflow-picker-field { margin:16px 0; }
+#optiforge-soft-studio .workflow-picker-field > .studio-surface-picker { width:100%; }
+#optiforge-soft-studio .design-workflow .studio-surface-picker .studio-picker-trigger,
+#optiforge-soft-studio .workflow-dialog .studio-surface-picker .studio-picker-trigger {
+  border-color: var(--st-line);
+  font-weight:400;
+}
+#optiforge-soft-studio .design-workflow .studio-surface-picker .studio-picker-trigger:focus-visible,
+#optiforge-soft-studio .workflow-dialog .studio-surface-picker .studio-picker-trigger:focus-visible { border-color:var(--st-edge); }
+#optiforge-soft-studio .design-workflow textarea,
+#optiforge-soft-studio .workflow-dialog textarea {
+  min-height: 110px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+#optiforge-soft-studio .workflow-description {
+  margin-bottom: 22px;
+}
+#optiforge-soft-studio .workflow-recommendation {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0;
+  color: var(--st-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+#optiforge-soft-studio .workflow-recommendation button {
+  padding: 4px 10px;
+  min-height: 32px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--st-text) 5%, transparent);
+  flex-shrink: 0;
+}
+#optiforge-soft-studio .workflow-origin {
+  color: var(--st-muted);
+  font-size: 13px;
+}
+#optiforge-soft-studio .workflow-audit {
+  border-top: 1px solid var(--st-line);
+  margin-top: 20px;
+}
+#optiforge-soft-studio .design-workflow details {
+  padding: 16px 0;
+  line-height: 1.7;
+}
+#optiforge-soft-studio .design-workflow summary {
+  cursor: pointer;
+}
+#optiforge-soft-studio .workflow-proposal-section {
+  border-top: 1px solid var(--st-line);
+  margin-top: 20px;
+}
+#optiforge-soft-studio .workflow-spec-list > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--st-line);
+  overflow-wrap: anywhere;
+}
+#optiforge-soft-studio .workflow-spec-list dd {
+  margin: 0;
+}
+#optiforge-soft-studio .workflow-spec-list dd span {
+  display: block;
+  font-size: 13px;
+  color: var(--st-muted);
+  margin-top: 5px;
+}
+#optiforge-soft-studio .workflow-tasks {
+  display: grid;
+  gap: 16px;
+}
+#optiforge-soft-studio .workflow-task-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+#optiforge-soft-studio .workflow-task-filters .studio-button,
+#optiforge-soft-studio .workflow-task-filter-empty .studio-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 40px;
+  max-width: 100%;
+  border: 1px solid var(--st-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--st-text) 3%, transparent);
+  color: var(--st-muted);
+  font-size: 14px;
+  line-height: 20px;
+  white-space: normal;
+}
+#optiforge-soft-studio .workflow-task-filters .studio-button[aria-pressed="true"] {
+  border-color: var(--st-edge);
+  background: color-mix(in srgb, var(--st-text) 8%, var(--st-panel));
+  color: var(--st-text);
+}
+#optiforge-soft-studio .workflow-task-filters .studio-button:focus-visible,
+#optiforge-soft-studio .workflow-task-filter-empty .studio-button:focus-visible {
+  outline: 2px solid var(--st-edge);
+  outline-offset: 3px;
+}
+#optiforge-soft-studio .workflow-task-filter-count {
+  font-variant-numeric: tabular-nums;
+}
+#optiforge-soft-studio .workflow-task-filter-summary {
+  margin: 12px 0 18px;
+  font-size: 13px;
+}
+#optiforge-soft-studio .workflow-task-filter-empty {
+  gap: 12px;
+  text-align: center;
+}
+#optiforge-soft-studio .workflow-task-filter-empty p {
+  margin: 0;
+}
+#optiforge-soft-studio .workflow-task {
+  border: 1px solid var(--st-line);
+  padding: 20px;
+  border-radius: 16px;
+  min-width: 0;
+}
+#optiforge-soft-studio .workflow-task > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+#optiforge-soft-studio .workflow-task h3 {
+  margin: 0;
+}
+#optiforge-soft-studio .workflow-task > div > span {
+  color: var(--st-muted);
+}
+#optiforge-soft-studio .workflow-empty {
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--st-muted);
+}
+#optiforge-soft-studio .workflow-question {
+  margin-top: 24px;
+}
+@media (max-width: 700px) {
+  #optiforge-soft-studio .workflow-fields {
+    grid-template-columns: 1fr;
+  }
+  #optiforge-soft-studio .workflow-card {
+    padding: 18px;
+  }
+  #optiforge-soft-studio .workflow-heading h1 {
+    font-size: 26px;
+  }
+}
+
+#optiforge-soft-studio .workflow-dialog label {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+#optiforge-soft-studio .workflow-dialog p {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  color: var(--st-muted);
+}
+#optiforge-soft-studio .workflow-dialog .workflow-primary {
+  margin-top: 18px;
+  max-width: 100%;
+}
+#optiforge-soft-studio .workflow-dialog {
+  max-height: 85dvh;
+  overflow: auto;
+}
+@media (max-width: 600px) {
+  #optiforge-soft-studio .workflow-strip {
+    margin: 0 20px 12px;
+    gap: 6px;
+  }
+  #optiforge-soft-studio .design-workflow {
+    padding: 14px 16px 30px;
+  }
+  #optiforge-soft-studio .studio-navigation .studio-button {
+    min-width: 80px;
+    padding: 6px 16px;
+  }
+}
+
+/* Proposal structure diagram: non-proportional, labels only, text-first. */
+#optiforge-soft-studio .proposal-structure {
+  margin: 14px 0 22px;
+  padding: 16px 18px;
+  border: 1px solid var(--st-line);
+  border-radius: 16px;
+  min-width: 0;
+}
+#optiforge-soft-studio .proposal-structure-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+#optiforge-soft-studio .proposal-structure-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+#optiforge-soft-studio .proposal-structure-warning {
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--st-line);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--st-text);
+}
+#optiforge-soft-studio .proposal-structure-flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0 0 10px;
+  padding: 0 0 8px;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+#optiforge-soft-studio .proposal-structure-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 116px;
+  max-width: 220px;
+  padding: 10px 12px;
+  border: 1px solid var(--st-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--st-text) 3%, transparent);
+}
+#optiforge-soft-studio .proposal-structure-node:not(:first-child) {
+  margin-left: 30px;
+}
+#optiforge-soft-studio .proposal-structure-node:not(:first-child)::before {
+  content: "→";
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--st-muted);
+  font-size: 15px;
+}
+#optiforge-soft-studio .proposal-structure-kind {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--st-muted);
+}
+#optiforge-soft-studio .proposal-structure-label {
+  color: var(--st-text);
+  overflow-wrap: anywhere;
+}
+#optiforge-soft-studio .proposal-structure-count,
+#optiforge-soft-studio .proposal-structure-note,
+#optiforge-soft-studio .proposal-structure-caption,
+#optiforge-soft-studio .proposal-structure-empty,
+#optiforge-soft-studio .proposal-structure-disclaimer {
+  font-size: 13px;
+  color: var(--st-muted);
+  overflow-wrap: anywhere;
+}
+#optiforge-soft-studio .proposal-structure-note,
+#optiforge-soft-studio .proposal-structure-caption {
+  white-space: pre-wrap;
+}
+#optiforge-soft-studio .proposal-structure-caption {
+  margin: 0 0 8px;
+}
+#optiforge-soft-studio .proposal-structure-empty,
+#optiforge-soft-studio .proposal-structure-disclaimer {
+  margin: 0;
+}
+#optiforge-soft-studio .proposal-structure-disclaimer {
+  margin-top: 8px;
+}
+@media (max-width: 640px) {
+  #optiforge-soft-studio .proposal-structure {
+    padding: 12px;
+  }
+  #optiforge-soft-studio .proposal-structure-node {
+    min-width: 104px;
+  }
+}
+
+/* Touch/narrow action targets; the transparent surface hit areas are excluded by selector. */
+@media (max-width: 700px), (pointer: coarse) {
+  #optiforge-soft-studio .workflow-actions .studio-button,
+  #optiforge-soft-studio .workflow-actions .workflow-primary,
+  #optiforge-soft-studio .workflow-tabs button,
+  #optiforge-soft-studio .workflow-recommendation button,
+  #optiforge-soft-studio .workflow-task-filters .studio-button,
+  #optiforge-soft-studio .workflow-task-filter-empty .studio-button { min-height: 44px; }
+}

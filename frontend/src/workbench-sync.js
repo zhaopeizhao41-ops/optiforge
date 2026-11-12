@@ -20,7 +20,7 @@ export class WorkbenchSync {
   constructor(api, { delay = abortableDelay, random = Math.random } = {}) {
     this.api = api; this.delay = delay; this.random = random;
     this.listeners = new Set(); this.epoch = 0; this.active = false; this.runGeneration = 0;
-    this.view = { phase: 'connecting', engine: null, snapshot: null, stale: true, error: '', importing: false, canImportModel: true };
+    this.view = { phase: 'connecting', transportConnected: false, engine: null, snapshot: null, stale: true, error: '', importing: false, canImportModel: true };
   }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(changes) { this.view = { ...this.view, ...changes }; for (const listener of this.listeners) listener(this.view); }
@@ -31,7 +31,7 @@ export class WorkbenchSync {
     const current = incoming.validity === 'valid' && Boolean(incoming.snapshot);
     const recent = incoming.tasks.recent[0];
     const taskError = !running && recent && ['failed', 'rejected'].includes(recent.status) ? recent.message || '操作失败' : '';
-    this.emit({ engine: incoming, snapshot: incoming.snapshot || this.view.snapshot,
+    this.emit({ transportConnected: true, engine: incoming, snapshot: incoming.snapshot || this.view.snapshot,
       phase: running ? 'running' : current ? 'synced' : incoming.validity === 'initializing' ? 'connecting' : 'unavailable',
       stale: !current || running, error: incoming.error || taskError });
     return true;
@@ -52,7 +52,10 @@ export class WorkbenchSync {
         if (!this.active || this.runGeneration !== runGeneration) return;
         if (epoch !== this.epoch || signal.aborted) continue;
         this.instance = session.service_instance_id; this.cursor = 0;
-        this.emit({ canImportModel: session.capabilities?.model_import !== false });
+        this.emit({ canImportModel: session.capabilities?.model_import !== false,
+          canRefreshNative:session.capabilities?.native_engine!==false,
+          canCollaborate:session.capabilities?.collaboration===true && session.capabilities?.workflow_schema_version===1,
+          canAnalyze:session.capabilities?.analysis===true && session.capabilities?.analysis_schema_version===1 });
         const initial = await this.api.readState(signal);
         if (initial.service_instance_id !== this.instance) throw new Error('服务已重启，正在重新连接');
         this.adopt(initial, epoch);
@@ -71,7 +74,7 @@ export class WorkbenchSync {
       } catch (error) {
         if (!this.active || this.runGeneration !== runGeneration) break;
         if (signal.aborted) continue;
-        this.emit({ phase: this.view.snapshot ? 'reconnecting' : 'unavailable', stale: true,
+        this.emit({ transportConnected: false, phase: this.view.snapshot ? 'reconnecting' : 'unavailable', stale: true,
           error: this.view.snapshot ? '连接已断开，显示上次读取' : error.message || '本地工程服务未连接' });
         const ms = Math.min(10000, 1000 * 2 ** Math.min(failures++, 4)) + Math.floor(this.random() * 150);
         this.abort = new AbortController();

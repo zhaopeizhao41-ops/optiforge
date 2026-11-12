@@ -249,13 +249,18 @@ def trace_session(session, model, settings, *, budget_seconds=30):
             try:
                 if tool.IsRunning and tool.CanCancel:
                     tool.Cancel()
-                # Timeout is NOT completion. Keep the owner queue occupied until
-                # stopped, including noncancellable native tools.
-                while tool.IsRunning:
-                    tool.WaitWithTimeout(.5)
+                # A timeout does not prove completion. Bound cleanup, then
+                # quarantine the shared native owner if it cannot stop.
+                stop_deadline = time.monotonic() + 2.
+                while tool.IsRunning and time.monotonic() < stop_deadline:
+                    tool.WaitWithTimeout(min(.5, max(.001,stop_deadline-time.monotonic())))
+                if tool.IsRunning:
+                    raise RuntimeError("取消后仍在运行")
                 if not tool.Close():
                     raise RuntimeError("Close 返回 false")
             except Exception as error:
+                from core.analysis_runner import quarantine
+                quarantine(str(error))
                 raise TraceError("TRACE_CLEANUP_FAILED", f"原生工具未安全释放，暂停后续计算：{error}") from error
     result = assemble(model, settings, batch, frame)
     result["elapsed_ms"] = (time.monotonic() - start) * 1000

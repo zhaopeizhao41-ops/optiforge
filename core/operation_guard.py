@@ -16,9 +16,17 @@ def serialized_operation(fn):
                 bound = signature.bind(*args, **kwargs)
                 bound.apply_defaults()
                 validate_arguments(fn.__name__, bound.arguments)
+                session = ZOSSession._instance
+                from core.workbench_effects import TOOL_EFFECTS, ToolEffect
+                effect = TOOL_EFFECTS.get(fn.__name__, ToolEffect(native=True))
+                file_only = fn.__name__ in {"zemax_set_project", "zemax_get_project", "get_current_design_proposal",
+                                             "zemax_register_design_proposal", "zemax_confirm_design_proposal"}
+                if not file_only and getattr(session, "native_cleanup_error", None) and (effect.native or effect.observes_context or effect.kind == "context"):
+                    from core.analysis_runner import NativeOwnershipError
+                    raise NativeOwnershipError(session.native_cleanup_error)
                 return fn(*args, **kwargs)
             except Exception as error:
-                return {"status": "error", "message": str(error)}
+                return {"status": "error", "message": str(error), **({"code":error.code} if hasattr(error,"code") else {})}
     return wrapped
 
 

@@ -78,6 +78,32 @@ test('uncertain/unavailable state never becomes synced merely because a snapshot
   api.current = { ...state(3), validity: 'unavailable', snapshot: null, snapshot_context: null };
   api.notify(); await flush(); assert.equal(sync.view.snapshot.model.value, 2); assert.equal(sync.view.stale, true);
 });
+
+test('transport begins disconnected and valid native-unavailable or failed-task states still prove HTTP connectivity', async (t) => {
+  const api = fakeApi();
+  api.current = { ...state(), validity: 'unavailable', snapshot: null, snapshot_context: null, error: 'native unavailable' };
+  const sync = new WorkbenchSync(api); t.after(() => sync.stop()); assert.equal(sync.view.transportConnected, false);
+  sync.start(); await flush(); assert.equal(sync.view.transportConnected, true); assert.equal(sync.view.phase, 'unavailable');
+  api.current = { ...api.current, state_version: 2, event_seq: 8, error: '', tasks: { pending: [], recent: [{ status: 'failed', message: 'analysis failed' }] } };
+  api.notify(); await flush(); assert.equal(sync.view.transportConnected, true); assert.equal(sync.view.error, 'analysis failed');
+  assert.equal(sync.view.phase, 'unavailable');
+});
+
+test('session, state and event failures clear explicit transport state regardless of identical native/task error text', async (t) => {
+  for (const failure of ['session', 'state', 'event']) {
+    const api = fakeApi(), retry = deferred();
+    if (failure === 'session') api.handshake = async () => { throw new Error('same error'); };
+    if (failure === 'state') api.readState = async () => { throw new Error('same error'); };
+    api.current = { ...state(), validity: 'unavailable', snapshot: null, snapshot_context: null, error: '',
+      tasks: { pending: [], recent: [{ status: 'failed', message: 'same error' }] } };
+    const sync = new WorkbenchSync(api, { delay: () => retry.promise }); t.after(() => sync.stop()); sync.start(); await flush();
+    if (failure === 'event') {
+      assert.equal(sync.view.transportConnected, true); assert.equal(sync.view.error, 'same error');
+      api.waits.shift().reject(new Error('same error')); await flush();
+    }
+    assert.equal(sync.view.transportConnected, false); assert.equal(sync.view.phase, 'unavailable'); assert.equal(sync.view.error, 'same error'); sync.stop();
+  }
+});
 test('overflow/reset fetches full cached state and advances subscription cursor', async (t) => {
   const { sync, api } = await running(t);
   api.current = state(40); api.notify({ events: [], reset_required: true }); await flush();
@@ -88,9 +114,11 @@ test('disconnect preserves snapshot, then restart adopts new instance at a lower
   const { sync, api } = await running(t, fakeApi(), { delay: (ms) => { delays.push(ms); return retry.promise; }, random: () => 0 });
   api.waits.shift().reject(new Error('offline')); await flush();
   assert.equal(sync.view.phase, 'reconnecting'); assert.equal(sync.view.snapshot.model.value, 1);
+  assert.equal(sync.view.transportConnected, false);
   assert.equal(sync.view.error, '连接已断开，显示上次读取');
   api.current = state(0, 'instance-b', 'model-b'); retry.resolve(); await flush();
   assert.deepEqual(delays, [1000]); assert.equal(sync.view.engine.service_instance_id, 'instance-b');
+  assert.equal(sync.view.transportConnected, true);
   assert.equal(sync.adopt(state(99), sync.epoch), false);
 });
 test('read reconnect backoff is bounded and deterministic under a controlled clock', async () => {

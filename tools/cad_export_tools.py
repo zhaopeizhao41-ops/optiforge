@@ -17,11 +17,12 @@ import matplotlib.patches as patches
 import numpy as np
 
 # Configure Chinese typography for GB/T 13323-2009 national standard drawings
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "sans-serif"]
+plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "SimSun", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
 from core.zos_session import ZOSSession
 from core.operation_guard import serialized_operation
+from core.analysis_runner import close_tool, run_tool_bounded
 from tools.project_manager import (
     get_project_dir,
     resolve_project_directory_path,
@@ -36,30 +37,48 @@ try:
     from ezdxf.enums import TextEntityAlignment
     from ezdxf.addons.drawing import RenderContext, Frontend
     from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
-    from ezdxf.addons.drawing.config import Configuration, BackgroundPolicy
+    from ezdxf.addons.drawing.config import (
+        Configuration,
+        BackgroundPolicy,
+        ColorPolicy,
+        LineweightPolicy,
+    )
     EZDXF_AVAILABLE = True
 except ImportError:
     EZDXF_AVAILABLE = False
 
 
-def _render_dxf_to_png(dxf_filepath: str, png_filepath: str, dpi: int = 220) -> bool:
+# Large assemblies with traced rays can take minutes; a stuck export must not hold the lock.
+_CAD_EXPORT_TIMEOUT_S = 600.0
+
+
+def _render_dxf_to_png(dxf_filepath: str, png_filepath: str, dpi: int = 450) -> bool:
     """
-    Render a 100% pixel-perfect CAD drawing preview from DXF modelspace using ezdxf matplotlib backend.
-    Ensures identical 1:1 fidelity between native DXF CAD drawing and PNG preview.
+    Render a high-contrast monochrome CAD drawing preview from DXF modelspace
+    using ezdxf's matplotlib backend, ensuring 1:1 fidelity with native DXF.
     """
     if not EZDXF_AVAILABLE:
         return False
     try:
         doc = ezdxf.readfile(dxf_filepath)
         msp = doc.modelspace()
-        fig = plt.figure(figsize=(16.0, 11.31), dpi=dpi)
-        ax = fig.add_axes([0, 0, 1, 1])
+        fig = plt.figure(figsize=(11.69, 8.27), dpi=dpi)
+        ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
         ctx = RenderContext(doc)
-        cfg = Configuration(background_policy=BackgroundPolicy.WHITE)
-        out = MatplotlibBackend(ax)
+        cfg = Configuration(
+            background_policy=BackgroundPolicy.WHITE,
+            color_policy=ColorPolicy.BLACK,
+            lineweight_policy=LineweightPolicy.ABSOLUTE,
+            min_lineweight=0.14,
+            lineweight_scaling=1.85,
+        )
+        out = MatplotlibBackend(ax, adjust_figure=False)
         frontend = Frontend(ctx, out, config=cfg)
         frontend.draw_layout(msp, finalize=True)
-        fig.savefig(png_filepath, facecolor="white")
+        ax.set_xlim(-1.5, 298.5)
+        ax.set_ylim(-1.5, 211.5)
+        ax.set_aspect("equal")
+        fig.savefig(png_filepath, dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.04)
         plt.close(fig)
         return True
     except Exception as e:
@@ -206,12 +225,13 @@ def zemax_export_cad(
             cad_tool.NumberOfRays = 0
 
         cad_tool.OutputFileName = target_path
-        cad_tool.RunAndWaitForCompletion()
-
-        succeeded = bool(cad_tool.Succeeded)
-        error_msg = str(cad_tool.ErrorMessage) if cad_tool.ErrorMessage else None
+        if run_tool_bounded(cad_tool, _CAD_EXPORT_TIMEOUT_S):
+            succeeded, error_msg = False, f"CAD 导出超过 {_CAD_EXPORT_TIMEOUT_S:g} s 未完成，已取消"
+        else:
+            succeeded = bool(cad_tool.Succeeded)
+            error_msg = str(cad_tool.ErrorMessage) if cad_tool.ErrorMessage else None
     finally:
-        cad_tool.Close()
+        close_tool(cad_tool)
 
     if not succeeded or not os.path.exists(target_path):
         return {
@@ -541,6 +561,124 @@ def _element_coating(sys, element) -> str:
                      for i in surfaces)
 
 
+_COMMON_OPTICAL_GLASS_ND: Dict[str, float] = {
+    # CDGM
+    "H-K9L": 1.51680, "H-K9": 1.51680, "K9": 1.51630,
+    "H-FK61": 1.49700, "H-FK71": 1.45650,
+    "H-ZK9B": 1.62041, "H-BAK7": 1.56883,
+    "H-LAK2": 1.67790, "H-LAK7A": 1.65160, "H-LAK53A": 1.73800,
+    "H-LAF2": 1.74400, "H-LAF3B": 1.71700, "H-LAF50B": 1.77250,
+    "H-ZLAF50D": 1.80400, "H-ZLAF68C": 1.81600,
+    "H-ZBAF52": 1.65844,
+    "H-F1": 1.60562, "H-F4": 1.61659,
+    "H-ZF1": 1.64769, "H-ZF2": 1.67270, "H-ZF4A": 1.72825,
+    "H-ZF6": 1.75520, "H-ZF7L": 1.80610, "H-ZF13": 1.78472,
+    "H-ZF52": 1.84666, "H-ZF52A": 1.84666, "H-ZF62": 1.92286,
+    "H-ZF73": 1.94595,
+    # SCHOTT
+    "N-BK7": 1.51680, "BK7": 1.51680, "N-PK52A": 1.49700,
+    "N-BAK4": 1.56883, "N-SK16": 1.62041, "SK16": 1.62041,
+    "N-BAF10": 1.67003, "BAF10": 1.67003,
+    "N-LAK9": 1.69100, "N-LAF21": 1.78800, "N-LASF44": 1.80420,
+    "N-F2": 1.62004, "F2": 1.62004,
+    "N-SF2": 1.64769, "SF2": 1.64769,
+    "N-SF5": 1.67270, "SF5": 1.67270,
+    "N-SF6": 1.80518, "SF6": 1.80518,
+    "N-SF10": 1.72825, "SF10": 1.72825,
+    "N-SF11": 1.78472, "SF11": 1.78472,
+    "N-SF57": 1.84666, "N-SF66": 1.92286,
+    # OHARA
+    "S-BSL7": 1.51633, "S-FPL51": 1.49700, "S-FPL53": 1.43875,
+    "S-BAL35": 1.58913, "S-LAL14": 1.69680, "S-LAH64": 1.78800,
+    "S-TIM2": 1.62004, "S-TIH6": 1.80518, "S-TIH53": 1.84666,
+    # UV / IR / Crystals / Polymers
+    "F_SILICA": 1.45846, "SILICA": 1.45846, "FSILICA": 1.45846,
+    "JGS1": 1.45846, "JGS2": 1.45846,
+    "CAF2": 1.43384, "MGFL2": 1.37770, "MGF2": 1.37770,
+    "SAPPHIRE": 1.76820,
+    "ZNSE": 2.67080, "ZNS": 2.29230, "GE": 4.00320, "SI": 3.42230,
+    "PMMA": 1.49176, "POLYCARB": 1.58547, "COP": 1.53116, "ZEONEX": 1.53116,
+}
+
+
+def _lookup_material_nd(sys, zos, surf_idx: int, mat_name: str, primary_wave: int) -> Optional[float]:
+    """Resolve refractive index n_d via ZOS-API INDX operand when available, else built-in table."""
+    if not mat_name or not _is_lens_medium(mat_name):
+        return 1.0
+    try:
+        val = float(
+            sys.MFE.GetOperandValue(
+                zos.Editors.MFE.MeritOperandType.INDX, int(surf_idx), int(primary_wave), 0, 0, 0, 0, 0, 0
+            )
+        )
+        if 1.05 < val < 5.0 and math.isfinite(val):
+            return val
+    except Exception:
+        pass
+    norm = mat_name.strip().upper()
+    norm_clean = re.sub(r"[^A-Z0-9\-]", "", norm)
+    for candidate in (norm, norm_clean, norm_clean.lstrip("H-"), f"N-{norm_clean}"):
+        if candidate in _COMMON_OPTICAL_GLASS_ND:
+            return _COMMON_OPTICAL_GLASS_ND[candidate]
+    return None
+
+
+def _compute_element_paraxial_efl_bfl(
+    sys, zos, element: Dict[str, Any], primary_wave: int
+) -> Tuple[Optional[float], Optional[float]]:
+    """Compute paraxial EFL (f) and rear vertex BFL (Sf) in air for a singlet or cemented group."""
+    comps = element.get("components") or []
+    if not comps:
+        return None, None
+    y = 1.0
+    nu = 0.0
+    n_prev = 1.0
+    for comp in comps:
+        n_glass = _lookup_material_nd(sys, zos, comp["surface_front"], comp["material"], primary_wave)
+        if n_glass is None:
+            return None, None
+        r_f = float(comp["radius_front"])
+        phi_f = (n_glass - n_prev) / r_f if (0.0 < abs(r_f) < 1e8) else 0.0
+        nu -= y * phi_f
+        y += float(comp["thickness"]) * (nu / n_glass)
+        n_prev = n_glass
+    r_r = float(comps[-1]["radius_rear"])
+    phi_r = (1.0 - n_prev) / r_r if (0.0 < abs(r_r) < 1e8) else 0.0
+    nu -= y * phi_r
+    power = -nu
+    if abs(power) < 1e-8 or not math.isfinite(power):
+        return None, None
+    efl = 1.0 / power
+    bfl = y / power
+    if abs(efl) > 1e6 or abs(bfl) > 1e6:
+        return None, None
+    return round(efl, 2), round(bfl, 2)
+
+
+def _format_chinese_coating_note(sys, element: Dict[str, Any], spectral_range: str) -> str:
+    """Format pure Chinese optical coating specification from outer surfaces without 'Not specified'."""
+    s_start = int(element["surface_start"])
+    s_end = int(element["surface_end"])
+    spec_txt = spectral_range.replace(" ", "") if spectral_range and "Not" not in spectral_range else "工作波段"
+    outer_coatings: List[str] = []
+    for s_idx in (s_start, s_end):
+        try:
+            c = str(sys.LDE.GetSurfaceAt(s_idx).Coating).strip()
+            if c and c.upper() != "NONE":
+                outer_coatings.append(c)
+        except Exception:
+            pass
+    unique_c = list(dict.fromkeys(outer_coatings))
+    if not unique_c:
+        return f"通光面镀宽带增透膜，透过率≥99%@{spec_txt}"
+    joined = "/".join(unique_c)
+    if any(k in joined.upper() for k in ("HR", "REFL", "MIRROR")):
+        return f"通光面镀高反膜（{joined}）@{spec_txt}"
+    if any(c.upper().startswith("I.") for c in unique_c):
+        return f"通光面镀膜（{joined}），透过率满足设计要求@{spec_txt}"
+    return f"通光面镀增透膜（{joined}），透过率≥99%@{spec_txt}"
+
+
 def _ring_dimensions(clear_aperture: float, outer_diameter: float) -> Dict[str, float]:
     """Conservative aperture envelope, with 0.1 radial clearance and 0.5 wall.
 
@@ -568,369 +706,316 @@ def _calculate_sag(radius: float, conic: float, y: float) -> float:
     return (c * y**2) / (1.0 + math.sqrt(arg))
 
 
+def _mpl_draw_roughness_symbol(ax: Any, tip: Tuple[float, float], value_text: str, scale: float = 1.0):
+    """Draw GB/T 131 surface roughness V symbol on a matplotlib Axes in mm coordinates."""
+    x0, y0 = tip
+    h_tri = 2.8 * scale
+    dx_tri = h_tri / math.sqrt(3.0)
+    h_tail = 5.8 * scale
+    dx_tail = h_tail / math.sqrt(3.0)
+    ax.plot([x0 - dx_tri, x0, x0 + dx_tail], [y0 + h_tri, y0, y0 + h_tail], color="#000000", linewidth=0.85)
+    ax.plot([x0 - dx_tri, x0 + dx_tri], [y0 + h_tri, y0 + h_tri], color="#000000", linewidth=0.85)
+    if value_text:
+        ax.text(x0 - 0.1 * scale, y0 + h_tri + 0.5 * scale, value_text, fontsize=6.5 * scale, ha="center", va="bottom")
+
+
+def _mpl_draw_arrow_head(ax: Any, tip: Tuple[float, float], direction: Tuple[float, float], size: float = 2.1):
+    """Draw solid black CAD arrowhead in matplotlib mm coordinates."""
+    dx, dy = direction
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return
+    ux, uy = dx / length, dy / length
+    px, py = -uy, ux
+    w = size * 0.35
+    p_base = (tip[0] - ux * size, tip[1] - uy * size)
+    tri = patches.Polygon(
+        [tip, (p_base[0] + px * w, p_base[1] + py * w), (p_base[0] - px * w, p_base[1] - py * w)],
+        closed=True, facecolor="#000000", edgecolor="#000000", linewidth=0.3
+    )
+    ax.add_patch(tri)
+
+
+def _mpl_draw_gbt13323_sheet_and_title(ax: Any, drawing_data: Dict[str, Any], is_assembly: bool = False):
+    """
+    Draw shared A4 (297x210mm) sheet border, left filing strip, centering marks,
+    general roughness '其余 ▽ 0.05', and 180mm GB/T 10609.1 title block with empty '单位' content.
+    """
+    ax.add_patch(patches.Rectangle((0.0, 0.0), 297.0, 210.0, fill=False, edgecolor="#333333", linewidth=0.55))
+    ax.add_patch(patches.Rectangle((25.0, 5.0), 267.0, 200.0, fill=False, edgecolor="#000000", linewidth=1.45))
+
+    # Centering marks
+    ax.plot([148.5, 148.5], [210.0, 201.5], color="#000000", linewidth=1.2)
+    ax.plot([148.5, 148.5], [0.0, 8.5], color="#000000", linewidth=1.2)
+    ax.plot([21.0, 28.5], [105.0, 105.0], color="#000000", linewidth=1.2)
+    ax.plot([297.0, 288.5], [105.0, 105.0], color="#000000", linewidth=1.2)
+
+    # Left filing margin strip (X: 0..21)
+    y_bands = [0.0, 7.0, 18.0, 24.0, 35.0, 41.0, 52.0, 58.0]
+    ax.add_patch(patches.Rectangle((0.0, 0.0), 21.0, 58.0, fill=False, edgecolor="#000000", linewidth=0.7))
+    for yb in y_bands[1:-1]:
+        ax.plot([0.0, 21.0], [yb, yb], color="#000000", linewidth=0.65)
+    ax.plot([10.5, 10.5], [0.0, 7.0], color="#000000", linewidth=0.65)
+    ax.text(5.25, 3.5, "日期", fontsize=7.5, ha="center", va="center")
+    ax.text(15.75, 3.5, "签字", fontsize=7.5, ha="center", va="center")
+    for lbl, (ya, yb) in [("底图总号", (18.0, 24.0)), ("日底图总号", (35.0, 41.0)), ("介质编号", (52.0, 58.0))]:
+        ax.text(10.5, 0.5 * (ya + yb), lbl, fontsize=7.2, ha="center", va="center")
+
+    # Top-right general roughness
+    ax.text(275.5, 193.5, "其余", fontsize=9.8, ha="right", va="center")
+    _mpl_draw_roughness_symbol(ax, (279.5, 191.2), "0.05", scale=1.25)
+
+    # 180mm GB/T 10609.1 Title block (X: 112..292, Y: 5..54)
+    tb_x0, tb_x1, tb_y0, tb_y1 = 112.0, 292.0, 5.0, 54.0
+    x_mid, x_right = 204.0, 242.0
+    ax.add_patch(patches.Rectangle((tb_x0, tb_y0), tb_x1 - tb_x0, tb_y1 - tb_y0, fill=False, edgecolor="#000000", linewidth=0.9))
+    ax.plot([x_mid, x_mid], [tb_y0, tb_y1], color="#000000", linewidth=0.8)
+    ax.plot([x_right, x_right], [tb_y0, tb_y1], color="#000000", linewidth=0.8)
+
+    for r in range(1, 7):
+        y_l = tb_y0 + r * 7.0
+        ax.plot([tb_x0, x_mid], [y_l, y_l], color="#000000", linewidth=0.65)
+    for xv in [122.0, 132.0, 142.0, 168.0, 186.0]:
+        ax.plot([xv, xv], [33.0, tb_y1], color="#000000", linewidth=0.65)
+    up_cols = [112.0, 122.0, 132.0, 142.0, 168.0, 186.0, 204.0]
+    for i, hdr in enumerate(["标记", "处数", "分区", "更改文件号", "签名", "年/月/日"]):
+        ax.text(0.5 * (up_cols[i] + up_cols[i + 1]), 36.5, hdr, fontsize=7.0, ha="center", va="center")
+
+    lo_cols = [112.0, 124.0, 140.0, 156.0, 170.0, 187.0, 204.0]
+    for xv in lo_cols[1:-1]:
+        ax.plot([xv, xv], [tb_y0, 33.0], color="#000000", linewidth=0.65)
+    sign_row = [drawing_data.get("role_design", "设计"), drawing_data.get("drawn_by", "(签名)"),
+                drawing_data.get("drawing_date", "(年月日)"), "标准化",
+                drawing_data.get("std_by", "(签名)"), drawing_data.get("std_date", "(年月日)")]
+    for i, txt in enumerate(sign_row):
+        if txt:
+            ax.text(0.5 * (lo_cols[i] + lo_cols[i + 1]), 29.5, txt, fontsize=7.0, ha="center", va="center")
+    ax.text(0.5 * (lo_cols[0] + lo_cols[1]), 15.5, "审核", fontsize=7.0, ha="center", va="center")
+    ax.text(0.5 * (lo_cols[0] + lo_cols[1]), 8.5, "工艺", fontsize=7.0, ha="center", va="center")
+    ax.text(0.5 * (lo_cols[3] + lo_cols[4]), 8.5, "批准", fontsize=7.0, ha="center", va="center")
+
+    # Middle block (X: 204..242)
+    for yl in (12.0, 19.0, 26.0):
+        ax.plot([x_mid, x_right], [yl, yl], color="#000000", linewidth=0.65)
+    ax.text(223.0, 47.0, "系统类别" if is_assembly else "光学材料", fontsize=8.0, ha="center", va="center")
+    if is_assembly:
+        ax.text(223.0, 36.0, drawing_data.get("assembly_category", "光学系统总装"), fontsize=8.0, ha="center", va="center")
+    else:
+        raw_m = drawing_data.get("title_materials")
+        mats = [m.strip() for m in re.split(r"[/\n,]+", str(drawing_data.get("material", "H-K9L"))) if m.strip()] if raw_m is None else list(raw_m)
+        if len(mats) == 1:
+            ax.text(223.0, 36.0, mats[0], fontsize=8.0, ha="center", va="center")
+        else:
+            for i, ml in enumerate(mats[:4]):
+                ax.text(207.5, 40.0 - i * 5.2, str(ml), fontsize=7.5, ha="left", va="center")
+
+    for xv in (222.0, 232.0):
+        ax.plot([xv, xv], [12.0, 26.0], color="#000000", linewidth=0.65)
+    for xv in (210.0, 216.0):
+        ax.plot([xv, xv], [12.0, 19.0], color="#000000", linewidth=0.65)
+    ax.text(213.0, 22.5, "阶段标记", fontsize=6.8, ha="center", va="center")
+    ax.text(227.0, 22.5, "重量", fontsize=6.8, ha="center", va="center")
+    ax.text(237.0, 22.5, "比例", fontsize=6.8, ha="center", va="center")
+    sc_val = str(drawing_data.get("title_scale_str", "") or "").strip()
+    if sc_val:
+        ax.text(237.0, 15.5, sc_val, fontsize=6.5, ha="center", va="center")
+    ax.text(223.0, 8.5, drawing_data.get("sheet_str", "共    张    第    张"), fontsize=7.0, ha="center", va="center")
+
+    # Right block (X: 242..292): "单位" header strictly empty content
+    ax.plot([x_right, tb_x1], [20.0, 20.0], color="#000000", linewidth=0.65)
+    ax.plot([x_right, tb_x1], [37.0, 37.0], color="#000000", linewidth=0.65)
+    ax.text(267.0, 49.5, "单位", fontsize=8.0, ha="center", va="center")
+    ax.text(267.0, 33.2, "图样名称", fontsize=7.8, ha="center", va="center")
+
+    od = float(drawing_data.get("od", 25.4))
+    if drawing_data.get("title_name"):
+        name_txt = str(drawing_data["title_name"])
+    elif is_assembly:
+        name_txt = f"{drawing_data.get('drawing_name', '光学系统')}总装图"
+    else:
+        name_txt = drawing_data.get("drawing_name", f"\u03a6{od:.1f} 光学零件").replace("\n", " ")
+    ax.text(267.0, 25.5, name_txt, fontsize=9.8 if len(name_txt) <= 14 else 7.6, ha="center", va="center")
+
+    dwg_code = str(drawing_data.get("title_code", drawing_data.get("drawing_code", "(图样代号)")) or "(图样代号)")
+    if dwg_code in ("OPT-00", "OPT-ASM"):
+        dwg_code = "(图样代号)"
+    ax.text(267.0, 12.5, dwg_code, fontsize=8.6, ha="center", va="center")
+
+
+def _mpl_draw_glass_hatch(ax: Any, poly_pts: List[Tuple[float, float]], angle_deg: float, axis_y: float, keepout_pt: Optional[Tuple[float, float]] = None):
+    """Draw sparse GB/T 13323 double-stroke hatching inside lens polygon on matplotlib Axes."""
+    ys = [p[1] for p in poly_pts]
+    half_span = 0.5 * (max(ys) - min(ys))
+    if half_span < 2.0:
+        return
+    rad = math.radians(angle_deg)
+    dx, dy = math.cos(rad), math.sin(rad)
+    nx, ny = -dy, dx
+    for frac in (-0.72, -0.25, 0.25, 0.72):
+        y_probe = axis_y + frac * half_span
+        spans = _clip_line_to_polygon((0.0, y_probe), (1.0, 0.0), poly_pts)
+        if not spans:
+            continue
+        t0, t1 = max(spans, key=lambda iv: iv[1] - iv[0])
+        if t1 - t0 < 1.2:
+            continue
+        cx, cy = 0.5 * (t0 + t1), y_probe
+        if keepout_pt is not None and math.hypot(cx - keepout_pt[0], cy - keepout_pt[1]) < 3.5:
+            continue
+        for shift in (-0.4, 0.4):
+            base = (cx + nx * shift, cy + ny * shift)
+            for ct0, ct1 in _clip_line_to_polygon(base, (dx, dy), poly_pts):
+                if ct0 <= 0.0 <= ct1 and (ct1 - ct0) >= 1.0:
+                    hd = min(1.85, 0.34 * (ct1 - ct0))
+                    ax.plot([base[0] - hd * dx, base[0] + hd * dx], [base[1] - hd * dy, base[1] + hd * dy], color="#222222", linewidth=0.55)
+                    break
+
+
 def _render_gbt13323_element_drawing(
     drawing_data: Dict[str, Any],
     output_png: str,
 ):
     """
-    Render a high-resolution optical engineering drawing strictly adhering to GB/T 13323-2009.
-    STRICT CONSTRAINT: No company/organization name in title block ("去掉单位名称").
-    NO 'mm' suffix on linear dimension figures.
+    Matplotlib fallback renderer matching the absorbed Chinese GB/T 13323-2009 template.
+    Preserves blank '单位' content, 180-deg header code, and unsigned linear dimensions.
     """
-    fig_w, fig_h = 16.0, 11.31
-    fig = plt.figure(figsize=(fig_w, fig_h), dpi=220, facecolor="white")
-
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_xlim(0, 1000)
-    ax.set_ylim(0, 707)
+    fig = plt.figure(figsize=(16.0, 11.31), dpi=320, facecolor="white")
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_xlim(-1.5, 298.5)
+    ax.set_ylim(-1.5, 211.5)
+    ax.set_aspect("equal")
     ax.axis("off")
 
-    # 1. Borders, Margins, Centering Marks & Filing Strips
-    ax.add_patch(patches.Rectangle((8, 8), 984, 691, fill=False, edgecolor="#333333", linewidth=0.7))
+    _mpl_draw_gbt13323_sheet_and_title(ax, drawing_data, is_assembly=False)
 
-    x_left = 86
-    x_right = 985
-    y_bottom = 15
-    y_top = 692
-    frame_w = x_right - x_left
-    frame_h = y_top - y_bottom
-    ax.add_patch(patches.Rectangle((x_left, y_bottom), frame_w, frame_h, fill=False, edgecolor="#000000", linewidth=1.6))
+    # Top-left 17-row Optical Requirements Table (X: 25..94, Y: 205 down)
+    x0, col1_w, col2_w = 25.0, 43.0, 26.0
+    tbl_w = col1_w + col2_w
+    row_hs = [7.5] + [5.4] * 7 + [5.5] + [5.4] * 8
+    y_edges = [205.0]
+    for rh in row_hs:
+        y_edges.append(y_edges[-1] - rh)
+    ax.add_patch(patches.Rectangle((x0, y_edges[-1]), tbl_w, 205.0 - y_edges[-1], fill=False, edgecolor="#000000", linewidth=0.75))
+    for ye in y_edges[1:-1]:
+        ax.plot([x0, x0 + tbl_w], [ye, ye], color="#000000", linewidth=0.6)
+    ax.plot([x0 + col1_w, x0 + col1_w], [y_edges[8], y_edges[1]], color="#000000", linewidth=0.6)
+    ax.plot([x0 + col1_w, x0 + col1_w], [y_edges[-1], y_edges[9]], color="#000000", linewidth=0.6)
 
-    # Centering Marks
-    ax.plot([500, 500], [699, 684], color="#000000", linewidth=1.5)
-    ax.plot([500, 500], [8, 23], color="#000000", linewidth=1.5)
-    ax.plot([8, 23], [353.5, 353.5], color="#000000", linewidth=1.5)
-    ax.plot([992, 977], [353.5, 353.5], color="#000000", linewidth=1.5)
-
-    # Left Margin Administrative Boxes
-    box_w = 70
-    box_h = 28
-    y_start_admin = 70
-    admin_boxes = ["介质编号", "底图总号", "日底图总号", "日期    签字"]
-    for idx, lbl in enumerate(admin_boxes):
-        by = y_start_admin + idx * box_h
-        ax.add_patch(patches.Rectangle((8, by), box_w, box_h, fill=False, edgecolor="#000000", linewidth=0.7))
-        ax.text(8 + box_w / 2.0, by + box_h / 2.0, lbl, fontsize=8.5, ha="center", va="center")
-
-    # Top-right Surface Roughness: "其 余 ▽ 0.05"
-    ax.text(x_right - 68, y_top - 24, "其 余", fontsize=10.5, ha="right", va="center", fontweight="bold")
-    rx, ry = x_right - 58, y_top - 32
-    ax.plot([rx, rx + 8, rx + 20], [ry + 12, ry, ry + 20], color="#000000", linewidth=1.1)
-    ax.plot([rx + 8, rx + 20], [ry, ry + 20], color="#000000", linewidth=1.1)
-    ax.plot([rx + 20, rx + 40], [ry + 20, ry + 20], color="#000000", linewidth=1.1)
-    ax.text(rx + 30, ry + 23, "0.05", fontsize=9.5, ha="center", va="bottom", fontweight="bold")
-
-    # 2. Top-Left Optical Requirements Table (GB/T 13323 & GB/T 903 & GB/T 2831)
-    tbl_x = x_left
-    tbl_y_top = y_top
-    tbl_w = 236
-    col1_w = 110
-    col2_w = tbl_w - col1_w
-
-    row_h = 19.5
-    rows = [
-        {"type": "header", "label": "(图样代号) (存储代号)", "val": ""},
-        {"type": "data", "label": r"$\Delta n_d$", "val": drawing_data.get("delta_nd", "2C")},
-        {"type": "data", "label": r"$\Delta (n_F - n_C)$", "val": drawing_data.get("delta_nf_nc", "2C")},
-        {"type": "data", "label": "光学均匀性", "val": drawing_data.get("homogeneity", "2")},
-        {"type": "data", "label": "应力双折射", "val": drawing_data.get("stress_biref", "1")},
-        {"type": "data", "label": "光学吸收系数", "val": drawing_data.get("absorptance", "")},
-        {"type": "data", "label": "条纹度", "val": drawing_data.get("striae", "1")},
-        {"type": "data", "label": "气泡度", "val": drawing_data.get("bubbles", "1")},
-        {"type": "section", "label": "对零件的要求", "val": ""},
-        {"type": "data", "label": "N", "val": drawing_data.get("N", "3")},
-        {"type": "data", "label": r"$\Delta N$", "val": drawing_data.get("delta_N", "0.3")},
-        {"type": "data", "label": r"$\Delta R$", "val": drawing_data.get("delta_R", "A")},
-        {"type": "data", "label": "B", "val": drawing_data.get("B", "IV")},
-        {"type": "data", "label": r"$\chi$", "val": drawing_data.get("wedge_chi", "1'")},
-        {"type": "data", "label": "f", "val": drawing_data.get("efl_str", "-")},
-        {"type": "data", "label": r"$S_f$", "val": drawing_data.get("bfl_str", "-")},
-        {"type": "data", "label": r"$D_0$", "val": drawing_data.get("ca_str", "12.8")},
+    ax.text(x0 + 0.5 * tbl_w, 0.5 * (y_edges[0] + y_edges[1]), "(图样代号)(存储代号)", fontsize=8.0, ha="center", va="center", rotation=180)
+    efl_v = str(drawing_data.get("efl_str", "") or "").strip()
+    bfl_v = str(drawing_data.get("bfl_str", "") or "").strip()
+    d0_v = drawing_data.get("d0_str") or (f"{float(drawing_data.get('ca', 0.0)):g}mm" if float(drawing_data.get("ca", 0.0)) > 0 else "")
+    mat_rows = [
+        (r"$\Delta n_d$", drawing_data.get("delta_nd", "2C")),
+        (r"$\Delta(n_F-n_C)$", drawing_data.get("delta_nf_nc", "2C")),
+        ("光学均匀性", drawing_data.get("homogeneity", "")),
+        ("应力双折射", drawing_data.get("stress_biref", "")),
+        ("光学吸收系数", drawing_data.get("absorption", "")),
+        ("条纹度", drawing_data.get("striae", "")),
+        ("气泡度", drawing_data.get("bubbles", "")),
     ]
+    for idx, (lbl, val) in enumerate(mat_rows):
+        ym = 0.5 * (y_edges[1 + idx] + y_edges[2 + idx])
+        ax.text(x0 + 0.5 * col1_w, ym, lbl, fontsize=7.5, ha="center", va="center")
+        if val:
+            ax.text(x0 + col1_w + 0.5 * col2_w, ym, str(val), fontsize=7.5, ha="center", va="center")
 
-    total_tbl_h = len(rows) * row_h
-    tbl_y_bottom = tbl_y_top - total_tbl_h
-    ax.add_patch(patches.Rectangle((tbl_x, tbl_y_bottom), tbl_w, total_tbl_h, fill=False, edgecolor="#000000", linewidth=1.1))
+    ax.text(x0 + 0.5 * tbl_w, 0.5 * (y_edges[8] + y_edges[9]), "对零件的要求", fontsize=7.8, ha="center", va="center")
+    part_rows = [
+        ("N", drawing_data.get("N", "3")),
+        (r"$\Delta N$", drawing_data.get("delta_N", "0.3")),
+        (r"$\Delta R$", drawing_data.get("delta_R", "A")),
+        ("B", drawing_data.get("B", "IV")),
+        (r"$\chi$", drawing_data.get("wedge_chi", "3'")),
+        ("f", f"{efl_v}mm" if efl_v not in ("", "-") and not efl_v.endswith("mm") else efl_v),
+        (r"$S_f$", f"{bfl_v}mm" if bfl_v not in ("", "-") and not bfl_v.endswith("mm") else bfl_v),
+        (r"$D_0$", str(d0_v)),
+    ]
+    for idx, (lbl, val) in enumerate(part_rows):
+        ym = 0.5 * (y_edges[9 + idx] + y_edges[10 + idx])
+        ax.text(x0 + 0.5 * col1_w, ym, lbl, fontsize=7.5, ha="center", va="center")
+        if val:
+            ax.text(x0 + col1_w + 0.5 * col2_w, ym, str(val), fontsize=7.5, ha="center", va="center")
 
-    cur_y = tbl_y_top
-    for r in rows:
-        cur_y -= row_h
-        ax.plot([tbl_x, tbl_x + tbl_w], [cur_y, cur_y], color="#000000", linewidth=0.7)
-        if r["type"] == "header":
-            ax.text(tbl_x + tbl_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.0, ha="center", va="center")
-        elif r["type"] == "section":
-            ax.text(tbl_x + tbl_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.5, ha="center", va="center", fontweight="bold")
-        else:
-            ax.plot([tbl_x + col1_w, tbl_x + col1_w], [cur_y, cur_y + row_h], color="#000000", linewidth=0.7)
-            ax.text(tbl_x + col1_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.0, ha="center", va="center")
-            ax.text(tbl_x + col1_w + col2_w / 2.0, cur_y + row_h / 2.0, str(r["val"]), fontsize=9.0, ha="center", va="center")
-
-    # 3. Bottom-Left Technical Requirements (技术要求)
-    notes_x = x_left + 15
-    notes_y_start = tbl_y_bottom - 22
-    notes = drawing_data.get("technical_notes", [
+    # Technical Notes (bottom-left)
+    notes = drawing_data.get("custom_notes") or drawing_data.get("technical_notes") or [
         "1、材料采用指定牌号优质光学玻璃；",
-        "2、未注倒角均为 0.2~0.3×45°，棱边不得崩边；",
-        "3、胶合面胶合层厚度 0.01~0.02mm，采用光学胶；",
-        "4、镀膜要求未指定，须确认；",
-        "5、基准设计波长见系统设计要求。"
-    ])
-    line_y = notes_y_start
+        "2、所有倒角 0.3×45°，棱边不得崩边；",
+        f"3、设计波长：{drawing_data.get('design_wavelengths', '532nm')}。",
+    ]
+    cur_ny = 95.0
     for n in notes:
-        ax.text(notes_x, line_y, n, fontsize=9.2, ha="left", va="top")
-        line_y -= 19
+        for wl in _wrap_cad_note_line(n, max_units=27.0):
+            ax.text(28.5, cur_ny, wl, fontsize=7.8, ha="left", va="top")
+            cur_ny -= 4.4
+        cur_ny -= 1.2
 
-    # 4. Bottom-Right Title Block (NO COMPANY NAME)
-    tb_w = 480
-    tb_h = 138
-    tb_x = x_right - tb_w
-    tb_y = y_bottom
-
-    ax.add_patch(patches.Rectangle((tb_x, tb_y), tb_w, tb_h, fill=False, edgecolor="#000000", linewidth=1.4))
-
-    rev_h = 24
-    rev_y = tb_y + tb_h - rev_h
-    ax.plot([tb_x, tb_x + tb_w], [rev_y, rev_y], color="#000000", linewidth=0.9)
-
-    rev_cols = [("标记", 38), ("处数", 38), ("分区", 38), ("更改文件号", 96), ("签名", 48), ("年/月/日", 64)]
-    rc_x = tb_x
-    for c_lbl, c_w in rev_cols:
-        ax.plot([rc_x, rc_x], [rev_y, rev_y + rev_h], color="#000000", linewidth=0.7)
-        ax.text(rc_x + c_w / 2.0, rev_y + rev_h / 2.0, c_lbl, fontsize=8.5, ha="center", va="center")
-        rc_x += c_w
-    ax.plot([rc_x, rc_x], [rev_y, rev_y + rev_h], color="#000000", linewidth=0.7)
-
-    col_split_x = tb_x + 265
-    ax.plot([col_split_x, col_split_x], [tb_y, rev_y], color="#000000", linewidth=1.1)
-
-    r1_y = rev_y - 28.5
-    ax.plot([tb_x, col_split_x], [r1_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 35, r1_y + 14, "设  计", fontsize=9.0, ha="center", va="center")
-    ax.text(tb_x + 92, r1_y + 14, "(签名)(年月日)", fontsize=7.5, color="#555555", ha="center", va="center")
-    ax.plot([tb_x + 132, tb_x + 132], [r1_y, rev_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 165, r1_y + 14, "标准化", fontsize=9.0, ha="center", va="center")
-    ax.text(tb_x + 220, r1_y + 14, "(签名)(年月日)", fontsize=7.5, color="#555555", ha="center", va="center")
-
-    r2_y = r1_y - 28.5
-    ax.plot([tb_x, col_split_x], [r2_y, r2_y], color="#000000", linewidth=0.7)
-    w_sub = 265 / 3.0
-    ax.text(tb_x + w_sub * 0.4, r2_y + 14, "审  核", fontsize=9.0, ha="center", va="center")
-    ax.plot([tb_x + w_sub, tb_x + w_sub], [r2_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + w_sub * 1.5, r2_y + 14, "工  艺", fontsize=9.0, ha="center", va="center")
-    ax.plot([tb_x + w_sub * 2, tb_x + w_sub * 2], [r2_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + w_sub * 2.5, r2_y + 14, "批  准", fontsize=9.0, ha="center", va="center")
-
-    r3_y = r2_y - 28.5
-    ax.plot([tb_x, col_split_x], [r3_y, r3_y], color="#000000", linewidth=0.7)
-    ax.plot([tb_x + 80, tb_x + 80], [r3_y, r2_y], color="#000000", linewidth=0.7)
-    ax.plot([tb_x + 160, tb_x + 160], [r3_y, r2_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 40, r3_y + 14, "阶段标记", fontsize=8.5, ha="center", va="center")
-    ax.text(tb_x + 120, r3_y + 14, "重  量", fontsize=8.5, ha="center", va="center")
-    scale_str = drawing_data.get("drawing_scale", "1:1")
-    ax.text(tb_x + 212, r3_y + 14, f"比  例  {scale_str}", fontsize=8.5, ha="center", va="center")
-
-    page_str = drawing_data.get("page_str", "共  1  张    第  1  张")
-    ax.text(tb_x + 132, tb_y + 14, page_str, fontsize=9.0, ha="center", va="center")
-
-    # Right Product Block: Optical Material (left) + Name / Code (right)
-    # STRICT COMPLIANCE: NO "单位" or company name block!
-    mat_w = 95
-    name_w = tb_w - 265 - mat_w
-    mat_x = col_split_x
-    name_x = mat_x + mat_w
-
-    ax.plot([name_x, name_x], [tb_y, rev_y], color="#000000", linewidth=0.9)
-    ax.text(mat_x + mat_w / 2.0, rev_y - 22, "光学材料", fontsize=9.2, ha="center", va="center")
-    mat_name = drawing_data.get("material", "H-K9L")
-    ax.text(mat_x + mat_w / 2.0, tb_y + (rev_y - tb_y) / 2.0 - 10, mat_name, fontsize=8.8, ha="center", va="center", fontweight="bold")
-
-    half_h = (rev_y - tb_y) / 2.0
-    mid_name_y = tb_y + half_h
-    ax.plot([name_x, tb_x + tb_w], [mid_name_y, mid_name_y], color="#000000", linewidth=0.9)
-
-    ax.text(name_x + name_w / 2.0, rev_y - 18, "图样名称", fontsize=9.2, ha="center", va="center")
-    dwg_name = drawing_data.get("drawing_name", "光学零件图")
-    if len(dwg_name) > 20:
-        dwg_name_fontsize = 7.2
-    elif len(dwg_name) > 12:
-        dwg_name_fontsize = 8.5
-    else:
-        dwg_name_fontsize = 10.5
-    ax.text(name_x + name_w / 2.0, mid_name_y + 16, dwg_name, fontsize=dwg_name_fontsize, ha="center", va="center", fontweight="bold")
-
-    dwg_code = drawing_data.get("drawing_code", "(图样代号)")
-    ax.text(name_x + name_w / 2.0, tb_y + half_h / 2.0, dwg_code, fontsize=9.2, ha="center", va="center")
-
-    # 5. Center Graphic Area: Automatic Optical Geometry Renderer
-    elements = drawing_data.get("elements", [])
-    if not elements:
-        elements = [
-            {"index": 1, "r1": 50.0, "r2": -50.0, "t": 5.0, "k1": 0, "k2": 0, "material": "H-K9L", "hatch": "//"}
-        ]
-
-    axis_y = 420
-    ax.plot([280, 920], [axis_y, axis_y], color="#c62828", linestyle="-.", linewidth=0.9)
-
+    # Lens Geometry & Dimensions
+    elements = drawing_data.get("elements") or [{"index": 1, "r1": 50.0, "r2": -50.0, "t": 5.0, "k1": 0, "k2": 0, "material": "H-K9L"}]
     od = float(drawing_data.get("od", 25.4))
-    ca = float(drawing_data.get("ca", 22.0))
     od_tol = drawing_data.get("od_tolerance", "-0.05")
     half_od = od / 2.0
-    half_ca = ca / 2.0
+    total_axial = sum(float(e.get("t", 5.0)) + float(e.get("air_after", 0.0)) for e in elements)
 
-    total_axial_len = sum(e.get("t", 5.0) + e.get("air_after", 0.0) for e in elements)
-    scale_x = 420.0 / max(total_axial_len, 10.0)
-    scale_y = 280.0 / max(od, 10.0)
-    scale = min(scale_x, scale_y, 16.0)
-
-    x_origin = 600 - (total_axial_len * scale) / 2.0
-    y_pts = np.linspace(-half_od, half_od, 200)
-    y_canvas = axis_y + y_pts * scale
+    axis_y = float(drawing_data.get("axis_y", 132.0))
+    scale = float(drawing_data.get("scale_override") or max(1.0, min(6.0, round(min(105.0 / max(total_axial, 8.0), 82.0 / max(od, 8.0)) * 4.0) / 4.0)))
+    x_origin = float(drawing_data.get("lens_center_x", 182.0)) - 0.5 * total_axial * scale
+    ax.plot([max(100.0, x_origin - 28.0), min(286.0, x_origin + total_axial * scale + 38.0)], [axis_y, axis_y],
+            color="#c62828", linestyle="-.", linewidth=0.75)
 
     cur_z = x_origin
-    dim_stagger_idx = 0
-    base_dim_y = axis_y - half_od * scale - 28
-
-    all_z_positions = []
-    hatches = ["//", "\\\\", "//", "\\\\", "//", "\\\\"]
-
+    slices_m = []
     for idx, elem in enumerate(elements):
-        r1 = elem.get("r1", 0.0)
-        r2 = elem.get("r2", 0.0)
-        k1 = elem.get("k1", 0.0)
-        k2 = elem.get("k2", 0.0)
-        ct = elem.get("t", 5.0)
-        ct_tol = elem.get("t_tolerance", "±0.02")
-        hatch = elem.get("hatch", hatches[idx % len(hatches)])
+        r1 = float(elem.get("r1", 0.0))
+        r2 = float(elem.get("r2", 0.0))
+        r1d = float(elem.get("r1_draw", r1))
+        r2d = float(elem.get("r2_draw", r2))
+        ct = float(elem.get("t", 5.0))
+        air_after = float(elem.get("air_after", 0.0))
+        prev_air = (idx == 0) or (float(elements[idx - 1].get("air_after", 0.0)) > 1e-4)
+        next_air = (idx == len(elements) - 1) or (air_after > 1e-4)
 
-        z_front = cur_z
-        z_rear = z_front + ct * scale
-
-        s_front = np.array([z_front + _calculate_sag(r1, k1, y) * scale if abs(y) <= half_ca else z_front + _calculate_sag(r1, k1, half_ca) * scale for y in y_pts])
-        s_rear = np.array([z_rear + _calculate_sag(r2, k2, y) * scale if abs(y) <= half_ca else z_rear + _calculate_sag(r2, k2, half_ca) * scale for y in y_pts])
-
-        ax.fill_betweenx(y_canvas, s_front, s_rear, facecolor="#ffffff", edgecolor="#000000", hatch=hatch, linewidth=1.1)
-        ax.plot([s_front[0], s_rear[0]], [y_canvas[0], y_canvas[0]], color="#000000", linewidth=1.2)
-        ax.plot([s_front[-1], s_rear[-1]], [y_canvas[-1], y_canvas[-1]], color="#000000", linewidth=1.2)
-        ax.plot(s_rear, y_canvas, color="#000000", linewidth=1.3)
-
-        # Element number balloon for multi-element groups
+        poly, f_pts, r_pts, z_fn, z_rn = _build_lens_slice_polygon(
+            cur_z, cur_z + ct * scale, r1d, r2d, float(elem.get("k1", 0.0)), float(elem.get("k2", 0.0)),
+            half_od, scale, axis_y, chamfer_front=0.3 if prev_air else 0.0, chamfer_rear=0.3 if next_air else 0.0
+        )
+        ax.add_patch(patches.Polygon(poly, closed=True, facecolor="none", edgecolor="#000000", linewidth=1.05))
+        xm = 0.5 * (cur_z + _calculate_sag(r1d, 0.0, 0.55 * half_od) * scale + cur_z + ct * scale + _calculate_sag(r2d, 0.0, 0.55 * half_od) * scale)
+        ym = axis_y + 0.55 * half_od * scale
+        _mpl_draw_glass_hatch(ax, poly, float(elem.get("hatch_angle", 45.0 if idx % 2 == 0 else 135.0)), axis_y, (xm, ym) if len(elements) > 1 else None)
         if len(elements) > 1:
-            lbl_y = axis_y + half_od * scale * 0.42
-            elem_num = elem.get("index", idx + 1)
-            ax.text((z_front + z_rear) / 2.0, lbl_y, str(elem_num), fontsize=10.0, ha="center", va="center",
-                    bbox=dict(boxstyle="circle,pad=0.22", fc="white", ec="black", lw=0.8))
+            ax.text(xm, ym, str(elem.get("index", idx + 1)), fontsize=8.0, ha="center", va="center")
 
-        # Staggered Thickness Dimension below lens (NO 'mm' suffix!)
-        dim_y = base_dim_y - (dim_stagger_idx % 2) * 20
-        dim_stagger_idx += 1
+        y_d = axis_y - half_od * scale - (7.5 + (idx % 3) * 6.0)
+        ax.plot([cur_z, cur_z], [axis_y, y_d - 2.0], color="#333333", linewidth=0.55)
+        ax.plot([cur_z + ct * scale, cur_z + ct * scale], [axis_y, y_d - 2.0], color="#333333", linewidth=0.55)
+        ax.plot([cur_z, cur_z + ct * scale], [y_d, y_d], color="#333333", linewidth=0.6)
+        _mpl_draw_arrow_head(ax, (cur_z, y_d), (1.0, 0.0), 1.8)
+        _mpl_draw_arrow_head(ax, (cur_z + ct * scale, y_d), (-1.0, 0.0), 1.8)
+        ax.text(0.5 * (2 * cur_z + ct * scale), y_d + 1.0, f"{ct:g}{elem.get('t_tolerance', '±0.02')}", fontsize=7.0, ha="center", va="bottom")
 
-        ax.plot([z_front, z_front], [y_canvas[0], dim_y - 4], color="#666666", linestyle=":", linewidth=0.7)
-        ax.plot([z_rear, z_rear], [y_canvas[0], dim_y - 4], color="#666666", linestyle=":", linewidth=0.7)
-        ax.annotate("", xy=(z_front, dim_y), xytext=(z_rear, dim_y), arrowprops=dict(arrowstyle="<->", color="black", lw=0.85))
-        dim_txt = f"{ct:.2f} {ct_tol}" if ct_tol else f"{ct:.2f}"
-        ax.text((z_front + z_rear) / 2.0, dim_y + 3, dim_txt, fontsize=8.2, ha="center", va="bottom")
+        slices_m.append((cur_z, cur_z + ct * scale, f_pts, r_pts, r1, r2, z_fn, z_rn))
+        cur_z += (ct + air_after) * scale
 
-        # Curvature centers crosses on optical axis
-        for r_val, z_base in [(r1, z_front), (r2, z_rear)]:
-            if r_val != 0 and abs(r_val) < 1000:
-                c_pos = z_base + r_val * scale
-                if 280 < c_pos < 920:
-                    csz = 3.5
-                    ax.plot([c_pos - csz, c_pos + csz], [axis_y, axis_y], color="#000000", linewidth=0.7)
-                    ax.plot([c_pos, c_pos], [axis_y - csz, axis_y + csz], color="#000000", linewidth=0.7)
+    _mpl_draw_roughness_symbol(ax, (0.5 * (slices_m[0][6] + slices_m[-1][7]), axis_y + half_od * scale), "1.6", 0.95)
+    for si, (zf, zr, fp, rp, r1, r2, zfn, zrn) in enumerate(slices_m):
+        pf = fp[int(len(fp) * 0.72)]
+        ax.annotate(_format_gbt_radius(r1), xy=pf, xytext=(pf[0] - 18.0, pf[1] + 8.0),
+                    arrowprops=dict(arrowstyle="->", color="black", lw=0.7), fontsize=7.2, ha="right")
+        if si == len(slices_m) - 1:
+            pr = rp[int(len(rp) * 0.28)]
+            ax.annotate(_format_gbt_radius(r2), xy=pr, xytext=(pr[0] + 18.0, pr[1] - 8.0),
+                        arrowprops=dict(arrowstyle="->", color="black", lw=0.7), fontsize=7.2, ha="left")
 
-        all_z_positions.append((z_front, z_rear, s_front, s_rear, r1, r2, k1, k2))
-        air_after = elem.get("air_after", 0.0)
-        cur_z = z_rear + air_after * scale
+    x_od = max(s[7] for s in slices_m) + 14.0
+    ax.plot([slices_m[-1][7], x_od + 2.0], [axis_y + half_od * scale, axis_y + half_od * scale], color="#333333", linewidth=0.55)
+    ax.plot([slices_m[-1][7], x_od + 2.0], [axis_y - half_od * scale, axis_y - half_od * scale], color="#333333", linewidth=0.55)
+    ax.plot([x_od, x_od], [axis_y - half_od * scale, axis_y + half_od * scale], color="#333333", linewidth=0.6)
+    _mpl_draw_arrow_head(ax, (x_od, axis_y - half_od * scale), (0.0, -1.0), 2.0)
+    _mpl_draw_arrow_head(ax, (x_od, axis_y + half_od * scale), (0.0, 1.0), 2.0)
+    ax.text(x_od - 1.5, axis_y, f"{od:g}{od_tol}", fontsize=7.5, ha="right", va="center", rotation=90)
 
-    # Collect surfaces to annotate
-    surfaces_to_annotate = []
-    for e_idx, (z_f, z_r, s_f, s_r, r1_val, r2_val, k1_val, k2_val) in enumerate(all_z_positions):
-        surfaces_to_annotate.append({
-            "r": r1_val, "k": k1_val, "s_pts": s_f, "side": "front", "elem_idx": e_idx
-        })
-        if e_idx == len(all_z_positions) - 1 or elements[e_idx].get("air_after", 0.0) > 0:
-            surfaces_to_annotate.append({
-                "r": r2_val, "k": k2_val, "s_pts": s_r, "side": "rear", "elem_idx": e_idx
-            })
-
-    num_surfs = len(surfaces_to_annotate)
-    for s_i, s_info in enumerate(surfaces_to_annotate):
-        r_val = s_info["r"]
-        s_pts = s_info["s_pts"]
-        r_lbl = f"R{r_val:.3f}" if r_val != 0 and abs(r_val) < 1e8 else "平面"
-
-        if num_surfs == 2:
-            if s_i == 0:
-                ax.annotate(r_lbl, xy=(s_pts[130], y_canvas[130]),
-                            xytext=(s_pts[130] - 65, y_canvas[130] + 30),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-            else:
-                ax.annotate(r_lbl, xy=(s_pts[70], y_canvas[70]),
-                            xytext=(s_pts[70] + 45, y_canvas[70] - 25),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-        elif num_surfs == 3 or (len(elements) == 2 and elements[0].get("air_after", 0) == 0):
-            if s_i == 0:
-                ax.annotate(r_lbl, xy=(s_pts[140], y_canvas[140]),
-                            xytext=(s_pts[140] - 65, y_canvas[140] + 35),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-            elif s_i == 1:
-                ax.annotate(r_lbl, xy=(s_pts[80], y_canvas[80]),
-                            xytext=(s_pts[80] - 65, y_canvas[80] - 30),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-            else:
-                ax.annotate(r_lbl, xy=(s_pts[70], y_canvas[70]),
-                            xytext=(s_pts[70] + 45, y_canvas[70] - 30),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-        else:
-            half_n = max(1, int(num_surfs / 2))
-            if s_i < half_n:
-                y_offset = 50 - s_i * 35
-                pt_k = max(10, min(190, int(130 - s_i * 25)))
-                ax.annotate(r_lbl, xy=(s_pts[pt_k], y_canvas[pt_k]),
-                            xytext=(all_z_positions[0][0] - 70, axis_y + y_offset),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-            else:
-                rel_i = s_i - half_n
-                y_offset = -40 + rel_i * 35
-                pt_k = max(10, min(190, int(70 + rel_i * 20)))
-                ax.annotate(r_lbl, xy=(s_pts[pt_k], y_canvas[pt_k]),
-                            xytext=(all_z_positions[-1][1] + 45, axis_y + y_offset),
-                            arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.5)
-
-    # Reference Sagitta in Parentheses (Sag) at rim
-    first_r1 = elements[0].get("r1", 0.0)
-    first_k1 = elements[0].get("k1", 0.0)
-    sag_front = abs(_calculate_sag(first_r1, first_k1, half_od))
-    if sag_front > 0.01:
-        ax.text(all_z_positions[0][0] - 10, y_canvas[-1] + 12, f"({sag_front:.3f})", fontsize=7.6, color="#333333", ha="right")
-
-    last_r2 = elements[-1].get("r2", 0.0)
-    last_k2 = elements[-1].get("k2", 0.0)
-    sag_rear = abs(_calculate_sag(last_r2, last_k2, half_od))
-    if sag_rear > 0.01:
-        ax.text(all_z_positions[-1][1] + 10, y_canvas[-1] + 12, f"({sag_rear:.3f})", fontsize=7.6, color="#333333", ha="left")
-
-    # Outer Diameter Dimension callout on right edge (shifted right to avoid leader line clash)
-    last_s_rear = all_z_positions[-1][3]
-    od_dim_x = max(last_s_rear) + 65
-    ax.plot([last_s_rear[0], od_dim_x + 5], [y_canvas[0], y_canvas[0]], color="#666666", linestyle=":", linewidth=0.7)
-    ax.plot([last_s_rear[-1], od_dim_x + 5], [y_canvas[-1], y_canvas[-1]], color="#666666", linestyle=":", linewidth=0.7)
-    ax.annotate("", xy=(od_dim_x, y_canvas[0]), xytext=(od_dim_x, y_canvas[-1]),
-                arrowprops=dict(arrowstyle="<->", color="black", lw=0.9))
-    od_txt = f"{od:.2f} {od_tol}" if od_tol else f"{od:.2f}"
-    ax.text(od_dim_x + 8, axis_y, od_txt, fontsize=9.2, ha="left", va="center", rotation=90, fontweight="bold")
-
-    # Chamfer and Roughness Annotations
-    first_s_front = all_z_positions[0][2]
-    ax.annotate("0.3×45°", xy=(first_s_front[-1], y_canvas[-1]),
-                xytext=(first_s_front[-1] - 40, y_canvas[-1] + 35),
-                arrowprops=dict(arrowstyle="->", color="black", lw=0.8), fontsize=8.2)
-
-    mid_z = (all_z_positions[0][0] + all_z_positions[-1][1]) / 2.0
-    ax.text(mid_z, y_canvas[-1] + 15, "1.6 / ▽", fontsize=8.2, ha="center")
-
-    plt.savefig(output_png, bbox_inches="tight", dpi=220)
+    fig.savefig(output_png, bbox_inches="tight", pad_inches=0.04, dpi=320)
     plt.close(fig)
 
 
@@ -938,283 +1023,84 @@ def _render_gbt13323_assembly_drawing(
     drawing_data: Dict[str, Any],
     output_png: str,
 ):
-    """Render full optical system assembly drawing strictly adhering to GB/T 13323-2009."""
-    fig_w, fig_h = 16.0, 11.31
-    fig = plt.figure(figsize=(fig_w, fig_h), dpi=220, facecolor="white")
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_xlim(0, 1000)
-    ax.set_ylim(0, 707)
+    """Matplotlib fallback renderer for Chinese GB/T 13323-2009 system assembly drawing."""
+    fig = plt.figure(figsize=(16.0, 11.31), dpi=320, facecolor="white")
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_xlim(-1.5, 298.5)
+    ax.set_ylim(-1.5, 211.5)
+    ax.set_aspect("equal")
     ax.axis("off")
 
-    # 1. Borders & Marks
-    ax.add_patch(patches.Rectangle((8, 8), 984, 691, fill=False, edgecolor="#333333", linewidth=0.7))
-    x_left, x_right = 86, 985
-    y_bottom, y_top = 15, 692
-    frame_w, frame_h = x_right - x_left, y_top - y_bottom
-    ax.add_patch(patches.Rectangle((x_left, y_bottom), frame_w, frame_h, fill=False, edgecolor="#000000", linewidth=1.6))
+    _mpl_draw_gbt13323_sheet_and_title(ax, drawing_data, is_assembly=True)
 
-    # Centering Marks
-    ax.plot([500, 500], [699, 684], color="#000000", linewidth=1.5)
-    ax.plot([500, 500], [8, 23], color="#000000", linewidth=1.5)
-    ax.plot([8, 23], [353.5, 353.5], color="#000000", linewidth=1.5)
-    ax.plot([992, 977], [353.5, 353.5], color="#000000", linewidth=1.5)
-
-    # Left Admin Boxes
-    box_w, box_h = 70, 28
-    y_start_admin = 70
-    admin_boxes = ["介质编号", "底图总号", "日底图总号", "日期    签字"]
-    for idx, lbl in enumerate(admin_boxes):
-        by = y_start_admin + idx * box_h
-        ax.add_patch(patches.Rectangle((8, by), box_w, box_h, fill=False, edgecolor="#000000", linewidth=0.7))
-        ax.text(8 + box_w / 2.0, by + box_h / 2.0, lbl, fontsize=8.5, ha="center", va="center")
-
-    # Roughness Mark
-    ax.text(x_right - 68, y_top - 24, "其 余", fontsize=10.5, ha="right", va="center", fontweight="bold")
-    rx, ry = x_right - 58, y_top - 32
-    ax.plot([rx, rx + 8, rx + 20], [ry + 12, ry, ry + 20], color="#000000", linewidth=1.1)
-    ax.plot([rx + 8, rx + 20], [ry, ry + 20], color="#000000", linewidth=1.1)
-    ax.plot([rx + 20, rx + 40], [ry + 20, ry + 20], color="#000000", linewidth=1.1)
-    ax.text(rx + 30, ry + 23, "0.05", fontsize=9.5, ha="center", va="bottom", fontweight="bold")
-
-    # 2. Optical Requirements Table
-    tbl_x, tbl_y_top = x_left, y_top
-    tbl_w = 236
-    col1_w = 110
-    col2_w = tbl_w - col1_w
-    row_h = 19.5
-    rows = [
-        {"type": "header", "label": "(图样代号) (存储代号)", "val": ""},
-        {"type": "section", "label": "系统主要技术参数", "val": ""},
-        {"type": "data", "label": "工作波段", "val": drawing_data.get("spectral_range", "-")},
-        {"type": "data", "label": "物方数值孔径 NA", "val": drawing_data.get("na_str", "-")},
-        {"type": "data", "label": "有效焦距 f'", "val": drawing_data.get("efl_str", "-")},
-        {"type": "data", "label": "物方工作距离 WD", "val": "∞" if drawing_data.get("object_at_infinity") else drawing_data.get("wd_str", "-")},
-        {"type": "data", "label": "扫描视场", "val": drawing_data.get("fov_str", "-")},
-        {"type": "data", "label": "出射光瞳直径", "val": drawing_data.get("pupil_str", "-")},
-        {"type": "data", "label": "物方介质", "val": drawing_data.get("immersion_str", "-")},
-        {"type": "data", "label": "盖玻片厚度", "val": drawing_data.get("coverglass_str", "-")},
-        {"type": "section", "label": "像质与装配要求", "val": ""},
-        {"type": "data", "label": "波像差 RMS", "val": drawing_data.get("rms_wavefront", "-")},
-        {"type": "data", "label": "轴向色差", "val": drawing_data.get("axial_color", "-")},
-        {"type": "data", "label": "装配同轴度", "val": drawing_data.get("concentricity", "-")},
-        {"type": "data", "label": "外圆配合公差", "val": drawing_data.get("barrel_fit", "-")},
-        {"type": "data", "label": "光学总长 TOTR", "val": drawing_data.get("totr_str", "-")},
-        {"type": "data", "label": "镜组轴向长度", "val": drawing_data.get("stack_str", "-")},
-        {"type": "data", "label": "后表面至像面", "val": drawing_data.get("rear_gap_str", "-")},
-    ]
-
-    total_tbl_h = len(rows) * row_h
-    tbl_y_bottom = tbl_y_top - total_tbl_h
-    ax.add_patch(patches.Rectangle((tbl_x, tbl_y_bottom), tbl_w, total_tbl_h, fill=False, edgecolor="#000000", linewidth=1.1))
-
-    cur_y = tbl_y_top
-    for r in rows:
-        cur_y -= row_h
-        ax.plot([tbl_x, tbl_x + tbl_w], [cur_y, cur_y], color="#000000", linewidth=0.7)
-        if r["type"] == "header":
-            ax.text(tbl_x + tbl_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.0, ha="center", va="center")
-        elif r["type"] == "section":
-            ax.text(tbl_x + tbl_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.5, ha="center", va="center", fontweight="bold")
-        else:
-            ax.plot([tbl_x + col1_w, tbl_x + col1_w], [cur_y, cur_y + row_h], color="#000000", linewidth=0.7)
-            ax.text(tbl_x + col1_w / 2.0, cur_y + row_h / 2.0, r["label"], fontsize=9.0, ha="center", va="center")
-            ax.text(tbl_x + col1_w + col2_w / 2.0, cur_y + row_h / 2.0, str(r["val"]), fontsize=9.0, ha="center", va="center")
-
-    # 3. Technical Notes
-    notes_x = x_left + 15
-    notes_y_start = tbl_y_bottom - 22
-    notes = drawing_data.get("technical_notes", [
-        "1、本图为光学系统总装配合图，各元件具体公差见对应零件图样；",
-        "2、装配基准：以镜筒内孔定位基准面为准，各透镜同轴度允差 ≤ 0.003mm；",
-        "3、空气间隔由精密金属隔圈保证，隔圈端面平行度 ≤ 0.002mm；",
-        "4、胶合件在装配前须进行同轴对中胶合检验，偏角差 χ ≤ 1'；",
-        "5、全系统在参考工作温度 20℃ ± 2℃ 下总装校验。"
-    ])
-    line_y = notes_y_start
-    for n in notes:
-        ax.text(notes_x, line_y, n, fontsize=9.0, ha="left", va="top")
-        line_y -= 19
-
-    # 4. Title Block (NO COMPANY NAME)
-    tb_w, tb_h = 480, 138
-    tb_x, tb_y = x_right - tb_w, y_bottom
-    ax.add_patch(patches.Rectangle((tb_x, tb_y), tb_w, tb_h, fill=False, edgecolor="#000000", linewidth=1.4))
-
-    rev_h = 24
-    rev_y = tb_y + tb_h - rev_h
-    ax.plot([tb_x, tb_x + tb_w], [rev_y, rev_y], color="#000000", linewidth=0.9)
-    rev_cols = [("标记", 38), ("处数", 38), ("分区", 38), ("更改文件号", 96), ("签名", 48), ("年/月/日", 64)]
-    rc_x = tb_x
-    for c_lbl, c_w in rev_cols:
-        ax.plot([rc_x, rc_x], [rev_y, rev_y + rev_h], color="#000000", linewidth=0.7)
-        ax.text(rc_x + c_w / 2.0, rev_y + rev_h / 2.0, c_lbl, fontsize=8.5, ha="center", va="center")
-        rc_x += c_w
-    ax.plot([rc_x, rc_x], [rev_y, rev_y + rev_h], color="#000000", linewidth=0.7)
-
-    col_split_x = tb_x + 265
-    ax.plot([col_split_x, col_split_x], [tb_y, rev_y], color="#000000", linewidth=1.1)
-
-    r1_y = rev_y - 28.5
-    ax.plot([tb_x, col_split_x], [r1_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 35, r1_y + 14, "设  计", fontsize=9.0, ha="center", va="center")
-    ax.text(tb_x + 92, r1_y + 14, "(签名)(年月日)", fontsize=7.5, color="#555555", ha="center", va="center")
-    ax.plot([tb_x + 132, tb_x + 132], [r1_y, rev_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 165, r1_y + 14, "标准化", fontsize=9.0, ha="center", va="center")
-    ax.text(tb_x + 220, r1_y + 14, "(签名)(年月日)", fontsize=7.5, color="#555555", ha="center", va="center")
-
-    r2_y = r1_y - 28.5
-    ax.plot([tb_x, col_split_x], [r2_y, r2_y], color="#000000", linewidth=0.7)
-    w_sub = 265 / 3.0
-    ax.text(tb_x + w_sub * 0.4, r2_y + 14, "审  核", fontsize=9.0, ha="center", va="center")
-    ax.plot([tb_x + w_sub, tb_x + w_sub], [r2_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + w_sub * 1.5, r2_y + 14, "工  艺", fontsize=9.0, ha="center", va="center")
-    ax.plot([tb_x + w_sub * 2, tb_x + w_sub * 2], [r2_y, r1_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + w_sub * 2.5, r2_y + 14, "批  准", fontsize=9.0, ha="center", va="center")
-
-    r3_y = r2_y - 28.5
-    ax.plot([tb_x, col_split_x], [r3_y, r3_y], color="#000000", linewidth=0.7)
-    ax.plot([tb_x + 80, tb_x + 80], [r3_y, r2_y], color="#000000", linewidth=0.7)
-    ax.plot([tb_x + 160, tb_x + 160], [r3_y, r2_y], color="#000000", linewidth=0.7)
-    ax.text(tb_x + 40, r3_y + 14, "阶段标记", fontsize=8.5, ha="center", va="center")
-    ax.text(tb_x + 120, r3_y + 14, "重  量", fontsize=8.5, ha="center", va="center")
-    scale_str = drawing_data.get("drawing_scale", "1:1")
-    ax.text(tb_x + 212, r3_y + 14, f"比  例  {scale_str}", fontsize=8.5, ha="center", va="center")
-
-    page_str = drawing_data.get("page_str", "共  1  张    第  1  张")
-    ax.text(tb_x + 132, tb_y + 14, page_str, fontsize=9.0, ha="center", va="center")
-
-    mat_w = 95
-    name_w = tb_w - 265 - mat_w
-    mat_x = col_split_x
-    name_x = mat_x + mat_w
-
-    ax.plot([name_x, name_x], [tb_y, rev_y], color="#000000", linewidth=0.9)
-    ax.text(mat_x + mat_w / 2.0, rev_y - 22, "图样类别", fontsize=9.2, ha="center", va="center")
-    ax.text(mat_x + mat_w / 2.0, tb_y + (rev_y - tb_y) / 2.0 - 10, "系统总装图", fontsize=9.5, ha="center", va="center", fontweight="bold")
-
-    half_h = (rev_y - tb_y) / 2.0
-    mid_name_y = tb_y + half_h
-    ax.plot([name_x, tb_x + tb_w], [mid_name_y, mid_name_y], color="#000000", linewidth=0.9)
-    ax.text(name_x + name_w / 2.0, rev_y - 18, "图样名称", fontsize=9.2, ha="center", va="center")
-    dwg_name = drawing_data.get("drawing_name", "光学系统总图")
-    if "\n" in dwg_name:
-        dwg_name_wrapped = dwg_name
-        dwg_name_fontsize = 8.0
-        ax.text(name_x + name_w / 2.0, mid_name_y + 16, dwg_name_wrapped, fontsize=dwg_name_fontsize, ha="center", va="center", fontweight="bold", linespacing=1.2)
-    elif len(dwg_name) > 18:
-        if " " in dwg_name:
-            parts = dwg_name.split(" ")
-            mid = len(parts) // 2
-            dwg_name_wrapped = " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
-        else:
-            dwg_name_wrapped = dwg_name[:12] + "\n" + dwg_name[12:]
-        dwg_name_fontsize = 7.5
-        ax.text(name_x + name_w / 2.0, mid_name_y + 16, dwg_name_wrapped, fontsize=dwg_name_fontsize, ha="center", va="center", fontweight="bold", linespacing=1.2)
-    elif len(dwg_name) > 10:
-        dwg_name_fontsize = 8.5
-        ax.text(name_x + name_w / 2.0, mid_name_y + 16, dwg_name, fontsize=dwg_name_fontsize, ha="center", va="center", fontweight="bold")
-    else:
-        dwg_name_fontsize = 10.5
-        ax.text(name_x + name_w / 2.0, mid_name_y + 16, dwg_name, fontsize=dwg_name_fontsize, ha="center", va="center", fontweight="bold")
-
-    dwg_code = drawing_data.get("drawing_code", "ASM-00")
-    ax.text(name_x + name_w / 2.0, tb_y + half_h / 2.0, dwg_code, fontsize=9.2, ha="center", va="center")
-
-    # 5. Assembly Optical Layout Drawing
     assembly_elements = drawing_data.get("assembly_elements", [])
-    axis_y = 425
-    ax.plot([280, 930], [axis_y, axis_y], color="#c62828", linestyle="-.", linewidth=0.9)
+    x0, tbl_w = 25.0, 69.0
+    x_mid = x0 + 36.0
+    sys_rows = [
+        ("工作波段", drawing_data.get("spectral_range", "-")),
+        ("有效焦距 f'", f"{drawing_data.get('efl_str', '-')}mm"),
+        ("总轨长 TOTR", f"{drawing_data.get('totr_str', '-')}mm"),
+        ("后截距 BFL", f"{drawing_data.get('bfl_str', '-')}mm"),
+        ("物方工作距", "\u221e" if drawing_data.get("object_at_infinity") else drawing_data.get("wd_str", "-")),
+        ("视场 FOV", drawing_data.get("fov_str", "-")),
+    ]
+    h_hdr, h_row = 8.5, 5.6
+    y_bot = 205.0 - h_hdr - 6.0 - len(sys_rows) * h_row
+    ax.add_patch(patches.Rectangle((x0, y_bot), tbl_w, 205.0 - y_bot, fill=False, edgecolor="#000000", linewidth=0.75))
+    ax.plot([x0, x0 + tbl_w], [205.0 - h_hdr, 205.0 - h_hdr], color="#000000", linewidth=0.6)
+    ax.text(x0 + 0.5 * tbl_w, 205.0 - 0.5 * h_hdr, "(图样代号)(存储代号)", fontsize=8.0, ha="center", va="center", rotation=180)
+    y_sub = 205.0 - h_hdr - 6.0
+    ax.plot([x0, x0 + tbl_w], [y_sub, y_sub], color="#000000", linewidth=0.6)
+    ax.text(x0 + 0.5 * tbl_w, 0.5 * (205.0 - h_hdr + y_sub), "系统主要参数", fontsize=7.8, ha="center", va="center")
+    ax.plot([x_mid, x_mid], [y_bot, y_sub], color="#000000", linewidth=0.6)
+    for i, (lbl, val) in enumerate(sys_rows):
+        yr = y_sub - (i + 1) * h_row
+        if i < len(sys_rows) - 1:
+            ax.plot([x0, x0 + tbl_w], [yr, yr], color="#000000", linewidth=0.6)
+        ax.text(0.5 * (x0 + x_mid), yr + 0.5 * h_row, lbl, fontsize=7.2, ha="center", va="center")
+        ax.text(0.5 * (x_mid + x0 + tbl_w), yr + 0.5 * h_row, str(val), fontsize=7.0, ha="center", va="center")
 
-    max_sys_od = max(e["od"] for e in assembly_elements)
-    total_axial_len = sum(e["ct"] + (e.get("air_after", 0.0) if not math.isinf(e.get("air_after", 0.0)) and abs(e.get("air_after", 0.0)) < 1e4 else 0.0) for e in assembly_elements)
-    scale_x = 480.0 / max(total_axial_len, 10.0)
-    scale_y = 260.0 / max(max_sys_od, 10.0)
-    scale = min(scale_x, scale_y, 11.0)
+    notes = drawing_data.get("technical_notes") or [
+        f"1、工作波段：{drawing_data.get('design_wavelengths', 'Not specified')}；",
+        f"2、总轨长 TOTR={drawing_data.get('totr_str', '-')}，镜组叠层={drawing_data.get('stack_str', '-')}；",
+        "3、各透镜同轴度 ≤ 0.005，隔圈平行度 ≤ 0.003。",
+    ]
+    cur_ny = 92.0
+    for n in notes:
+        for wl in _wrap_cad_note_line(n, max_units=27.0):
+            ax.text(28.5, cur_ny, wl, fontsize=7.6, ha="left", va="top")
+            cur_ny -= 4.4
+        cur_ny -= 1.0
 
-    x_origin = 620 - (total_axial_len * scale) / 2.0
-    cur_z = x_origin
+    if assembly_elements:
+        max_od = max(float(e.get("od", 20.0)) for e in assembly_elements)
+        total_axial = sum(float(e.get("ct", 5.0)) + float(e.get("air_after", 0.0)) for e in assembly_elements)
+        axis_y = 132.0
+        scale = max(1.0, min(4.0, round(min(145.0 / max(total_axial, 20.0), 82.0 / max(max_od, 10.0)) * 4.0) / 4.0))
+        x_origin = 188.0 - 0.5 * total_axial * scale
+        ax.plot([max(100.0, x_origin - 15.0), min(286.0, x_origin + total_axial * scale + 20.0)],
+                [axis_y, axis_y], color="#c62828", linestyle="-.", linewidth=0.75)
 
-    dim_stagger = 0
-    base_dim_y = axis_y - (max_sys_od / 2.0) * scale - 28
+        cur_z = x_origin
+        comp_num = 1
+        for elem_i, elem in enumerate(assembly_elements):
+            half_od = float(elem.get("od", max_od)) / 2.0
+            comps = elem.get("components", [])
+            comp_z = cur_z
+            for c_idx, comp in enumerate(comps):
+                ct = float(comp.get("ct", 5.0))
+                poly, _, _, _, _ = _build_lens_slice_polygon(
+                    comp_z, comp_z + ct * scale, float(comp["r1"]), float(comp["r2"]),
+                    float(comp.get("k1", 0.0)), float(comp.get("k2", 0.0)), half_od, scale, axis_y,
+                    chamfer_front=0.25 if c_idx == 0 else 0.0, chamfer_rear=0.25 if c_idx == len(comps) - 1 else 0.0, n_pts=30
+                )
+                ax.add_patch(patches.Polygon(poly, closed=True, facecolor="none", edgecolor="#000000", linewidth=0.95))
+                _mpl_draw_glass_hatch(ax, poly, 45.0 if comp_num % 2 == 1 else 135.0, axis_y)
+                comp_num += 1
+                comp_z += ct * scale
+            cur_z = comp_z + float(elem.get("air_after", 0.0)) * scale
 
-    hatches = ["//", "\\\\", "//", "\\\\", "//", "\\\\", "//", "\\\\"]
-    h_idx = 0
-
-    for elem_i, elem in enumerate(assembly_elements):
-        components = elem.get("components", [])
-        elem_od = elem["od"]
-        half_od = elem_od / 2.0
-        y_pts = np.linspace(-half_od, half_od, 200)
-        y_canvas = axis_y + y_pts * scale
-
-        elem_z_start = cur_z
-        comp_z = cur_z
-
-        for comp in components:
-            r1 = comp["r1"]
-            r2 = comp["r2"]
-            k1 = comp.get("k1", 0.0)
-            k2 = comp.get("k2", 0.0)
-            ct = comp["ct"]
-            half_ca = comp["ca"] / 2.0
-            mat = comp["material"]
-            hatch = hatches[h_idx % len(hatches)]
-            h_idx += 1
-
-            z_f = comp_z
-            z_r = z_f + ct * scale
-
-            s_front = np.array([z_f + _calculate_sag(r1, k1, y) * scale if abs(y) <= half_ca else z_f + _calculate_sag(r1, k1, half_ca) * scale for y in y_pts])
-            s_rear = np.array([z_r + _calculate_sag(r2, k2, y) * scale if abs(y) <= half_ca else z_r + _calculate_sag(r2, k2, half_ca) * scale for y in y_pts])
-
-            ax.fill_betweenx(y_canvas, s_front, s_rear, facecolor="#ffffff", edgecolor="#000000", hatch=hatch, linewidth=1.0)
-            ax.plot([s_front[0], s_rear[0]], [y_canvas[0], y_canvas[0]], color="#000000", linewidth=1.1)
-            ax.plot([s_front[-1], s_rear[-1]], [y_canvas[-1], y_canvas[-1]], color="#000000", linewidth=1.1)
-            ax.plot(s_rear, y_canvas, color="#000000", linewidth=1.1)
-
-            comp_z = z_r
-
-        elem_z_end = comp_z
-
-        # Balloon mark for Element Number
-        b_x = (elem_z_start + elem_z_end) / 2.0
-        b_y = axis_y + (half_od * scale) + 26 + (elem_i % 2) * 16
-        ax.plot([b_x, b_x], [axis_y + half_od * scale, b_y - 8], color="#555555", linestyle=":", linewidth=0.7)
-        ax.text(b_x, b_y, str(elem_i + 1), fontsize=9.5, ha="center", va="center",
-                bbox=dict(boxstyle="circle,pad=0.22", fc="white", ec="black", lw=0.8))
-
-        # Staggered total thickness dimension of this element
-        elem_t = elem["ct"]
-        dim_y = base_dim_y - (dim_stagger % 2) * 18
-        dim_stagger += 1
-        ax.plot([elem_z_start, elem_z_start], [axis_y - half_od * scale, dim_y - 4], color="#777777", linestyle=":", linewidth=0.6)
-        ax.plot([elem_z_end, elem_z_end], [axis_y - half_od * scale, dim_y - 4], color="#777777", linestyle=":", linewidth=0.6)
-        ax.annotate("", xy=(elem_z_start, dim_y), xytext=(elem_z_end, dim_y), arrowprops=dict(arrowstyle="<->", color="black", lw=0.8))
-        ax.text((elem_z_start + elem_z_end) / 2.0, dim_y + 2, f"{elem_t:.2f}", fontsize=7.8, ha="center", va="bottom")
-
-        # Air gap spacing
-        air_after = elem.get("air_after", 0.0)
-        if air_after > 0.001 and elem_i < len(assembly_elements) - 1:
-            air_z_start = elem_z_end
-            air_z_end = air_z_start + air_after * scale
-            air_dim_y = base_dim_y - 36
-            ax.plot([air_z_start, air_z_start], [axis_y - half_od * scale, air_dim_y - 4], color="#999999", linestyle=":", linewidth=0.5)
-            ax.plot([air_z_end, air_z_end], [axis_y - half_od * scale, air_dim_y - 4], color="#999999", linestyle=":", linewidth=0.5)
-            ax.annotate("", xy=(air_z_start, air_dim_y), xytext=(air_z_end, air_dim_y), arrowprops=dict(arrowstyle="<->", color="#333333", lw=0.7))
-            ax.text((air_z_start + air_z_end) / 2.0, air_dim_y - 2, f"({air_after:.2f})", fontsize=7.2, color="#444444", ha="center", va="top")
-
-        cur_z = elem_z_end + air_after * scale
-
-    # Overall system track dimension at the bottom
-    tot_dim_y = base_dim_y - 58
-    sys_z_start = x_origin
-    sys_z_end = cur_z
-    ax.plot([sys_z_start, sys_z_start], [axis_y - (max_sys_od/2.0)*scale, tot_dim_y - 6], color="#333333", linestyle="-", linewidth=0.7)
-    ax.plot([sys_z_end, sys_z_end], [axis_y - (max_sys_od/2.0)*scale, tot_dim_y - 6], color="#333333", linestyle="-", linewidth=0.7)
-    ax.annotate("", xy=(sys_z_start, tot_dim_y), xytext=(sys_z_end, tot_dim_y), arrowprops=dict(arrowstyle="<->", color="black", lw=1.0))
-    ax.text((sys_z_start + sys_z_end) / 2.0, tot_dim_y + 3, f"镜组轴向长度 {total_axial_len:.2f}", fontsize=9.2, fontweight="bold", ha="center", va="bottom")
-
-    plt.savefig(output_png, bbox_inches="tight", dpi=220)
+    fig.savefig(output_png, bbox_inches="tight", pad_inches=0.04, dpi=320)
     plt.close(fig)
 
 
@@ -1378,290 +1264,573 @@ def _write_element_markdown_drawing(spec: Dict[str, Any], filepath: str):
         f.write(md_content)
 
 
+def _pick_cad_font(candidates: List[str], default: str = "simhei.ttf") -> str:
+    """Return the first installed Windows font filename from candidates, else default."""
+    win_fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    if os.path.isdir(win_fonts):
+        existing = {f.lower(): f for f in os.listdir(win_fonts)}
+        for cand in candidates:
+            if cand.lower() in existing:
+                return existing[cand.lower()]
+    return default
+
+
+def _draw_dxf_roughness_symbol(
+    msp: Any,
+    tip: Tuple[float, float],
+    value_text: str = "1.6",
+    scale: float = 1.0,
+    style: str = "GB_NUM",
+    layer: str = "5_DIMENSION",
+    text_layer: str = "6_TEXT",
+):
+    """
+    Draw GB/T 131 basic surface roughness symbol (equilateral triangle V with extended
+    right leg and roughness Ra value above the top bar, left of the tail).
+    """
+    x0, y0 = tip
+    h_tri = 2.8 * scale
+    dx_tri = h_tri / math.sqrt(3.0)
+    h_tail = 5.8 * scale
+    dx_tail = h_tail / math.sqrt(3.0)
+
+    p_top_l = (x0 - dx_tri, y0 + h_tri)
+    p_top_r = (x0 + dx_tri, y0 + h_tri)
+    p_tail = (x0 + dx_tail, y0 + h_tail)
+
+    msp.add_line((x0, y0), p_top_l, dxfattribs={"layer": layer, "color": 3})
+    msp.add_line((x0, y0), p_tail, dxfattribs={"layer": layer, "color": 3})
+    msp.add_line(p_top_l, p_top_r, dxfattribs={"layer": layer, "color": 3})
+
+    if value_text:
+        y_txt = y0 + h_tri + 0.70 * scale
+        x_leg = x0 + (h_tri + 0.70 * scale) / math.sqrt(3.0)
+        t = msp.add_text(
+            value_text,
+            dxfattribs={"height": 2.15 * scale, "style": style, "layer": text_layer},
+        )
+        t.set_placement((x_leg - 0.42 * scale, y_txt), align=TextEntityAlignment.BOTTOM_RIGHT)
+
+
+def _draw_dxf_optical_surface_mark(
+    msp: Any,
+    center: Tuple[float, float],
+    radius: float = 1.25,
+    layer: str = "6_TEXT",
+):
+    """Draw optical polished surface symbol (circle with inscribed cross '+')."""
+    cx, cy = center
+    msp.add_circle(center=(cx, cy), radius=radius, dxfattribs={"layer": layer, "color": 7})
+    msp.add_line((cx - radius, cy), (cx + radius, cy), dxfattribs={"layer": layer, "color": 7})
+    msp.add_line((cx, cy - radius), (cx, cy + radius), dxfattribs={"layer": layer, "color": 7})
+
+
+def _measure_dxf_text_width(text: str, height: float, style: str = "GB_NUM") -> float:
+    """Measure rendered DXF text advance width using ezdxf font metrics with safe fallback."""
+    if not text:
+        return 0.0
+    if EZDXF_AVAILABLE:
+        try:
+            from ezdxf.fonts import fonts as _ez_fonts
+
+            font_name = "STSONG.TTF" if style in ("GB_SONG", "HZ_STYLE") else "msyhl.ttc"
+            return float(_ez_fonts.make_font(font_name, float(height)).text_width(text))
+        except Exception:
+            pass
+    w = 0.0
+    for ch in text:
+        if ord(ch) > 127 and ch not in "°±×≥′":
+            w += height * 1.12
+        elif ch == "△":
+            w += height * (1.95 if style in ("GB_SONG", "HZ_STYLE") else 1.25)
+        elif ch in "()-.′ ":
+            w += height * 0.58
+        elif "A" <= ch <= "Z":
+            w += height * (0.62 if ch == "I" else 0.96)
+        else:
+            w += height * 0.78
+    return w
+
+
+def _draw_dxf_subscript_text(
+    msp: Any,
+    segments: List[Tuple[str, float, float]],
+    anchor_x: float,
+    anchor_y: float,
+    base_height: float = 2.6,
+    style: str = "GB_SONG",
+    layer: str = "6_TEXT",
+    center_block: bool = True,
+    italic_chars: bool = False,
+):
+    """
+    Render multi-segment text containing base, subscript, or superscript spans.
+    Each segment is (text, rel_scale, dy_frac) relative to base_height.
+    """
+    widths: List[float] = []
+    pads_l: List[float] = []
+    for txt, rel_s, _ in segments:
+        w = _measure_dxf_text_width(txt, base_height * rel_s, style)
+        pad_l = base_height * 0.08 if rel_s < 0.85 else 0.0
+        pad_r = base_height * 0.08 if rel_s < 0.85 else 0.0
+        widths.append(w + pad_l + pad_r)
+        pads_l.append(pad_l)
+
+    total_w = sum(widths)
+    cur_x = anchor_x - total_w / 2.0 if center_block else anchor_x
+    for (txt, rel_s, dy_frac), seg_w, pad_l in zip(segments, widths, pads_l):
+        if txt:
+            attrs: Dict[str, Any] = {
+                "height": base_height * rel_s,
+                "style": style,
+                "layer": layer,
+            }
+            if italic_chars and rel_s < 0.85:
+                attrs["oblique"] = 12.0
+            t = msp.add_text(txt, dxfattribs=attrs)
+            t.set_placement(
+                (cur_x + pad_l, anchor_y + base_height * dy_frac),
+                align=TextEntityAlignment.MIDDLE_LEFT,
+            )
+        cur_x += seg_w
+
+
+def _draw_dxf_center_cross(msp: Any, center: Tuple[float, float], half_size: float = 1.8):
+    """Draw a tiny crosshair '+' at a radius center of curvature."""
+    cx, cy = center
+    msp.add_line((cx - half_size, cy), (cx + half_size, cy), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    msp.add_line((cx, cy - half_size), (cx, cy + half_size), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+
+def _clip_line_to_polygon(
+    p0: Tuple[float, float],
+    direction: Tuple[float, float],
+    poly_pts: List[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    """Return sorted parameter intervals along line p(t) = p0 + t*direction inside poly_pts."""
+    dx, dy = direction
+    t_hits: List[float] = []
+    n = len(poly_pts)
+    for i in range(n):
+        ax, ay = poly_pts[i]
+        bx, by = poly_pts[(i + 1) % n]
+        ex, ey = bx - ax, by - ay
+        denom = dx * ey - dy * ex
+        if abs(denom) < 1e-9:
+            continue
+        rx, ry = ax - p0[0], ay - p0[1]
+        s = (rx * (-dy) + ry * dx) / denom
+        if 0.0 <= s < 1.0:
+            t = (rx * ey - ry * ex) / denom
+            t_hits.append(t)
+    t_hits.sort()
+    return [(t_hits[k], t_hits[k + 1]) for k in range(0, len(t_hits) - 1, 2)]
+
+
+def _draw_dxf_glass_hatch(
+    msp: Any,
+    poly_pts: List[Tuple[float, float]],
+    angle_deg: float = 45.0,
+    y_axis_paper: float = 132.0,
+    keepout_pt: Optional[Tuple[float, float]] = None,
+    keepout_r: float = 3.5,
+):
+    """
+    Draw sparse GB/T 13323-2009 optical glass section pairs (// or \\ short double strokes)
+    strictly clipped inside the glass polygon.
+    """
+    if len(poly_pts) < 3:
+        return
+    ys = [p[1] for p in poly_pts]
+    y_min, y_max = min(ys), max(ys)
+    half_span = (y_max - y_min) / 2.0
+    if half_span < 2.0:
+        return
+
+    rad = math.radians(angle_deg)
+    dx, dy = math.cos(rad), math.sin(rad)
+    nx, ny = -dy, dx
+
+    # Sample clean glass double-strokes across lower, axis, and upper zones (avoiding exact axis vertex y=0)
+    sample_fracs = [-0.56, 0.02, 0.44]
+    pair_gap = 0.65
+    for frac in sample_fracs:
+        y_probe = y_axis_paper + frac * half_span
+        spans = _clip_line_to_polygon((0.0, y_probe), (1.0, 0.0), poly_pts)
+        if not spans:
+            continue
+        t0, t1 = max(spans, key=lambda iv: iv[1] - iv[0])
+        if t1 - t0 < 1.2:
+            continue
+        cx, cy = 0.5 * (t0 + t1), y_probe
+        if keepout_pt is not None and math.hypot(cx - keepout_pt[0], cy - keepout_pt[1]) < keepout_r:
+            continue
+
+        for shift in (-pair_gap * 0.5, pair_gap * 0.5):
+            base = (cx + nx * shift, cy + ny * shift)
+            chord_spans = _clip_line_to_polygon(base, (dx, dy), poly_pts)
+            for ct0, ct1 in chord_spans:
+                if ct0 <= 0.0 <= ct1:
+                    chord_len = ct1 - ct0
+                    if chord_len < 1.0:
+                        break
+                    half_draw = min(1.50, 0.30 * chord_len)
+                    p_a = (base[0] - half_draw * dx, base[1] - half_draw * dy)
+                    p_b = (base[0] + half_draw * dx, base[1] + half_draw * dy)
+                    msp.add_line(p_a, p_b, dxfattribs={"layer": "4_HATCH", "color": 4})
+                    break
+
+
 def _setup_gbt13323_dxf_document() -> Tuple[Any, Any]:
-    """Create a standard GB/T 13323 / ISO A4 Landscape (297x210mm) DXF document."""
+    """
+    Create an ISO A4 Landscape (297x210mm) DXF document formatted to the
+    standard Chinese GB/T 13323 / GB/T 14689 optical engineering drawing layout.
+    """
     doc = ezdxf.new("R2010")
     doc.units = units.MM
 
-    # Typography: Standard SimHei for Chinese characters across AutoCAD, DWG TrueView, SolidWorks
-    doc.styles.add("HZ_STYLE", font="simhei.ttf")
+    font_song = _pick_cad_font(["STSONG.TTF", "stsong.ttf", "simhei.ttf"])
+    font_num = _pick_cad_font(["msyhl.ttc", "MSYHL.TTC", "simhei.ttf"])
+    doc.styles.add("GB_SONG", font=font_song)
+    doc.styles.add("GB_NUM", font=font_num)
+    doc.styles.add("HZ_STYLE", font=font_song)
 
-    # Centerline linetype
     if "CENTER" not in doc.linetypes:
-        doc.linetypes.add("CENTER", pattern=[1.25, 1.0, -0.125, 0.125, -0.125], description="Center ____ _ ____ _")
+        doc.linetypes.add("CENTER", pattern=[15.0, 11.5, -1.6, 0.5, -1.6], description="Center ____ . ____ .")
 
-    # Standard Mechanical / Optical CAD Layer Architecture
-    doc.layers.add("0_FRAME", color=7)         # Border, frame, centering marks (White/Black)
-    doc.layers.add("1_TABLE", color=7)         # Table grid, title block lines
-    doc.layers.add("2_CONTOUR", color=7)       # Lens boundary and profile contours
-    doc.layers.add("3_AXIS", color=1, linetype="CENTER")  # Optical axis (Red Centerline)
-    doc.layers.add("4_HATCH", color=4)         # Cross-hatching (Cyan ANSI31)
-    doc.layers.add("5_DIMENSION", color=3)     # Dimensions, arrows, leaders (Green)
-    doc.layers.add("6_TEXT", color=7)          # Annotations, tables, notes
+    doc.layers.add("0_FRAME", color=7, lineweight=50)
+    doc.layers.add("1_TABLE", color=7, lineweight=25)
+    doc.layers.add("2_CONTOUR", color=7, lineweight=40)
+    doc.layers.add("3_AXIS", color=1, linetype="CENTER", lineweight=20)
+    doc.layers.add("4_HATCH", color=4, lineweight=20)
+    doc.layers.add("5_DIMENSION", color=3, lineweight=15)
+    doc.layers.add("6_TEXT", color=7, lineweight=20)
 
     msp = doc.modelspace()
 
-    # 1. Outer Sheet Border (A4: 297mm x 210mm)
-    msp.add_lwpolyline([(0, 0), (297, 0), (297, 210), (0, 210)], close=True, dxfattribs={"layer": "0_FRAME"})
+    # 1. Outer Sheet Border (297x210mm, thin border line)
+    msp.add_lwpolyline(
+        [(0.0, 0.0), (297.0, 0.0), (297.0, 210.0), (0.0, 210.0)],
+        close=True,
+        dxfattribs={"layer": "0_FRAME", "lineweight": 18},
+    )
 
-    # 2. Inner Drawing Frame (Left margin 10mm, Top/Right/Bottom 5mm)
-    # Area: X from 10.0 to 292.0 (width 282mm), Y from 5.0 to 205.0 (height 200mm)
-    x_min, y_min = 10.0, 5.0
+    # 2. Inner Drawing Frame (Left 25mm binding margin, Top/Right/Bottom 5mm)
+    x_min, y_min = 25.0, 5.0
     x_max, y_max = 292.0, 205.0
     msp.add_lwpolyline(
         [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)],
         close=True,
-        dxfattribs={"layer": "0_FRAME"}
+        dxfattribs={"layer": "0_FRAME", "lineweight": 50},
     )
 
-    # 3. Four Centering Marks
-    msp.add_line((148.5, 205.0), (148.5, 210.0), dxfattribs={"layer": "0_FRAME"})
-    msp.add_line((148.5, 0.0), (148.5, 5.0), dxfattribs={"layer": "0_FRAME"})
-    msp.add_line((0.0, 105.0), (10.0, 105.0), dxfattribs={"layer": "0_FRAME"})
-    msp.add_line((292.0, 105.0), (297.0, 105.0), dxfattribs={"layer": "0_FRAME"})
+    # 3. Four Centering Marks crossing inner frame
+    msp.add_line((148.5, 210.0), (148.5, 201.5), dxfattribs={"layer": "0_FRAME", "lineweight": 40})
+    msp.add_line((148.5, 0.0), (148.5, 8.5), dxfattribs={"layer": "0_FRAME", "lineweight": 40})
+    msp.add_line((21.0, 105.0), (28.5, 105.0), dxfattribs={"layer": "0_FRAME", "lineweight": 40})
+    msp.add_line((297.0, 105.0), (288.5, 105.0), dxfattribs={"layer": "0_FRAME", "lineweight": 40})
 
-    # 4. Top-Right Surface Roughness (其余表面粗糙度 "其 余 1.6 / ▽")
-    rx, ry = 265.0, 196.0
-    txt_qy = msp.add_text("其 余", dxfattribs={"height": 2.8, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    txt_qy.set_placement((rx - 2.0, ry + 2.0), align=TextEntityAlignment.MIDDLE_RIGHT)
+    # 4. Left Filing Margin Boxes (X: 0 to 21mm, upright text bottom-up)
+    fx0, fx1 = 0.0, 21.0
+    y_bands = [0.0, 7.0, 18.0, 24.0, 35.0, 41.0, 52.0, 58.0]
+    msp.add_lwpolyline([(fx0, y_bands[0]), (fx1, y_bands[0]), (fx1, y_bands[-1]), (fx0, y_bands[-1])],
+                       close=True, dxfattribs={"layer": "1_TABLE"})
+    for yb in y_bands[1:-1]:
+        msp.add_line((fx0, yb), (fx1, yb), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((10.5, 0.0), (10.5, 7.0), dxfattribs={"layer": "1_TABLE"})
 
-    msp.add_line((rx, ry + 2.0), (rx + 2.2, ry), dxfattribs={"layer": "5_DIMENSION", "color": 3})
-    msp.add_line((rx + 2.2, ry), (rx + 5.5, ry + 5.0), dxfattribs={"layer": "5_DIMENSION", "color": 3})
-    msp.add_line((rx + 5.5, ry + 5.0), (rx + 11.5, ry + 5.0), dxfattribs={"layer": "5_DIMENSION", "color": 3})
-    txt_ra = msp.add_text("1.6", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    txt_ra.set_placement((rx + 8.5, ry + 5.6), align=TextEntityAlignment.BOTTOM_CENTER)
+    msp.add_text("日期", dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (5.25, 3.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("签字", dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (15.75, 3.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    for label, (y_a, y_b) in [("底图总号", (18.0, 24.0)), ("日底图总号", (35.0, 41.0)), ("介质编号", (52.0, 58.0))]:
+        msp.add_text(label, dxfattribs={"height": 2.5, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            (10.5, 0.5 * (y_a + y_b)), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+    # 5. Top-Right General Surface Roughness ("其余 ▽ 0.05")
+    txt_qy = msp.add_text("其余", dxfattribs={"height": 3.4, "style": "GB_SONG", "layer": "6_TEXT"})
+    txt_qy.set_placement((275.5, 193.5), align=TextEntityAlignment.MIDDLE_RIGHT)
+    _draw_dxf_roughness_symbol(msp, tip=(279.5, 191.2), value_text="0.05", scale=1.25, style="GB_NUM")
 
     return doc, msp
 
 
 def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = False):
     """
-    Draw standard industrial GB/T 13323 & ISO 10110 Title Block:
-    - Dimensions: X from 182.0 to 292.0 (width 110mm), Y from 5.0 to 49.0 (height 44mm).
-    - 4 equal tiers (11.0mm each).
-    - Left sub-block (46mm width, X: 182 to 228):
-      Tier 1: DRAWING PROJECTION + Third Angle Projection Symbol.
-      Tier 2: NAME / DATE header, DRAWN / Designer / Date.
-      Tier 3: APPROVAL / Approver / Date.
-      Tier 4: VALUES IN PARENTHESIS ARE CALCULATED / AND MAY CONTAIN ROUNDOFF ERRORS.
-    - Right sub-block (64mm width, X: 228 to 292):
-      Tier 1: OPTICAL COMPONENT/ASSEMBLY SPECIFICATION (STRICTLY NO COMPANY NAME).
-      Tier 2: Component/System Title & Description (with \u03a6).
-      Tier 3: MATERIAL | SCALE | REV.
-      Tier 4: ITEM# | APPROX WEIGHT.
+    Draw standard Chinese GB/T 10609.1 (180mm x 49mm) Title Block matching the
+    primary project optical template (X: 112.0 to 292.0, Y: 5.0 to 54.0).
+    CRITICAL POLICY: The '单位' (Organization/Unit) header is preserved for standard
+    structure, while its value area MUST ALWAYS remain completely empty.
     """
-    tb_x0 = 182.0
+    tb_x0 = 112.0
     tb_x1 = 292.0
     tb_y0 = 5.0
-    tb_y1 = 49.0
-    w_left = 46.0
-    x_mid = tb_x0 + w_left  # 228.0
+    tb_y1 = 54.0
+    row_h = 7.0  # 7 rows * 7mm = 49mm
 
-    # Outer boundary
+    x_mid_blk = 204.0   # Left block (92mm): 112..204
+    x_right_blk = 242.0  # Middle block (38mm): 204..242; Right block (50mm): 242..292
+
+    # Outer border
     msp.add_lwpolyline(
         [(tb_x0, tb_y0), (tb_x1, tb_y0), (tb_x1, tb_y1), (tb_x0, tb_y1)],
         close=True,
-        dxfattribs={"layer": "1_TABLE"}
+        dxfattribs={"layer": "1_TABLE"},
     )
 
-    # 3 horizontal tier dividers at y = 16.0, 27.0, 38.0
-    for y in [16.0, 27.0, 38.0]:
-        msp.add_line((tb_x0, y), (tb_x1, y), dxfattribs={"layer": "1_TABLE"})
+    # Major vertical block dividers
+    msp.add_line((x_mid_blk, tb_y0), (x_mid_blk, tb_y1), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_right_blk, tb_y0), (x_right_blk, tb_y1), dxfattribs={"layer": "1_TABLE"})
 
-    # Vertical divider between left and right sub-blocks
-    msp.add_line((x_mid, tb_y0), (x_mid, tb_y1), dxfattribs={"layer": "1_TABLE"})
+    # === LEFT BLOCK (X: 112.0 to 204.0, width 92mm, 7 rows x 7mm) ===
+    for r in range(1, 7):
+        y_line = tb_y0 + r * row_h
+        msp.add_line((tb_x0, y_line), (x_mid_blk, y_line), dxfattribs={"layer": "1_TABLE"})
 
-    # === LEFT SUB-BLOCK (Width 46mm, X: 182.0 to 228.0) ===
-    # Tier 1 (Y: 38.0 to 49.0): DRAWING PROJECTION + Third Angle Symbol
-    msp.add_text("DRAWING", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        (tb_x0 + 2.5, 45.0), align=TextEntityAlignment.MIDDLE_LEFT
-    )
-    msp.add_text("PROJECTION", dxfattribs={"height": 2.0, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        (tb_x0 + 2.5, 41.5), align=TextEntityAlignment.MIDDLE_LEFT
-    )
+    # Upper change-log band (Y: 33.0 to 54.0): widths [10, 10, 10, 26, 18, 18]
+    up_cols = [112.0, 122.0, 132.0, 142.0, 168.0, 186.0, 204.0]
+    for xv in up_cols[1:-1]:
+        msp.add_line((xv, 33.0), (xv, tb_y1), dxfattribs={"layer": "1_TABLE"})
 
-    # Third Angle Projection Symbol (cone frustum + concentric circles)
-    sym_x, sym_y = tb_x0 + 35.0, 43.5
-    cone_w, cone_h1, cone_h2 = 5.5, 2.6, 5.2
-    c_x1 = sym_x - 12.0
-    c_x2 = c_x1 + cone_w
-    msp.add_line((c_x1, sym_y - cone_h1 / 2.0), (c_x1, sym_y + cone_h1 / 2.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c_x2, sym_y - cone_h2 / 2.0), (c_x2, sym_y + cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c_x1, sym_y + cone_h1 / 2.0), (c_x2, sym_y + cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c_x1, sym_y - cone_h1 / 2.0), (c_x2, sym_y - cone_h2 / 2.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c_x1 - 2.0, sym_y), (sym_x + 4.5, sym_y), dxfattribs={"layer": "3_AXIS", "color": 1})
-    msp.add_circle((sym_x, sym_y), radius=cone_h1 / 2.0, dxfattribs={"layer": "1_TABLE"})
-    msp.add_circle((sym_x, sym_y), radius=cone_h2 / 2.0, dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((sym_x, sym_y - cone_h2 / 2.0 - 1.5), (sym_x, sym_y + cone_h2 / 2.0 + 1.5), dxfattribs={"layer": "3_AXIS", "color": 1})
+    up_headers = ["标记", "处数", "分区", "更改文件号", "签名", "年/月/日"]
+    for idx, hdr in enumerate(up_headers):
+        cx = 0.5 * (up_cols[idx] + up_cols[idx + 1])
+        msp.add_text(
+            hdr,
+            dxfattribs={"height": 2.4, "style": "GB_SONG", "layer": "6_TEXT"},
+        ).set_placement((cx, 36.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Left Sub-block Tiers 2 & 3: DRAWN & APPROVAL
-    x_d1, x_d2 = tb_x0 + 13.0, tb_x0 + 29.5
-    msp.add_line((x_d1, 16.0), (x_d1, 38.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((x_d2, 16.0), (x_d2, 38.0), dxfattribs={"layer": "1_TABLE"})
+    # Lower sign-off band (Y: 5.0 to 33.0): widths [12, 16, 16, 14, 17, 17]
+    lo_cols = [112.0, 124.0, 140.0, 156.0, 170.0, 187.0, 204.0]
+    for xv in lo_cols[1:-1]:
+        msp.add_line((xv, tb_y0), (xv, 33.0), dxfattribs={"layer": "1_TABLE"})
 
-    # Tier 2 (Y: 27.0 to 38.0): divider at Y=32.5
-    msp.add_line((tb_x0, 32.5), (x_mid, 32.5), dxfattribs={"layer": "1_TABLE"})
-    msp.add_text("NAME", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d1 + x_d2) / 2.0, 35.2), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("DATE", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d2 + x_mid) / 2.0, 35.2), align=TextEntityAlignment.MIDDLE_CENTER
-    )
+    sign_row4 = [
+        data.get("role_design", "设计"),
+        data.get("drawn_by", "(签名)"),
+        data.get("drawing_date", "(年月日)"),
+        "标准化",
+        data.get("std_by", "(签名)"),
+        data.get("std_date", "(年月日)"),
+    ]
+    def _fit_title_h(s: str, max_w_mm: float, default_h: float, min_h: float = 1.65) -> float:
+        units = sum(1.12 if ord(ch) > 127 else 0.68 for ch in s)
+        if units <= 1e-6:
+            return default_h
+        return max(min_h, min(default_h, max_w_mm / units))
 
-    # Sub-row DRAWN (Y: 27.0 to 32.5)
-    msp.add_text("DRAWN", dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((tb_x0 + x_d1) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("ZEMAX", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d1 + x_d2) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    date_str = data.get("drawing_date", date.today().strftime("%Y/%m/%d"))
-    msp.add_text(date_str, dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d2 + x_mid) / 2.0, 29.7), align=TextEntityAlignment.MIDDLE_CENTER
-    )
+    for idx, txt in enumerate(sign_row4):
+        cx = 0.5 * (lo_cols[idx] + lo_cols[idx + 1])
+        if txt:
+            col_w = lo_cols[idx + 1] - lo_cols[idx]
+            h_cell = _fit_title_h(str(txt), col_w - 2.0, 2.4, min_h=1.7)
+            msp.add_text(
+                txt,
+                dxfattribs={"height": h_cell, "style": "GB_SONG", "layer": "6_TEXT"},
+            ).set_placement((cx, 29.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Tier 3 (Y: 16.0 to 27.0): APPROVAL
-    msp.add_text("APPROVAL", dxfattribs={"height": 1.8, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((tb_x0 + x_d1) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text(data.get("approved_by", "-"), dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d1 + x_d2) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text(data.get("approval_date", "-"), dxfattribs={"height": 1.9, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_d2 + x_mid) / 2.0, 21.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
+    # Row 6 (Y: 12..19): 审核
+    msp.add_text(
+        "审核",
+        dxfattribs={"height": 2.4, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((0.5 * (lo_cols[0] + lo_cols[1]), 15.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Tier 4 (Y: 5.0 to 16.0): Mandatory disclaimer
-    msp.add_text("VALUES IN PARENTHESIS ARE CALCULATED", dxfattribs={"height": 1.5, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((tb_x0 + x_mid) / 2.0, 11.8), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("AND MAY CONTAIN ROUNDOFF ERRORS", dxfattribs={"height": 1.5, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((tb_x0 + x_mid) / 2.0, 8.2), align=TextEntityAlignment.MIDDLE_CENTER
-    )
+    # Row 7 (Y: 5..12): 工艺 & 批准
+    msp.add_text(
+        "工艺",
+        dxfattribs={"height": 2.4, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((0.5 * (lo_cols[0] + lo_cols[1]), 8.5), align=TextEntityAlignment.MIDDLE_CENTER)
+    msp.add_text(
+        "批准",
+        dxfattribs={"height": 2.4, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((0.5 * (lo_cols[3] + lo_cols[4]), 8.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # === RIGHT SUB-BLOCK (Width 64mm, X: 228.0 to 292.0) ===
-    # Tier 1 (Y: 38.0 to 49.0): Classification Header (NO COMPANY NAME)
-    hdr_title = "OPTICAL ASSEMBLY SPECIFICATION" if is_assembly else "OPTICAL COMPONENT SPECIFICATION"
-    msp.add_text(hdr_title, dxfattribs={"height": 2.3, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_mid + tb_x1) / 2.0, 43.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
+    # === MIDDLE BLOCK (X: 204.0 to 242.0, width 38mm) ===
+    # Horizontal lines at Y = 12, 19, 26 (top Y=26..54 is open merged material box)
+    for y_line in (12.0, 19.0, 26.0):
+        msp.add_line((x_mid_blk, y_line), (x_right_blk, y_line), dxfattribs={"layer": "1_TABLE"})
 
-    # Tier 2 (Y: 27.0 to 38.0): Description / Title
-    od = float(data["od"])
+    # Top material block (Y: 26..54)
+    mat_hdr = "系统类别" if is_assembly else "光学材料"
+    msp.add_text(
+        mat_hdr,
+        dxfattribs={"height": 2.8, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((0.5 * (x_mid_blk + x_right_blk), 47.0), align=TextEntityAlignment.MIDDLE_CENTER)
+
     if is_assembly:
-        line1 = f"\u03a6 {od:.1f}mm OPTICAL ASSEMBLY"
-        line2 = f"f={data.get('efl_str', '-')}mm; {data.get('spectral_range', '-')}"
+        mat_lines = [data.get("assembly_category", "光学系统总装")]
     else:
-        dwg_raw = data.get("drawing_name", "OPTICAL ELEMENT").replace("\n", " ")
-        line1 = f"\u03a6 {od:.1f}mm {dwg_raw}"
-        mat_clean = data.get('material', '-').replace('\n', ' / ')
-        line2 = f"MAT: {mat_clean}"
-
-    h_line1 = 2.3 if len(line1) <= 34 else 1.9
-    h_line2 = 2.0 if len(line2) <= 34 else 1.7
-
-    msp.add_text(line1, dxfattribs={"height": h_line1, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_mid + tb_x1) / 2.0, 34.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text(line2, dxfattribs={"height": h_line2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_mid + tb_x1) / 2.0, 29.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    # Tier 3 (Y: 16.0 to 27.0): MATERIAL | SCALE | REV
-    x_r1, x_r2 = x_mid + 34.0, x_mid + 50.0
-    msp.add_line((x_r1, 16.0), (x_r1, 27.0), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((x_r2, 16.0), (x_r2, 27.0), dxfattribs={"layer": "1_TABLE"})
-
-    msp.add_text("MATERIAL", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        (x_mid + 2.0, 24.5), align=TextEntityAlignment.MIDDLE_LEFT
-    )
-    mat_val = data.get("material", "H-K9L").replace("\n", " / ") if not is_assembly else "N/A"
-    mat_h = 2.1
-    mat_w_fac = 0.85
-    if len(mat_val) > 22:
-        mat_h = 1.5
-        mat_w_fac = 0.78
-    elif len(mat_val) > 13:
-        mat_h = 1.7
-        mat_w_fac = 0.82
-    msp.add_text(mat_val, dxfattribs={"height": mat_h, "width": mat_w_fac, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_mid + x_r1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    msp.add_text("SCALE", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r1 + x_r2) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    scale_str = data.get("drawing_scale", "2:1")
-    msp.add_text(scale_str, dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r1 + x_r2) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    msp.add_text("REV", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r2 + tb_x1) / 2.0, 24.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("A", dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r2 + tb_x1) / 2.0, 19.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    # Tier 4 (Y: 5.0 to 16.0): ITEM# | APPROX WEIGHT
-    x_r3 = x_mid + 34.0
-    msp.add_line((x_r3, 5.0), (x_r3, 16.0), dxfattribs={"layer": "1_TABLE"})
-
-    msp.add_text("ITEM#", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        (x_mid + 2.0, 13.5), align=TextEntityAlignment.MIDDLE_LEFT
-    )
-    item_code = data.get("drawing_code", "OPT-00")
-    msp.add_text(item_code, dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_mid + x_r3) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    msp.add_text("APPROX WEIGHT", dxfattribs={"height": 1.7, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r3 + tb_x1) / 2.0, 13.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    wt_str = data.get("weight_str", "TBD")
-    msp.add_text(wt_str, dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_r3 + tb_x1) / 2.0, 8.5), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-
-def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 15.0, y_top: float = 72.0):
-    """Draw standard GB/T 13323 Notes/Specifications block in bottom-left."""
-    cur_y = y_top
-    for idx, note in enumerate(notes):
-        if idx == 0:
-            h = 2.2
-            msp.add_text(note, dxfattribs={"height": h, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
-            )
-            cur_y -= 4.5
-        elif idx == len(notes) - 1 and "INFORMATION ONLY" in note:
-            cur_y -= 1.5
-            msp.add_text(note, dxfattribs={"height": 1.7, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
-            )
+        raw_mats = data.get("title_materials")
+        if raw_mats is None:
+            mat_str = str(data.get("material", "H-K9L"))
+            mat_lines = [m.strip() for m in re.split(r"[/\n,]+", mat_str) if m.strip()]
         else:
-            msp.add_text(note, dxfattribs={"height": 1.8, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-                (x, cur_y), align=TextEntityAlignment.TOP_LEFT
+            mat_lines = [str(m).strip() for m in raw_mats if str(m).strip()]
+
+    n_mats = len(mat_lines)
+    if n_mats == 1:
+        msp.add_text(
+            mat_lines[0],
+            dxfattribs={"height": 2.8, "style": "GB_SONG", "layer": "6_TEXT"},
+        ).set_placement((0.5 * (x_mid_blk + x_right_blk), 36.0), align=TextEntityAlignment.MIDDLE_CENTER)
+    else:
+        y_start_m = 40.0 if n_mats <= 3 else 41.5
+        dy_m = 5.2 if n_mats <= 3 else 4.2
+        h_m = 2.6 if n_mats <= 3 else 2.1
+        for idx, ml in enumerate(mat_lines[:4]):
+            msp.add_text(
+                ml,
+                dxfattribs={"height": h_m, "style": "GB_SONG", "layer": "6_TEXT"},
+            ).set_placement((x_mid_blk + 3.5, y_start_m - idx * dy_m), align=TextEntityAlignment.MIDDLE_LEFT)
+
+    # Row 5 & Row 6 (Y: 12..26): 阶段标记 (18mm) | 重量 (10mm) | 比例 (10mm)
+    x_wt = x_mid_blk + 18.0   # 222.0
+    x_sc = x_wt + 10.0        # 232.0
+    msp.add_line((x_wt, 12.0), (x_wt, 26.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_sc, 12.0), (x_sc, 26.0), dxfattribs={"layer": "1_TABLE"})
+    # 3 sub-cells under 阶段标记 (Y: 12..19)
+    msp.add_line((x_mid_blk + 6.0, 12.0), (x_mid_blk + 6.0, 19.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_mid_blk + 12.0, 12.0), (x_mid_blk + 12.0, 19.0), dxfattribs={"layer": "1_TABLE"})
+
+    msp.add_text("阶段标记", dxfattribs={"height": 2.3, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (0.5 * (x_mid_blk + x_wt), 22.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("重量", dxfattribs={"height": 2.3, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (0.5 * (x_wt + x_sc), 22.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    msp.add_text("比例", dxfattribs={"height": 2.3, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (0.5 * (x_sc + x_right_blk), 22.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    wt_val = str(data.get("weight_str", "") or "").strip()
+    if wt_val and wt_val != "TBD":
+        msp.add_text(wt_val, dxfattribs={"height": 2.0, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (x_wt + x_sc), 15.5), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+    sc_val = str(data.get("title_scale_str", "") or "").strip()
+    if sc_val:
+        msp.add_text(sc_val, dxfattribs={"height": 2.1, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (x_sc + x_right_blk), 15.5), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+    # Row 7 (Y: 5..12): 共   张   第   张
+    sheet_txt = data.get("sheet_str", "共    张    第    张")
+    msp.add_text(
+        sheet_txt,
+        dxfattribs={"height": 2.4, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((0.5 * (x_mid_blk + x_right_blk), 8.5), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # === RIGHT BLOCK (X: 242.0 to 292.0, width 50mm, 3 tiers) ===
+    msp.add_line((x_right_blk, 20.0), (tb_x1, 20.0), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_right_blk, 37.0), (tb_x1, 37.0), dxfattribs={"layer": "1_TABLE"})
+    cx_r = 0.5 * (x_right_blk + tb_x1)
+
+    # Top cell (Y: 37..54): "单位" header preserved, VALUE STRICTLY EMPTY
+    msp.add_text("单位", dxfattribs={"height": 2.7, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (cx_r, 49.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    # Middle cell (Y: 20..37): 图样名称 + Component/System title
+    msp.add_text("图样名称", dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (cx_r, 33.2), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+    od = float(data.get("od", 25.4))
+    if "title_name" in data and data["title_name"]:
+        name_txt = str(data["title_name"])
+    elif is_assembly:
+        raw_name = str(data.get("drawing_name", "光学系统总装图") or "光学系统总装图").strip()
+        name_txt = raw_name if "总装" in raw_name else f"{raw_name}总装图"
+    else:
+        name_txt = str(data.get("drawing_name", f"\u03a6{od:.1f} 光学零件") or f"\u03a6{od:.1f} 光学零件")
+
+    name_lines = [ln.strip() for ln in name_txt.splitlines() if ln.strip()][:2] or [name_txt.strip()]
+    if len(name_lines) == 1:
+        h_name = _fit_title_h(name_lines[0], 45.5, 3.6, min_h=1.9)
+        msp.add_text(name_lines[0], dxfattribs={"height": h_name, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            (cx_r, 25.5), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+    else:
+        y_offsets = (28.0, 23.0)
+        for ln_txt, y_ln in zip(name_lines, y_offsets):
+            h_ln = _fit_title_h(ln_txt, 45.5, 2.75, min_h=1.7)
+            msp.add_text(ln_txt, dxfattribs={"height": h_ln, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+                (cx_r, y_ln), align=TextEntityAlignment.MIDDLE_CENTER
             )
-            cur_y -= 4.0
+
+    # Bottom cell (Y: 5..20): (图样代号)
+    dwg_code = str(data.get("title_code", data.get("drawing_code", "(图样代号)")) or "(图样代号)")
+    if dwg_code in ("OPT-00", "OPT-ASM"):
+        dwg_code = "(图样代号)"
+    h_code = _fit_title_h(dwg_code, 45.5, 3.0, min_h=1.8)
+    msp.add_text(dwg_code, dxfattribs={"height": h_code, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (cx_r, 12.5), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+
+def _wrap_cad_note_line(note: str, max_units: float = 28.5) -> List[str]:
+    """Wrap a Chinese/ASCII mixed note cleanly without breaking short numbers or trailing punctuation."""
+    no_line_start = set("，。；：、,.!?;:）)％%")
+    tokens = re.findall(r"[A-Za-z0-9.\-_+/~≤≥±°℃]+|.", note)
+    lines: List[str] = []
+    cur = ""
+    cur_u = 0.0
+    for tok in tokens:
+        w = sum(1.0 if ord(ch) > 127 else 0.54 for ch in tok)
+        if cur and (cur_u + w > max_units) and not (len(tok) == 1 and tok in no_line_start):
+            lines.append(cur)
+            cur = tok.lstrip() if tok == " " else tok
+            cur_u = sum(1.0 if ord(ch) > 127 else 0.54 for ch in cur)
+        else:
+            cur += tok
+            cur_u += w
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 28.5, y_top: float = 95.0):
+    """Draw Chinese GB/T 13323 numbered technical notes in the bottom-left zone."""
+    cur_y = y_top
+    for note in notes:
+        for seg in note.split("\n"):
+            for line in _wrap_cad_note_line(seg, max_units=28.5):
+                msp.add_text(
+                    line,
+                    dxfattribs={"height": 2.75, "style": "GB_SONG", "layer": "6_TEXT"},
+                ).set_placement((x, cur_y), align=TextEntityAlignment.TOP_LEFT)
+                cur_y -= 4.4
+        cur_y -= 1.2
 
 
 
-def _draw_dxf_arrow(msp: Any, tip: Tuple[float, float], direction: Tuple[float, float], size: float = 2.5):
-    """Draw solid filled arrowhead at tip."""
+def _draw_dxf_arrow(
+    msp: Any,
+    tip: Tuple[float, float],
+    direction: Tuple[float, float],
+    size: float = 3.2,
+    filled: bool = False,
+) -> Tuple[float, float]:
+    """Draw slender CAD closed-blank arrowhead at tip; hollow style keeps center spine to tip."""
     dx, dy = direction
     length = math.hypot(dx, dy)
     if length == 0:
-        return
+        return tip
     ux, uy = dx / length, dy / length
     px, py = -uy, ux
 
-    w = size * 0.35
+    w = size * 0.21 if not filled else size * 0.34
     p_base = (tip[0] - ux * size, tip[1] - uy * size)
     p_left = (p_base[0] + px * w, p_base[1] + py * w)
     p_right = (p_base[0] - px * w, p_base[1] - py * w)
 
-    msp.add_solid([tip, p_left, p_right], dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    if filled:
+        msp.add_solid([tip, p_left, p_right], dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        return p_base
+    msp.add_lwpolyline([tip, p_left, p_right], close=True, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    return tip
 
 
 def _draw_dxf_leader(
@@ -1672,17 +1841,17 @@ def _draw_dxf_leader(
     shoulder_len: float,
     text_upper: str,
     text_lower: Optional[str] = None,
-    arrow_size: float = 2.5,
+    arrow_size: float = 2.4,
 ):
-    """Draw standard optical radius/chamfer leader with solid arrowhead and shoulder text."""
+    """Draw standard optical radius/chamfer leader with hollow CAD arrowhead and shoulder text."""
     rad = math.radians(angle_deg)
     p2 = (tip[0] + length * math.cos(rad), tip[1] + length * math.sin(rad))
     shoulder_sign = 1.0 if math.cos(rad) >= 0 else -1.0
     p3 = (p2[0] + shoulder_sign * shoulder_len, p2[1])
 
-    msp.add_line(tip, p2, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    p_base = _draw_dxf_arrow(msp, tip, (-math.cos(rad), -math.sin(rad)), size=arrow_size)
+    msp.add_line(p_base, p2, dxfattribs={"layer": "5_DIMENSION", "color": 3})
     msp.add_line(p2, p3, dxfattribs={"layer": "5_DIMENSION", "color": 3})
-    _draw_dxf_arrow(msp, tip, (-math.cos(rad), -math.sin(rad)), size=arrow_size)
 
     align_u = TextEntityAlignment.BOTTOM_LEFT if shoulder_sign > 0 else TextEntityAlignment.BOTTOM_RIGHT
     t_u = msp.add_text(text_upper, dxfattribs={"height": 2.4, "style": "HZ_STYLE", "layer": "6_TEXT"})
@@ -1772,167 +1941,798 @@ def _draw_dxf_linear_dimension(
         t.set_placement((x_dim - 1.2, (y_min + y_max) / 2.0), align=TextEntityAlignment.BOTTOM_CENTER)
 
 
-def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
-    """Draw authentic dual-tier Optical Requirements & Tolerances table in top-left."""
-    col1a_w = 38.0
-    col1b_w = 12.0
-    col2a_w = 38.0
-    col2b_w = 16.0
-    tbl_w = col1a_w + col1b_w + col2a_w + col2b_w  # 104.0mm
+def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 25.0, y_top: float = 205.0):
+    """
+    Draw the Chinese GB/T 13323 top-left 17-row Optical Requirements & Tolerances table
+    anchored flush to the inner top-left corner (X: 25.0 to 94.0).
+    """
+    col1_w = 43.0
+    col2_w = 26.0
+    tbl_w = col1_w + col2_w  # 69.0mm
+    x_mid = x_start + col1_w
+    x_end = x_start + tbl_w
 
-    row_h = 5.0
-    header_h = 6.0
-    subheader_h = 5.0
-    data_rows_count = 8
-    total_h = header_h + subheader_h + data_rows_count * row_h
-    y_bottom = y_top - total_h
+    h_top_hdr = 7.5
+    h_row = 5.4
+    h_part_hdr = 5.5
 
-    # Outer boundary
+    row_heights = [h_top_hdr] + [h_row] * 7 + [h_part_hdr] + [h_row] * 8
+    y_edges = [y_top]
+    for rh in row_heights:
+        y_edges.append(y_edges[-1] - rh)
+    y_bottom = y_edges[-1]
+
+    # Outer table outline
     msp.add_lwpolyline(
-        [(x_start, y_bottom), (x_start + tbl_w, y_bottom), (x_start + tbl_w, y_top), (x_start, y_top)],
+        [(x_start, y_bottom), (x_end, y_bottom), (x_end, y_top), (x_start, y_top)],
         close=True,
-        dxfattribs={"layer": "1_TABLE"}
+        dxfattribs={"layer": "1_TABLE"},
     )
+    for yb in y_edges[1:-1]:
+        msp.add_line((x_start, yb), (x_end, yb), dxfattribs={"layer": "1_TABLE"})
 
-    # Main Header
-    y_h1 = y_top - header_h
-    msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
-    t_hdr = msp.add_text("OPTICAL REQUIREMENTS & TOLERANCES", dxfattribs={"height": 2.2, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    t_hdr.set_placement((x_start + tbl_w / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+    # Vertical column divider splits material rows (1..7) and part rows (9..16), skipping rows 0 and 8
+    msp.add_line((x_mid, y_edges[8]), (x_mid, y_edges[1]), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((x_mid, y_bottom), (x_mid, y_edges[9]), dxfattribs={"layer": "1_TABLE"})
 
-    # Subheader
-    y_h2 = y_h1 - subheader_h
-    msp.add_line((x_start, y_h2), (x_start + tbl_w, y_h2), dxfattribs={"layer": "1_TABLE"})
-    x_mid = x_start + col1a_w + col1b_w
-    msp.add_line((x_mid, y_bottom), (x_mid, y_h1), dxfattribs={"layer": "1_TABLE"})
+    cx_all = x_start + 0.5 * tbl_w
+    cx_c1 = x_start + 0.5 * col1_w
+    cx_c2 = x_mid + 0.5 * col2_w
 
-    t_sub1 = msp.add_text("MATERIAL CHARACTERISTICS", dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    t_sub1.set_placement((x_start + (col1a_w + col1b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+    # Row 0: 180-deg rotated "(图样代号)(存储代号)"
+    top_code = str(data.get("table_header_code", "(图样代号)(存储代号)"))
+    msp.add_text(
+        top_code,
+        dxfattribs={"height": 2.9, "style": "GB_SONG", "layer": "6_TEXT", "rotation": 180.0},
+    ).set_placement((cx_all, 0.5 * (y_edges[0] + y_edges[1])), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    t_sub2 = msp.add_text("PART REQUIREMENTS", dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    t_sub2.set_placement((x_mid + (col2a_w + col2b_w) / 2.0, y_h1 - subheader_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+    # Rows 1..7: Material Requirements
+    efl_str = str(data.get("efl_str", "") or "").strip()
+    if efl_str not in ("", "-") and not efl_str.endswith("mm"):
+        efl_str = f"{efl_str}mm"
+    bfl_str = str(data.get("bfl_str", "") or "").strip()
+    if bfl_str not in ("", "-") and not bfl_str.endswith("mm"):
+        bfl_str = f"{bfl_str}mm"
+    if "d0_str" in data and data["d0_str"] is not None:
+        d0_str = str(data["d0_str"]).strip()
+    else:
+        ca_val = float(data.get("ca", 0.0))
+        d0_str = f"{ca_val:g}mm" if ca_val > 0 else ""
 
-    # Column dividers
-    x_c1b = x_start + col1a_w
-    x_c2b = x_mid + col2a_w
-    msp.add_line((x_c1b, y_bottom), (x_c1b, y_h2), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((x_c2b, y_bottom), (x_c2b, y_h2), dxfattribs={"layer": "1_TABLE"})
-
-    ca_str = f"\u03a6 {data.get('ca', 10.0):.1f}"
-    table_rows = [
-        ("Refractive Index △nd", data.get("delta_nd", "2C"), "Fringe Count N", data.get("N", "3")),
-        ("Dispersion △(nF-nC)", data.get("delta_nf_nc", "2C"), "Irregularity △N", data.get("delta_N", "0.3")),
-        ("Optical Homogeneity", data.get("homogeneity", "2"), "Curvature Tol △R", data.get("delta_R", "A")),
-        ("Stress Birefringence", data.get("stress_biref", "1"), "Surface Defect B", data.get("B", "40-20")),
-        ("Optical Striae", data.get("striae", "1"), "Centration χ", data.get("wedge_chi", "< 1'")),
-        ("Bubbles", data.get("bubbles", "1"), "Clear Aperture D0", ca_str),
-        ("Annealing", "Fine", "Ref Focal Length f'", data.get("efl_str", "-")),
-        ("Transmittance", data.get("transmittance", "TBD"), "Ref Back Focus S'F", data.get("bfl_str", "-")),
+    mat_rows: List[Tuple[Any, str]] = [
+        ([("△ ", 1.0, 0.0), ("n", 1.0, 0.0), ("d", 0.72, -0.18)], data.get("delta_nd", "2C")),
+        ([("△(", 1.0, 0.0), ("n", 1.0, 0.0), ("F", 0.68, -0.18), ("-n", 1.0, 0.0), ("C", 0.68, -0.18), (")", 1.0, 0.0)], data.get("delta_nf_nc", "2C")),
+        ("光学均匀性", data.get("homogeneity", "")),
+        ("应力双折射", data.get("stress_biref", "")),
+        ("光学吸收系数", data.get("absorption", "")),
+        ("条纹度", data.get("striae", "")),
+        ("气泡度", data.get("bubbles", "")),
     ]
+    for idx, (lbl, val) in enumerate(mat_rows):
+        ym = 0.5 * (y_edges[1 + idx] + y_edges[2 + idx])
+        if isinstance(lbl, list):
+            _draw_dxf_subscript_text(msp, lbl, cx_c1, ym, base_height=2.55, style="GB_SONG", italic_chars=True)
+        else:
+            msp.add_text(lbl, dxfattribs={"height": 2.55, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+                (cx_c1, ym), align=TextEntityAlignment.MIDDLE_CENTER
+            )
+        if val:
+            msp.add_text(str(val), dxfattribs={"height": 2.55, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+                (cx_c2, ym), align=TextEntityAlignment.MIDDLE_CENTER
+            )
 
-    cur_y = y_h2
-    for r_idx, (m_lbl, m_val, p_lbl, p_val) in enumerate(table_rows):
-        next_y = cur_y - row_h
-        if r_idx < len(table_rows) - 1:
-            msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
+    # Row 8: Subheader "对零件的要求"
+    msp.add_text(
+        "对零件的要求",
+        dxfattribs={"height": 2.7, "style": "GB_SONG", "layer": "6_TEXT"},
+    ).set_placement((cx_all, 0.5 * (y_edges[8] + y_edges[9])), align=TextEntityAlignment.MIDDLE_CENTER)
 
-        mid_ry = cur_y - row_h / 2.0
-        t = msp.add_text(m_lbl, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
-        t.set_placement((x_start + col1a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(m_val, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
-        t.set_placement((x_c1b + col1b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(p_lbl, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
-        t.set_placement((x_mid + col2a_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
-        t = msp.add_text(p_val, dxfattribs={"height": 1.65, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"})
-        t.set_placement((x_c2b + col2b_w / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER)
+    # Rows 9..16: Part Tolerances & Paraxial Params
+    part_rows: List[Tuple[Any, str, bool]] = [
+        ("N", data.get("N", "3"), True),
+        ("△ N", data.get("delta_N", "0.3"), True),
+        ("△ R", data.get("delta_R", "A"), True),
+        ("B", data.get("B", "IV"), True),
+        ("χ", data.get("wedge_chi", "3'"), True),
+        ("f", efl_str, True),
+        ([("S", 1.0, 0.0), ("f", 0.72, -0.18)], bfl_str, False),
+        ([("D", 1.0, 0.0), ("0", 0.72, -0.18)], d0_str, False),
+    ]
+    for idx, (lbl, val, is_oblique) in enumerate(part_rows):
+        ym = 0.5 * (y_edges[9 + idx] + y_edges[10 + idx])
+        if isinstance(lbl, list):
+            _draw_dxf_subscript_text(msp, lbl, cx_c1, ym, base_height=2.55, style="GB_SONG", italic_chars=True)
+        else:
+            attrs: Dict[str, Any] = {"height": 2.55, "style": "GB_SONG", "layer": "6_TEXT"}
+            if is_oblique:
+                attrs["oblique"] = 12.0
+            msp.add_text(lbl, dxfattribs=attrs).set_placement((cx_c1, ym), align=TextEntityAlignment.MIDDLE_CENTER)
+        if val:
+            msp.add_text(str(val), dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+                (cx_c2, ym), align=TextEntityAlignment.MIDDLE_CENTER
+            )
 
-        cur_y = next_y
 
-
-def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 15.0, y_top: float = 205.0):
-    """Draw standard Top-Left BOM Table for Optical System Assembly."""
-    tbl_w = 98.0
-    c1 = x_start + 10.0
-    c2 = x_start + 50.0
-    c3 = x_start + 88.0
-    header_h = 7.0
-    row_h = 6.0
+def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 25.0, y_top: float = 205.0):
+    """
+    Draw Chinese GB/T 13323 top-left System & Optical BOM table for Optical System Assembly
+    anchored flush to X=25.0..94.0 (matching the primary template visual grammar).
+    """
+    tbl_w = 69.0
+    x_end = x_start + tbl_w
+    c1 = x_start + 8.0
+    c2 = x_start + 34.0
+    c3 = x_start + 61.0
 
     assembly_elements = data.get("assembly_elements", [])
-    items = []
+    rows_bom: List[Tuple[str, str, str, str]] = []
     for elem in assembly_elements:
         e_idx = elem.get("elem_index", 1)
         comps = elem.get("components", [])
-        mat_str = " / ".join(c.get("material", "") for c in comps)
+        mat_str = "/".join(c.get("material", "") for c in comps)
         if len(comps) == 1:
-            desc = f"LENS ELEMENT E{e_idx:02d}"
+            desc = f"单透镜 L{e_idx}"
         elif len(comps) == 2:
-            desc = f"ACHROMATIC DOUBLET E{e_idx:02d}"
+            desc = f"双胶合组 G{e_idx}"
         else:
-            desc = f"TRIPLET GROUP E{e_idx:02d}"
-        items.append((str(e_idx), desc, mat_str, "1"))
+            desc = f"胶合组 G{e_idx}"
+        rows_bom.append((str(e_idx), desc, mat_str, "1"))
 
-    barrel_idx = len(items) + 1
-    ring_idx = len(items) + 2
-    items.append((str(barrel_idx), "LENS BARREL & SPACERS", "6061-T6 AL BLACK", "1"))
-    items.append((str(ring_idx), "RETAINING RING (TBD)", "TBD", "1"))
+    rows_bom.append((str(len(rows_bom) + 1), "镜筒及隔圈", "6061-T6", "1"))
 
-    total_h = header_h + len(items) * row_h
-    y_bottom = y_top - total_h
+    h_top_hdr = 8.5
+    h_sub_hdr = 6.0
+    h_sys_row = 5.5
+    h_bom_row = 5.5
 
+    def _fmt_mm(v: Any) -> str:
+        s = str(v or "-").strip()
+        if s in ("", "-", "Not determined"):
+            return "-" if s in ("", "-") else s
+        return s if s.endswith("mm") else f"{s}mm"
+
+    sys_params = [
+        ("有效焦距 f'", _fmt_mm(data.get("efl_str", "-"))),
+        ("总轨长 TOTR", _fmt_mm(data.get("totr_str", "-"))),
+        ("后截距 BFL", _fmt_mm(data.get("bfl_str", "-"))),
+        ("数值孔径 / F/#", str(data.get("f_num_str", "-"))),
+        ("工作波段", str(data.get("spectral_range", "-"))),
+    ]
+
+    y_cur = y_top
+    y_e_tophdr = y_cur - h_top_hdr
+    y_e_syshdr = y_e_tophdr - h_sub_hdr
+    y_e_sys = y_e_syshdr - len(sys_params) * h_sys_row
+    y_e_bomhdr = y_e_sys - h_sub_hdr
+    y_e_bom = y_e_bomhdr - len(rows_bom) * h_bom_row
+
+    # Outer table outline
     msp.add_lwpolyline(
-        [(x_start, y_bottom), (x_start + tbl_w, y_bottom), (x_start + tbl_w, y_top), (x_start, y_top)],
+        [(x_start, y_e_bom), (x_end, y_e_bom), (x_end, y_top), (x_start, y_top)],
         close=True,
-        dxfattribs={"layer": "1_TABLE"}
+        dxfattribs={"layer": "1_TABLE"},
+    )
+    cx_all = x_start + 0.5 * tbl_w
+
+    # Row 0: 180-deg rotated code header
+    msp.add_line((x_start, y_e_tophdr), (x_end, y_e_tophdr), dxfattribs={"layer": "1_TABLE"})
+    msp.add_text(
+        "(图样代号)(存储代号)",
+        dxfattribs={"height": 2.9, "style": "GB_SONG", "layer": "6_TEXT", "rotation": 180.0},
+    ).set_placement((cx_all, 0.5 * (y_top + y_e_tophdr)), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # Row 1: Subheader "系统主要参数"
+    msp.add_line((x_start, y_e_syshdr), (x_end, y_e_syshdr), dxfattribs={"layer": "1_TABLE"})
+    msp.add_text("系统主要参数", dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+        (cx_all, 0.5 * (y_e_tophdr + y_e_syshdr)), align=TextEntityAlignment.MIDDLE_CENTER
     )
 
-    msp.add_line((c1, y_bottom), (c1, y_top), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c2, y_bottom), (c2, y_top), dxfattribs={"layer": "1_TABLE"})
-    msp.add_line((c3, y_bottom), (c3, y_top), dxfattribs={"layer": "1_TABLE"})
-
-    y_h1 = y_top - header_h
-    msp.add_line((x_start, y_h1), (x_start + tbl_w, y_h1), dxfattribs={"layer": "1_TABLE"})
-
-    msp.add_text("ITEM", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((x_start + c1) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("DESCRIPTION", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((c1 + c2) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("MATERIAL", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((c2 + c3) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-    msp.add_text("QTY", dxfattribs={"height": 2.0, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-        ((c3 + x_start + tbl_w) / 2.0, y_top - header_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER
-    )
-
-    cur_y = y_h1
-    for r_idx, (it, desc, mat, qty) in enumerate(items):
-        next_y = cur_y - row_h
-        if r_idx < len(items) - 1:
-            msp.add_line((x_start, next_y), (x_start + tbl_w, next_y), dxfattribs={"layer": "1_TABLE"})
-
-        mid_ry = cur_y - row_h / 2.0
-        msp.add_text(it, dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-            ((x_start + c1) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+    # System parameter rows
+    x_sys_mid = x_start + 36.0
+    msp.add_line((x_sys_mid, y_e_sys), (x_sys_mid, y_e_syshdr), dxfattribs={"layer": "1_TABLE"})
+    for idx, (p_lbl, p_val) in enumerate(sys_params):
+        yr_top = y_e_syshdr - idx * h_sys_row
+        yr_bot = yr_top - h_sys_row
+        msp.add_line((x_start, yr_bot), (x_end, yr_bot), dxfattribs={"layer": "1_TABLE"})
+        ym = 0.5 * (yr_top + yr_bot)
+        msp.add_text(p_lbl, dxfattribs={"height": 2.3, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (x_start + x_sys_mid), ym), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        msp.add_text(desc, dxfattribs={"height": 1.8, "width": 0.82, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-            ((c1 + c2) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+        h_v = 2.3 if len(p_val) <= 14 else 1.85
+        msp.add_text(p_val, dxfattribs={"height": h_v, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (x_sys_mid + x_end), ym), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        mat_h = 1.8 if len(mat) <= 20 else 1.45
-        mat_w_fac = 0.82 if len(mat) <= 20 else 0.78
-        msp.add_text(mat, dxfattribs={"height": mat_h, "width": mat_w_fac, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-            ((c2 + c3) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+
+    # BOM Subheader
+    msp.add_line((x_start, y_e_bomhdr), (x_end, y_e_bomhdr), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c1, y_e_bom), (c1, y_e_sys), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c2, y_e_bom), (c2, y_e_sys), dxfattribs={"layer": "1_TABLE"})
+    msp.add_line((c3, y_e_bom), (c3, y_e_sys), dxfattribs={"layer": "1_TABLE"})
+    ym_bh = 0.5 * (y_e_sys + y_e_bomhdr)
+    for title, (xa, xb) in [("序号", (x_start, c1)), ("名称", (c1, c2)), ("材料", (c2, c3)), ("数量", (c3, x_end))]:
+        msp.add_text(title, dxfattribs={"height": 2.3, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (xa + xb), ym_bh), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        msp.add_text(qty, dxfattribs={"height": 1.9, "width": 0.85, "style": "HZ_STYLE", "layer": "6_TEXT"}).set_placement(
-            ((c3 + x_start + tbl_w) / 2.0, mid_ry), align=TextEntityAlignment.MIDDLE_CENTER
+
+    # BOM rows
+    for idx, (it, desc, mat, qty) in enumerate(rows_bom):
+        yr_top = y_e_bomhdr - idx * h_bom_row
+        yr_bot = yr_top - h_bom_row
+        if idx < len(rows_bom) - 1:
+            msp.add_line((x_start, yr_bot), (x_end, yr_bot), dxfattribs={"layer": "1_TABLE"})
+        ym = 0.5 * (yr_top + yr_bot)
+        msp.add_text(it, dxfattribs={"height": 2.2, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (x_start + c1), ym), align=TextEntityAlignment.MIDDLE_CENTER
         )
-        cur_y = next_y
+        msp.add_text(desc, dxfattribs={"height": 2.1, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (c1 + c2), ym), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        h_mat = 2.1 if len(mat) <= 13 else 1.65
+        msp.add_text(mat, dxfattribs={"height": h_mat, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (c2 + c3), ym), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+        msp.add_text(qty, dxfattribs={"height": 2.2, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (c3 + x_end), ym), align=TextEntityAlignment.MIDDLE_CENTER
+        )
+
+
+def _draw_dxf_radial_dim_gbt(
+    msp: Any,
+    p_surf: Tuple[float, float],
+    center_paper: Tuple[float, float],
+    label: str,
+    ext_past_surf: float = 0.0,
+    center_dist_cap: float = 28.0,
+    show_center_cross: bool = True,
+    show_outer_cross: bool = False,
+    arrow_from_center_side: bool = True,
+    text_offset_t: float = 0.5,
+    jog_spec: Optional[Dict[str, Any]] = None,
+):
+    """
+    Draw GB/T 13323 radial dimension with straight or Z-jogged (foreshortened) ray
+    aligned to curvature center, hollow CAD arrowhead stopping at base, '+' center mark,
+    and upright unsigned R text.
+    """
+    vx = p_surf[0] - center_paper[0]
+    vy = p_surf[1] - center_paper[1]
+    dist = math.hypot(vx, vy)
+    if dist < 1e-6:
+        return
+    ux, uy = vx / dist, vy / dist
+    dx_c, dy_c = -ux, -uy  # points from surface toward true curvature center
+
+    arrow_sz = 3.2
+    txt_h = float(jog_spec.get("text_height", 2.65)) if jog_spec else 2.65
+    if jog_spec:
+        out_arm = float(jog_spec.get("out_arm", 0.0))
+        arm1 = float(jog_spec.get("arm1", 26.0))
+        zig_back = float(jog_spec.get("zig_back", -6.0))
+        zig_perp = float(jog_spec.get("zig_perp", -3.2))
+        arm2 = float(jog_spec.get("arm2", 14.0))
+        nx, ny = -dy_c, dx_c
+
+        if out_arm > 0.0:
+            est_w = _measure_dxf_text_width(label, txt_h, "GB_NUM") + 4.5
+            out_arm = max(out_arm, est_w)
+            p_base = _draw_dxf_arrow(msp, p_surf, (dx_c, dy_c), size=arrow_sz)
+            p_out = (p_surf[0] + ux * out_arm, p_surf[1] + uy * out_arm)
+            msp.add_line(p_out, p_base, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+            start_in = p_surf
+            p_txt_a, p_txt_b = p_out, p_base
+            t_txt = float(jog_spec.get("text_t", 0.45))
+        else:
+            p_base = _draw_dxf_arrow(msp, p_surf, (ux, uy), size=arrow_sz)
+            start_in = p_base
+            p_txt_a = None
+            p_txt_b = None
+            t_txt = float(jog_spec.get("text_t", 0.65))
+
+        p_j0 = (p_surf[0] + dx_c * arm1, p_surf[1] + dy_c * arm1)
+        p_j1 = (p_j0[0] + dx_c * zig_back + nx * zig_perp, p_j0[1] + dy_c * zig_back + ny * zig_perp)
+        p_cross = (p_j1[0] + dx_c * arm2, p_j1[1] + dy_c * arm2)
+
+        msp.add_line(start_in, p_j0, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line(p_j0, p_j1, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line(p_j1, p_cross, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        if show_center_cross:
+            _draw_dxf_center_cross(msp, p_cross, half_size=1.8)
+
+        if p_txt_a is None:
+            on_seg = str(jog_spec.get("text_on_seg", "arm1"))
+            if on_seg == "arm2":
+                p_txt_a, p_txt_b = p_j1, p_cross
+            else:
+                p_txt_a, p_txt_b = p_surf, p_j0
+        p_txt_base = (
+            p_txt_a[0] + (p_txt_b[0] - p_txt_a[0]) * t_txt,
+            p_txt_a[1] + (p_txt_b[1] - p_txt_a[1]) * t_txt,
+        )
+    else:
+        use_dist = min(dist, center_dist_cap)
+        p_cross = (p_surf[0] - ux * use_dist, p_surf[1] - uy * use_dist)
+        p_outer = (p_surf[0] + ux * ext_past_surf, p_surf[1] + uy * ext_past_surf)
+
+        arrow_dir = (ux, uy) if arrow_from_center_side else (-ux, -uy)
+        p_base = _draw_dxf_arrow(msp, p_surf, arrow_dir, size=arrow_sz)
+
+        if ext_past_surf > 0.5 and use_dist > 0.5:
+            if arrow_from_center_side:
+                msp.add_line(p_cross, p_base, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+                msp.add_line(p_surf, p_outer, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+            else:
+                msp.add_line(p_cross, p_surf, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+                msp.add_line(p_base, p_outer, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        elif ext_past_surf > 0.5:
+            msp.add_line(p_base, p_outer, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        else:
+            msp.add_line(p_cross, p_base, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+        if show_center_cross and use_dist > 2.0:
+            _draw_dxf_center_cross(msp, p_cross, half_size=1.8)
+        if show_outer_cross and ext_past_surf > 2.0:
+            _draw_dxf_center_cross(msp, p_outer, half_size=1.8)
+
+        if ext_past_surf >= 10.0:
+            p_txt_base = (p_surf[0] + ux * (ext_past_surf * text_offset_t), p_surf[1] + uy * (ext_past_surf * text_offset_t))
+        else:
+            t_pos = max(0.18, min(0.82, text_offset_t))
+            p_txt_base = (
+                p_cross[0] + (p_surf[0] - p_cross[0]) * t_pos,
+                p_cross[1] + (p_surf[1] - p_cross[1]) * t_pos,
+            )
+
+    ang_deg = math.degrees(math.atan2(uy, ux))
+    if ang_deg > 90.0:
+        ang_deg -= 180.0
+    elif ang_deg <= -90.0:
+        ang_deg += 180.0
+
+    ang_r = math.radians(ang_deg)
+    tx_n, ty_n = -math.sin(ang_r), math.cos(ang_r)
+    p_txt = (p_txt_base[0] + tx_n * 0.9, p_txt_base[1] + ty_n * 0.9)
+
+    t = msp.add_text(
+        label,
+        dxfattribs={"height": txt_h, "style": "GB_NUM", "layer": "6_TEXT", "rotation": ang_deg},
+    )
+    t.set_placement(p_txt, align=TextEntityAlignment.BOTTOM_CENTER)
+
+
+def _draw_dxf_chamfer_callout(
+    msp: Any,
+    tip: Tuple[float, float],
+    angle_deg: float,
+    stem_len: float,
+    shoulder_len: float,
+    prefix: str,
+    tol_upper: str = "+0.2",
+    tol_lower: str = "0",
+    suffix: str = "\u00d745\u00b0",
+    show_arrow: bool = False,
+):
+    """Draw chamfer leader with inline upper/lower tolerance stack (e.g. 8--0.3 +0.2/0 x45 deg)."""
+    h_main = 2.65
+    h_tol = 1.55
+
+    w_pre = _measure_dxf_text_width(prefix, h_main, "GB_NUM")
+    w_top = _measure_dxf_text_width(tol_upper, h_tol, "GB_NUM")
+    w_bot = _measure_dxf_text_width(tol_lower, h_tol, "GB_NUM")
+    w_tol = max(w_top, w_bot)
+    w_suf = _measure_dxf_text_width(suffix, h_main, "GB_NUM")
+    has_tol = bool(tol_upper or tol_lower)
+    gap_pre = 0.12 if has_tol else 0.0
+    gap_post = 0.15 if has_tol else 0.0
+    tot_w = w_pre + gap_pre + w_tol + gap_post + w_suf
+
+    rad = math.radians(angle_deg)
+    p2 = (tip[0] + stem_len * math.cos(rad), tip[1] + stem_len * math.sin(rad))
+    dir_sign = 1.0 if math.cos(rad) >= 0 else -1.0
+    sh_use = max(shoulder_len, tot_w + 3.5)
+    p3 = (p2[0] + dir_sign * sh_use, p2[1])
+
+    start_pt = _draw_dxf_arrow(msp, tip, (-math.cos(rad), -math.sin(rad)), size=2.4) if show_arrow else tip
+    msp.add_line(start_pt, p2, dxfattribs={"layer": "6_TEXT", "color": 7})
+    msp.add_line(p2, p3, dxfattribs={"layer": "6_TEXT", "color": 7})
+
+    cx = 0.5 * (p2[0] + p3[0])
+    y_line = p2[1] + 0.75
+    x_cur = cx - 0.5 * tot_w
+
+    msp.add_text(prefix, dxfattribs={"height": h_main, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+        (x_cur, y_line), align=TextEntityAlignment.BOTTOM_LEFT
+    )
+    x_cur += w_pre + gap_pre
+
+    if has_tol:
+        cx_tol = x_cur + 0.5 * w_tol
+        if tol_upper:
+            msp.add_text(tol_upper, dxfattribs={"height": h_tol, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+                (cx_tol, y_line + 2.00), align=TextEntityAlignment.BOTTOM_CENTER
+            )
+        if tol_lower:
+            x_low = cx_tol + (0.32 if (tol_upper.startswith("+") and len(tol_upper) > len(tol_lower)) else 0.0)
+            msp.add_text(tol_lower, dxfattribs={"height": h_tol, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+                (x_low, y_line - 0.10), align=TextEntityAlignment.BOTTOM_CENTER
+            )
+        x_cur += w_tol + gap_post
+
+    msp.add_text(suffix, dxfattribs={"height": h_main, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+        (x_cur, y_line), align=TextEntityAlignment.BOTTOM_LEFT
+    )
+
+
+def _draw_dxf_linear_dim_gbt(
+    msp: Any,
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    y_dim: float,
+    text: str,
+    shoulder_side: Optional[str] = None,
+    shoulder_len: float = 13.0,
+    shoulder_anchor_x: Optional[float] = None,
+    internal_arrows: Optional[bool] = None,
+    draw_ext1: bool = True,
+    draw_ext2: bool = True,
+    draw_span_line: bool = True,
+):
+    """
+    Draw horizontal linear dimension cleanly with extension lines from anchor points
+    to y_dim, inside/outside hollow CAD arrows, optional shoulder extension, and zero 'mm' suffix.
+    """
+    if p1[0] <= p2[0]:
+        xa, ya = p1
+        xb, yb = p2
+    else:
+        xa, ya = p2
+        xb, yb = p1
+
+    overshoot = 2.2 if y_dim >= ya else -2.2
+    if draw_ext1:
+        msp.add_line((xa, ya), (xa, y_dim + overshoot), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    if draw_ext2:
+        msp.add_line((xb, yb), (xb, y_dim + overshoot), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+    span = xb - xa
+    if internal_arrows is None:
+        internal_arrows = span >= 12.5
+
+    if internal_arrows:
+        pa = _draw_dxf_arrow(msp, (xa, y_dim), (-1.0, 0.0), size=3.2)
+        pb = _draw_dxf_arrow(msp, (xb, y_dim), (1.0, 0.0), size=3.2)
+        if draw_span_line and pb[0] > pa[0]:
+            msp.add_line(pa, pb, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    else:
+        if draw_span_line and span > 0.1:
+            msp.add_line((xa, y_dim), (xb, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        pa = _draw_dxf_arrow(msp, (xa, y_dim), (1.0, 0.0), size=3.2)
+        pb = _draw_dxf_arrow(msp, (xb, y_dim), (-1.0, 0.0), size=3.2)
+        msp.add_line((xa - 4.8, y_dim), pa, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        msp.add_line(pb, (xb + 4.8, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+    txt_h = 2.70
+    est_text_w = _measure_dxf_text_width(text, txt_h, "GB_NUM")
+    if shoulder_side == "left":
+        anchor_l = xa if shoulder_anchor_x is None else min(xa, shoulder_anchor_x)
+        sh_eff = max(shoulder_len, est_text_w + 3.5)
+        x_end = anchor_l - sh_eff
+        start_sh = (xa - 4.5) if not internal_arrows else xa
+        if x_end < start_sh:
+            msp.add_line((x_end, y_dim), (start_sh, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        cx_txt = min(anchor_l - 0.5 * est_text_w - 1.5, 0.5 * (x_end + anchor_l))
+        msp.add_text(text, dxfattribs={"height": txt_h, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (cx_txt, y_dim + 0.65), align=TextEntityAlignment.BOTTOM_CENTER
+        )
+    elif shoulder_side == "right":
+        anchor_r = xb if shoulder_anchor_x is None else max(xb, shoulder_anchor_x)
+        sh_eff = max(shoulder_len, est_text_w + 3.5)
+        x_end = anchor_r + sh_eff
+        start_sh = (xb + 4.5) if not internal_arrows else xb
+        if x_end > start_sh:
+            msp.add_line((start_sh, y_dim), (x_end, y_dim), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+        cx_txt = max(anchor_r + 0.5 * est_text_w + 1.5, 0.5 * (anchor_r + x_end))
+        msp.add_text(text, dxfattribs={"height": txt_h, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (cx_txt, y_dim + 0.65), align=TextEntityAlignment.BOTTOM_CENTER
+        )
+    else:
+        msp.add_text(text, dxfattribs={"height": txt_h, "style": "GB_NUM", "layer": "6_TEXT"}).set_placement(
+            (0.5 * (xa + xb), y_dim + 0.65), align=TextEntityAlignment.BOTTOM_CENTER
+        )
+
+
+def _draw_dxf_vertical_od_dim(
+    msp: Any,
+    x_top: float,
+    x_bot: float,
+    y_bot: float,
+    y_top: float,
+    x_dim: float,
+    od_main: str,
+    od_tol: str = "-0.05",
+):
+    """Draw vertical OD dimension (rotated 90 deg, main number + deviation flanking axis cleanly)."""
+    ext_over = 2.4 if x_dim >= max(x_top, x_bot) else -2.4
+    msp.add_line((x_bot, y_bot), (x_dim + ext_over, y_bot), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    msp.add_line((x_top, y_top), (x_dim + ext_over, y_top), dxfattribs={"layer": "5_DIMENSION", "color": 3})
+    pb = _draw_dxf_arrow(msp, (x_dim, y_bot), (0.0, -1.0), size=3.4)
+    pt = _draw_dxf_arrow(msp, (x_dim, y_top), (0.0, 1.0), size=3.4)
+    msp.add_line(pb, pt, dxfattribs={"layer": "5_DIMENSION", "color": 3})
+
+    y_mid = 0.5 * (y_bot + y_top)
+    if od_tol:
+        h_main = 2.85
+        h_tol = 1.85
+        msp.add_text(
+            od_main,
+            dxfattribs={"height": h_main, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
+        ).set_placement((x_dim - 0.9, y_mid - 1.0), align=TextEntityAlignment.BOTTOM_RIGHT)
+        msp.add_text(
+            od_tol,
+            dxfattribs={"height": h_tol, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
+        ).set_placement((x_dim - 0.65, y_mid + 1.0), align=TextEntityAlignment.BOTTOM_LEFT)
+    else:
+        msp.add_text(
+            od_main,
+            dxfattribs={"height": 2.6, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
+        ).set_placement((x_dim - 0.8, y_mid), align=TextEntityAlignment.BOTTOM_CENTER)
+
+
+def _build_lens_slice_polygon(
+    z_front: float,
+    z_rear: float,
+    r1_draw: float,
+    r2_draw: float,
+    k1: float,
+    k2: float,
+    half_od: float,
+    scale: float,
+    axis_y: float,
+    chamfer_front: float = 0.3,
+    chamfer_rear: float = 0.3,
+    n_pts: int = 44,
+) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]], List[Tuple[float, float]], float, float]:
+    """
+    Build closed lens slice polygon from -half_od to +half_od with safe protective
+    rim chamfers (suppressing chamfer bevel on concave overhangs to avoid rim spikes).
+    Returns (poly, front_pts, rear_pts, z_f_nom_rim, z_r_nom_rim).
+    """
+    sag_f_rim = _calculate_sag(r1_draw, k1, half_od)
+    sag_r_rim = _calculate_sag(r2_draw, k2, half_od)
+    z_f_nom_rim = z_front + sag_f_rim * scale
+    z_r_nom_rim = z_rear + sag_r_rim * scale
+
+    cf = min(chamfer_front, half_od * 0.08) if chamfer_front > 0 else 0.0
+    cr = min(chamfer_rear, half_od * 0.08) if chamfer_rear > 0 else 0.0
+    # Concave rim overhangs (r1<0 left overhang or r2>0 right overhang) keep crisp corner intersection
+    if r1_draw < -1e-6:
+        cf = 0.0
+    if r2_draw > 1e-6:
+        cr = 0.0
+    if z_r_nom_rim - z_f_nom_rim < (cf + cr + 0.15) * scale:
+        cf = 0.0
+        cr = 0.0
+
+    y_f_max = half_od - cf
+    y_r_max = half_od - cr
+
+    front_pts: List[Tuple[float, float]] = []
+    for i in range(n_pts + 1):
+        y = -y_f_max + (2.0 * y_f_max * i) / n_pts
+        z = z_front + _calculate_sag(r1_draw, k1, y) * scale
+        front_pts.append((z, axis_y + y * scale))
+
+    rear_pts: List[Tuple[float, float]] = []
+    for i in range(n_pts + 1):
+        y = y_r_max - (2.0 * y_r_max * i) / n_pts
+        z = z_rear + _calculate_sag(r2_draw, k2, y) * scale
+        rear_pts.append((z, axis_y + y * scale))
+
+    z_f_top_rim = max(z_f_nom_rim, front_pts[-1][0] + cf * scale) if cf > 0.0 else z_f_nom_rim
+    z_r_top_rim = min(z_r_nom_rim, rear_pts[0][0] - cr * scale) if cr > 0.0 else z_r_nom_rim
+    if z_r_top_rim <= z_f_top_rim + 0.05 * scale:
+        z_f_top_rim = z_f_nom_rim
+        z_r_top_rim = z_r_nom_rim
+
+    poly: List[Tuple[float, float]] = []
+    poly.extend(front_pts)
+    poly.append((z_f_top_rim, axis_y + half_od * scale))
+    poly.append((z_r_top_rim, axis_y + half_od * scale))
+    poly.extend(rear_pts)
+    poly.append((z_r_top_rim, axis_y - half_od * scale))
+    poly.append((z_f_top_rim, axis_y - half_od * scale))
+
+    return poly, front_pts, rear_pts, z_f_nom_rim, z_r_nom_rim
+
+
+def _format_gbt_radius(r_val: float, custom_label: Optional[str] = None) -> str:
+    """Format unsigned curvature radius label matching GB/T 13323 (no negative signs)."""
+    if custom_label:
+        return str(custom_label)
+    if abs(r_val) < 1e-6 or abs(r_val) > 1e8:
+        return "R\u221e"
+    return f"R{abs(r_val):.3f}"
+
+
+def _assign_auto_radial_configs(
+    unique_surfs: List[Dict[str, Any]],
+    axis_y: float,
+    scale: float,
+) -> None:
+    """Populate eyepiece-grade parallel Z-jog radial specs for surfaces lacking manual jog_spec."""
+    if not unique_surfs:
+        return
+    all_pts = [p for rec in unique_surfs for p in (rec.get("pts") or [])]
+    if not all_pts:
+        return
+    x_lens_left = min(p[0] for p in all_pts)
+    x_lens_right = max(p[0] for p in all_pts)
+
+    # First pass: estimate signed curvature radius on paper and horizontal chord clearance
+    enriched = []
+    for idx, rec in enumerate(unique_surfs):
+        cfg = rec.get("pos_cfg") or {}
+        if cfg.get("jog_spec"):
+            continue
+        pts = rec.get("pts") or []
+        if len(pts) < 3:
+            continue
+        p_edge = pts[-1]
+        dx = p_edge[0] - float(rec["z_v"])
+        dy = p_edge[1] - axis_y
+        if abs(dx) < 1e-4:
+            continue
+        r_paper = (dx * dx + dy * dy) / (2.0 * dx)
+        if abs(r_paper) > 1e6:
+            continue
+        # Center side: R < 0 -> center LEFT (-1); R > 0 -> center RIGHT (+1)
+        center_on_left = r_paper < 0.0
+        # Front convex surfaces (r_paper > 0 near front left) use eyepiece R89.540 style (out_arm left, jog right/inside)
+        is_front_convex = (not center_on_left) and (float(rec["z_v"]) < 0.5 * (x_lens_left + x_lens_right)) and (idx < len(unique_surfs) - 1)
+        side_key = "left" if (center_on_left or is_front_convex) else "right"
+        enriched.append({
+            "idx": idx,
+            "rec": rec,
+            "r_paper": r_paper,
+            "abs_r": abs(r_paper),
+            "center_on_left": center_on_left,
+            "is_front_convex": is_front_convex,
+            "side_key": side_key,
+        })
+
+    if not enriched:
+        return
+
+    # Assign vertical fracs per quadrant: larger |R| (flatter ray) sits further from axis so same-side rays diverge cleanly
+    left_center = sorted([e for e in enriched if e["side_key"] == "left" and not e["is_front_convex"]], key=lambda e: -e["abs_r"])
+    left_out = sorted([e for e in enriched if e["is_front_convex"]], key=lambda e: -e["abs_r"])
+    right_center = sorted([e for e in enriched if e["side_key"] == "right"], key=lambda e: -e["abs_r"])
+
+    # Assign upper-left slots [0.78, 0.64, ...] and lower-left slots [0.25, 0.36, ...]
+    upper_slots = [0.78, 0.63, 0.52]
+    lower_slots = [0.24, 0.36, 0.44]
+
+    # Put front convex rays on lower-left by default when upper-left has center-left rays (mirrors eyepiece R89.540)
+    if left_center:
+        for k, e in enumerate(left_center):
+            if k < 2:
+                e["pts_frac"] = upper_slots[k]
+            else:
+                e["pts_frac"] = lower_slots[min(k - 2 + len(left_out), len(lower_slots) - 1)]
+        for k, e in enumerate(left_out):
+            e["pts_frac"] = lower_slots[min(k, len(lower_slots) - 1)]
+    else:
+        for k, e in enumerate(left_out):
+            e["pts_frac"] = upper_slots[k] if k % 2 == 0 and k // 2 < len(upper_slots) else lower_slots[min(k // 2, len(lower_slots) - 1)]
+
+    if len(right_center) >= 3:
+        for k, e in enumerate(right_center):
+            e["pts_frac"] = upper_slots[k] if k < 2 else lower_slots[min(k - 2, len(lower_slots) - 1)]
+    elif len(right_center) == 2:
+        right_center[0]["pts_frac"] = 0.77
+        right_center[1]["pts_frac"] = 0.63
+    elif len(right_center) == 1:
+        right_center[0]["pts_frac"] = 0.76
+
+    x_left_limit = 104.5
+    x_right_limit = 281.0
+
+    for e in enriched:
+        rec = e["rec"]
+        pts = rec["pts"]
+        frac = float(e["pts_frac"])
+        p_hit = pts[max(0, min(len(pts) - 1, int(round(frac * (len(pts) - 1)))))]
+        c_x = float(rec["z_v"]) + e["r_paper"]
+        vx = p_hit[0] - c_x
+        vy = p_hit[1] - axis_y
+        d_c = math.hypot(vx, vy)
+        ux, uy = vx / max(d_c, 1e-6), vy / max(d_c, 1e-6)
+        r_label = str(rec.get("label") or "")
+        txt_w = _measure_dxf_text_width(r_label, 2.55, "GB_NUM") + 3.5
+
+        if e["is_front_convex"]:
+            # Arrow sits on front curve pointing inward; text on open left out_arm; compact Z-jog + '+' toward right
+            avail_left = max(10.0, p_hit[0] - x_left_limit)
+            out_arm = min(max(txt_w + 3.5, 16.0), max(11.0, avail_left - 2.0))
+            # Check horizontal room to next surface at similar y
+            next_rec = unique_surfs[e["idx"] + 1] if e["idx"] + 1 < len(unique_surfs) else None
+            glass_dx = 0.0
+            if next_rec and next_rec.get("pts"):
+                n_pts = next_rec["pts"]
+                n_pt = min(n_pts, key=lambda p: abs(p[1] - p_hit[1]))
+                glass_dx = n_pt[0] - p_hit[0]
+            if glass_dx >= 17.5:
+                arm1, zig_back, zig_perp, arm2 = 5.2, 3.0, 2.0, 4.8
+            else:
+                # Cross cleanly through thin glass into open right margin
+                u_hx = max(abs(-ux), 0.35)
+                d_right = max(8.0, (x_lens_right + 15.0 - p_hit[0]) / u_hx)
+                max_right = max(18.0, (x_right_limit - p_hit[0]) / u_hx)
+                arm1 = min(d_right, max(12.0, max_right - 10.0))
+                zig_back = min(5.5, 0.45 * arm1)
+                zig_perp = 2.4
+                arm2 = max(6.5, min(14.0, max_right - arm1 + zig_back - 2.5))
+            jog = {
+                "out_arm": round(out_arm, 2),
+                "arm1": round(arm1, 2),
+                "zig_back": round(zig_back, 2),
+                "zig_perp": round(zig_perp, 2),
+                "arm2": round(arm2, 2),
+                "text_t": 0.54,
+                "text_on_seg": "out",
+                "text_height": 2.55,
+                "show_center_cross": True,
+            }
+        elif e["center_on_left"]:
+            # Center-side (-ux, -uy) points LEFT into open space [104.5, x_lens_left]
+            u_hx = max(abs(-ux), 0.35)
+            d_clear = max(1.5, (p_hit[0] - (x_lens_left - 2.5)) / u_hx)
+            max_reach = max(18.0, (p_hit[0] - x_left_limit) / u_hx)
+            arm1 = min(d_clear + max(txt_w, 15.0), max(d_clear + 11.0, max_reach - 11.0))
+            zig_back = min(8.5, max(4.2, 0.52 * min(arm1, 16.5)))
+            arm2 = max(6.5, min(17.0, max_reach - arm1 + zig_back - 2.5))
+            t_mid = (d_clear + arm1) * 0.5 / max(arm1, 1e-4)
+            jog = {
+                "out_arm": 0.0,
+                "arm1": round(arm1, 2),
+                "zig_back": round(zig_back, 2),
+                "zig_perp": 2.7,
+                "arm2": round(arm2, 2),
+                "text_t": round(max(0.32, min(0.82, t_mid)), 3),
+                "text_on_seg": "arm1",
+                "text_height": 2.55,
+                "show_center_cross": True,
+            }
+        else:
+            # Center-side (-ux, -uy) points RIGHT past lens & vertical OD dim line into open space
+            u_hx = max(abs(-ux), 0.35)
+            d_clear = max(2.5, (x_lens_right + 14.5 - p_hit[0]) / u_hx)
+            max_reach = max(22.0, (x_right_limit - p_hit[0]) / u_hx)
+            arm1 = min(d_clear + max(txt_w, 15.0), max(d_clear + 11.0, max_reach - 11.0))
+            zig_back = min(8.5, max(4.2, 0.52 * min(arm1, 16.5)))
+            arm2 = max(6.5, min(17.0, max_reach - arm1 + zig_back - 2.5))
+            t_mid = (d_clear + arm1) * 0.5 / max(arm1, 1e-4)
+            jog = {
+                "out_arm": 0.0,
+                "arm1": round(arm1, 2),
+                "zig_back": round(zig_back, 2),
+                "zig_perp": 2.7,
+                "arm2": round(arm2, 2),
+                "text_t": round(max(0.32, min(0.82, t_mid)), 3),
+                "text_on_seg": "arm1",
+                "text_height": 2.55,
+                "show_center_cross": True,
+            }
+
+        new_cfg = dict(rec.get("pos_cfg") or {})
+        new_cfg["pts_frac"] = frac
+        new_cfg["jog_spec"] = jog
+        rec["pos_cfg"] = new_cfg
 
 
 def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     """
-    Export single optical element or cemented component to standard GB/T 13323 DXF drawing.
+    Export single optical element, cemented doublet/triplet, or multi-doublet component
+    drawing in the exact Chinese GB/T 13323-2009 layout absorbed from the project template.
     """
     doc, msp = _setup_gbt13323_dxf_document()
 
@@ -1941,193 +2741,463 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
         elements = [{"index": 1, "r1": 50.0, "r2": -50.0, "t": 5.0, "k1": 0, "k2": 0, "material": "H-K9L"}]
 
     od = float(drawing_data.get("od", 25.4))
-    ca = float(drawing_data.get("ca", 22.0))
     od_tol = drawing_data.get("od_tolerance", "-0.05")
     half_od = od / 2.0
-    half_ca = ca / 2.0
-    total_thickness = sum(e.get("t", 5.0) for e in elements)
+    total_axial_span = sum(float(e.get("t", 5.0)) + float(e.get("air_after", 0.0)) for e in elements)
 
-    # Scale calculation for center drawing area
-    axis_y = 115.0
-    available_w = 60.0
-    available_h = 52.0
-
-    scale_raw = min(available_w / max(total_thickness, 5.0), available_h / max(od, 5.0))
-    if scale_raw >= 8.0:
-        scale = 10.0
-    elif scale_raw >= 4.0:
-        scale = 4.0
-    elif scale_raw >= 3.0:
-        scale = 3.0
-    elif scale_raw >= 2.0:
-        scale = 2.0
-    elif scale_raw >= 1.5:
-        scale = 1.5
+    # Fit lens graphic generously into right/upper viewport (X: ~115..258, Y: ~64..195)
+    axis_y = float(drawing_data.get("axis_y", 132.0))
+    scale_override = drawing_data.get("scale_override")
+    if scale_override is not None:
+        scale = float(scale_override)
     else:
-        scale = 1.0
+        scale = min(105.0 / max(total_axial_span, 8.0), 82.0 / max(od, 8.0))
+        scale = max(1.0, min(6.0, round(scale * 4.0) / 4.0))
 
-    drawing_data["drawing_scale"] = f"{int(scale)}:1" if scale == int(scale) else f"{scale:.1f}:1"
+    # Draw Top-Left 17-row Optical Requirements Table
+    _draw_dxf_optical_table(msp, drawing_data, x_start=25.0, y_top=205.0)
 
-    # Draw Top-Left Optical Requirements Table
-    _draw_dxf_optical_table(msp, drawing_data, x_start=15.0, y_top=205.0)
-
-    # Draw Bottom-Right Title Block
+    # Draw Bottom-Right GB/T 10609.1 Title Block ('单位' strictly blank)
     _draw_dxf_title_block(msp, drawing_data, is_assembly=False)
 
-    # Draw Bottom-Left Notes / Specifications
-    notes_list = [
-        "NOTES/SPECIFICATIONS:",
-        f"1. DESIGN WAVELENGTHS: {drawing_data.get('design_wavelengths', 'Not specified')}",
-        f"2. FOCAL LENGTH (REF): {drawing_data.get('efl_str', '-')} mm",
-        f"3. BACK FOCAL LENGTH (REF): {drawing_data.get('bfl_str', '-')} mm",
-        f"4. LENS DIAMETER: \u03a6 {od:.2f} +0.00/{od_tol} mm",
-        f"5. LENS CENTER THICKNESS: {total_thickness:.2f} mm; COMPONENT TOLERANCES AS DIMENSIONED",
-        f"6. CLEAR APERTURE: \u03a6 {ca:.2f} mm",
-        f"7. SURFACE QUALITY: {drawing_data.get('surface_quality', 'Not specified')}",
-        f"8. CENTRATION: {drawing_data.get('wedge_chi', 'Not specified')}",
-        f"9. COATING: {drawing_data.get('coating', 'Not specified')}",
-        "10. PROTECTIVE CHAMFER: 0.3\u00d745\u00b0 AROUND ALL EDGES, NO CHIPPING",
-        "",
-        "FOR INFORMATION ONLY NOT FOR MANUFACTURING PURPOSES"
-    ]
-    _draw_dxf_technical_notes(msp, notes_list, x=15.0, y_top=72.0)
+    # Draw Bottom-Left Numbered Chinese Technical Notes
+    notes_list = drawing_data.get("custom_notes") or drawing_data.get("technical_notes")
+    if not notes_list:
+        mats_unique = []
+        for el in elements:
+            m_name = str(el.get("material", "H-K9L")).strip()
+            if m_name and m_name not in mats_unique:
+                mats_unique.append(m_name)
+        mat_desc = "、".join(mats_unique) if mats_unique else "光学玻璃"
+        scratch_dig = str(drawing_data.get("scratch_dig", "") or "").strip()
+        coat_raw = str(drawing_data.get("coating", "增透膜") or "增透膜").strip()
+        spec_wave = str(drawing_data.get("design_wavelengths", "532nm") or "532nm").strip()
 
-    # Optical Axis (Red Centerline)
-    axis_x0 = 120.0
-    axis_x1 = 215.0
+        notes_list = [f"1、透镜采用{mat_desc}光学玻璃；"]
+        has_cement = any(
+            idx < len(elements) - 1 and float(elements[idx].get("air_after", 0.0)) <= 1e-4
+            for idx in range(len(elements))
+        )
+        if has_cement:
+            notes_list.append("2、胶合采用环氧树脂或者光敏胶；")
+        else:
+            notes_list.append("2、所有倒角均为0.3×45°，无崩边裂纹；")
+
+        coat_line = f"3、镀膜：{coat_raw}"
+        if scratch_dig:
+            coat_line += f"，表面光洁度 {scratch_dig}；"
+        else:
+            coat_line += "；"
+        notes_list.append(coat_line)
+        notes_list.append(f"4、焦距及后截距对应波长：{spec_wave}")
+
+    _draw_dxf_technical_notes(msp, notes_list, x=28.5, y_top=95.0)
+
+    # Place optical graphic horizontally centered inside open right area (X: 112..255)
+    center_x = float(drawing_data.get("lens_center_x", 182.0))
+    x_origin = center_x - 0.5 * total_axial_span * scale
+    axis_x0 = max(100.0, x_origin - 28.0)
+    axis_x1 = min(286.0, x_origin + total_axial_span * scale + 38.0)
     msp.add_line((axis_x0, axis_y), (axis_x1, axis_y), dxfattribs={"layer": "3_AXIS", "color": 1})
 
-    x_origin = 155.0 - (total_thickness * scale) / 2.0
+    # Pre-build slices and cemented groups
+    slices: List[Dict[str, Any]] = []
     cur_z = x_origin
-    dim_stagger_idx = 0
-    all_slices = []
-    hatches_angles = [45, 135, 45, 135]
-
+    n_elems = len(elements)
     for idx, elem in enumerate(elements):
-        r1 = elem.get("r1", 0.0)
-        r2 = elem.get("r2", 0.0)
-        k1 = elem.get("k1", 0.0)
-        k2 = elem.get("k2", 0.0)
-        ct = elem.get("t", 5.0)
-        ct_tol = elem.get("t_tolerance", "±0.02")
+        r1 = float(elem.get("r1", 0.0))
+        r2 = float(elem.get("r2", 0.0))
+        r1_draw = float(elem.get("r1_draw", r1))
+        r2_draw = float(elem.get("r2_draw", r2))
+        k1 = float(elem.get("k1", 0.0))
+        k2 = float(elem.get("k2", 0.0))
+        ct = float(elem.get("t", 5.0))
+        air_after = float(elem.get("air_after", 0.0))
+        elem_od = float(elem.get("od", od))
+        elem_half_od = elem_od / 2.0
+
+        prev_air = (idx == 0) or (float(elements[idx - 1].get("air_after", 0.0)) > 1e-4)
+        next_air = (idx == n_elems - 1) or (air_after > 1e-4)
 
         z_front = cur_z
         z_rear = z_front + ct * scale
+        cf_val = float(elem["chamfer_front"]) if "chamfer_front" in elem else (0.3 if prev_air else 0.0)
+        cr_val = float(elem["chamfer_rear"]) if "chamfer_rear" in elem else (0.3 if next_air else 0.0)
+        poly, f_pts, r_pts, z_f_nom, z_r_nom = _build_lens_slice_polygon(
+            z_front=z_front,
+            z_rear=z_rear,
+            r1_draw=r1_draw,
+            r2_draw=r2_draw,
+            k1=k1,
+            k2=k2,
+            half_od=elem_half_od,
+            scale=scale,
+            axis_y=axis_y,
+            chamfer_front=cf_val,
+            chamfer_rear=cr_val,
+        )
 
-        n_pts = 35
-        front_pts = []
-        for i in range(n_pts + 1):
-            y = -half_ca + (2 * half_ca * i) / n_pts
-            z = z_front + _calculate_sag(r1, k1, y) * scale
-            front_pts.append((z, axis_y + y * scale))
-
-        rear_pts = []
-        for i in range(n_pts + 1):
-            y = half_ca - (2 * half_ca * i) / n_pts
-            z = z_rear + _calculate_sag(r2, k2, y) * scale
-            rear_pts.append((z, axis_y + y * scale))
-
-        poly = []
-        poly.extend(front_pts)
-        poly.append((front_pts[-1][0], axis_y + half_od * scale))
-        poly.append((rear_pts[0][0], axis_y + half_od * scale))
-        poly.extend(rear_pts)
-        poly.append((rear_pts[-1][0], axis_y - half_od * scale))
-        poly.append((front_pts[0][0], axis_y - half_od * scale))
+        # Element number position near upper flat rim clear of hatches and radial rays
+        num_y_frac = float(elem.get("num_y_frac", 0.78))
+        x_mid_upper = 0.5 * (z_front + _calculate_sag(r1_draw, k1, num_y_frac * elem_half_od) * scale
+                             + z_rear + _calculate_sag(r2_draw, k2, num_y_frac * elem_half_od) * scale)
+        y_num = axis_y + num_y_frac * elem_half_od * scale
 
         msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": "2_CONTOUR"})
-        try:
-            h = msp.add_hatch(color=4, dxfattribs={"layer": "4_HATCH"})
-            h.set_pattern_fill("ANSI31", scale=0.7, angle=hatches_angles[idx % len(hatches_angles)])
-            h.paths.add_polyline_path(poly, is_closed=True)
-        except Exception:
-            pass
+        hatch_ang = float(elem.get("hatch_angle", 45.0 if idx % 2 == 0 else 135.0))
+        _draw_dxf_glass_hatch(
+            msp,
+            poly,
+            angle_deg=hatch_ang,
+            y_axis_paper=axis_y,
+            keepout_pt=(x_mid_upper, y_num) if n_elems > 1 else None,
+        )
 
-        if len(elements) > 1:
-            mid_z = (z_front + z_rear) / 2.0
-            balloon_y = axis_y + half_od * scale + 10.0 + idx * 8.0
-            _draw_dxf_balloon(msp, (mid_z, balloon_y), elem.get("index", idx + 1), (mid_z, axis_y + half_od * scale * 0.4))
+        if n_elems > 1:
+            msp.add_text(
+                str(elem.get("index", idx + 1)),
+                dxfattribs={"height": 2.9, "style": "GB_NUM", "layer": "6_TEXT"},
+            ).set_placement((x_mid_upper, y_num), align=TextEntityAlignment.MIDDLE_CENTER)
 
-        dim_y_offset = -half_od * scale - 7.0 - (dim_stagger_idx % 3) * 6.0
-        dim_stagger_idx += 1
-        dim_txt = f"{ct:.2f} {ct_tol}" if ct_tol else f"{ct:.2f}"
-        _draw_dxf_linear_dimension(msp, (z_front, axis_y), (z_rear, axis_y), dim_y_offset, dim_txt, orientation="horizontal")
+        slices.append({
+            "idx": idx,
+            "elem": elem,
+            "z_front": z_front,
+            "z_rear": z_rear,
+            "z_f_nom": z_f_nom,
+            "z_r_nom": z_r_nom,
+            "front_pts": f_pts,
+            "rear_pts": r_pts,
+            "r1": r1,
+            "r2": r2,
+            "r1_draw": r1_draw,
+            "r2_draw": r2_draw,
+            "ct": ct,
+            "air_after": air_after,
+            "half_od": elem_half_od,
+            "prev_air": prev_air,
+            "next_air": next_air,
+        })
+        cur_z = z_rear + air_after * scale
 
-        all_slices.append((z_front, z_rear, front_pts, rear_pts, r1, r2, ct))
-        cur_z = z_rear
+    y_rim_top = axis_y + half_od * scale
+    y_rim_bot = axis_y - half_od * scale
 
-    if len(elements) > 1:
-        tot_z0 = all_slices[0][0]
-        tot_z1 = all_slices[-1][1]
-        tot_dim_y = -half_od * scale - 7.0 - min(len(elements), 3) * 6.0 - 2.5
-        tot_txt = f"{total_thickness:.2f} (REF)"
-        _draw_dxf_linear_dimension(msp, (tot_z0, axis_y), (tot_z1, axis_y), tot_dim_y, tot_txt, orientation="horizontal")
+    # Air-surface polished marks (circle-cross) + rim roughness + top (ET) dimensions
+    groups: List[List[Dict[str, Any]]] = []
+    cur_grp: List[Dict[str, Any]] = []
+    for s in slices:
+        cur_grp.append(s)
+        if s["next_air"]:
+            groups.append(cur_grp)
+            cur_grp = []
 
-    min_x = min(pt[0] for s in all_slices for pt in s[2])
-    max_x = max(pt[0] for s in all_slices for pt in s[3])
-    right_x = max_x
-    od_txt = f"\u03a6 {od:.2f} {od_tol}" if od_tol else f"\u03a6 {od:.2f}"
-    dim_offset_x = max(34.0, half_od * scale * 0.4 + 14.0)
-    _draw_dxf_linear_dimension(msp, (right_x, axis_y - half_od * scale), (right_x, axis_y + half_od * scale), dim_offset_x, od_txt, orientation="vertical")
+    for g_idx, grp in enumerate(groups):
+        g_front = grp[0]
+        g_rear = grp[-1]
 
-    r1_val = elements[0].get("r1", 0.0)
-    front_tip = all_slices[0][2][int(len(all_slices[0][2]) * 0.75)]
-    sag1 = abs(_calculate_sag(r1_val, 0, half_ca))
-    r1_txt = f"R {r1_val:.3f}" if r1_val != 0 and abs(r1_val) < 1e8 else "R \u221e PLANO"
-    sag1_txt = f"(S={sag1:.3f})" if sag1 > 0.005 else None
-    front_dx = max(10.0, (front_tip[0] - min_x) + 8.0)
-    r1_stem_len = front_dx / 0.707
-    _draw_dxf_leader(msp, front_tip, 135.0, r1_stem_len, 12.0, r1_txt, sag1_txt)
+        # '⊕' marks hugging outer upper air-glass edges cleanly
+        f_pts_list = g_front["front_pts"]
+        idx_f = int(len(f_pts_list) * float(g_front["elem"].get("mark_front_frac", 0.90)))
+        p_f = f_pts_list[max(1, min(len(f_pts_list) - 2, idx_f))]
+        _draw_dxf_optical_surface_mark(msp, (p_f[0] - 2.1, p_f[1] - 0.4), radius=1.22, layer="6_TEXT")
 
-    if len(elements) == 2:
-        r_mid = elements[0].get("r2", 0.0)
-        cemented_pts = all_slices[0][3]
-        mid_tip = cemented_pts[int(len(cemented_pts) * 0.75)]
-        sag_m = abs(_calculate_sag(r_mid, 0, half_ca))
-        r_mid_txt = f"R {r_mid:.3f}" if r_mid != 0 and abs(r_mid) < 1e8 else "R \u221e PLANO"
-        s_mid_txt = f"(S={sag_m:.3f})" if sag_m > 0.005 else None
-        mid_dx = max(12.0, (mid_tip[0] - min_x) + 8.0)
-        mid_stem_len = mid_dx / 0.866
-        _draw_dxf_leader(msp, mid_tip, -150.0, mid_stem_len, 12.0, r_mid_txt, s_mid_txt)
-    elif len(elements) == 3:
-        r_m1 = elements[0].get("r2", 0.0)
-        c_pts1 = all_slices[0][3]
-        mid_tip1 = c_pts1[int(len(c_pts1) * 0.75)]
-        sag_m1 = abs(_calculate_sag(r_m1, 0, half_ca))
-        r_m1_txt = f"R {r_m1:.3f}" if r_m1 != 0 and abs(r_m1) < 1e8 else "R \u221e PLANO"
-        s_m1_txt = f"(S={sag_m1:.3f})" if sag_m1 > 0.005 else None
-        m1_dx = max(12.0, (mid_tip1[0] - min_x) + 8.0)
-        _draw_dxf_leader(msp, mid_tip1, -155.0, m1_dx / 0.90, 12.0, r_m1_txt, s_m1_txt)
+        r_pts_list = g_rear["rear_pts"]
+        idx_r = int(len(r_pts_list) * float(g_rear["elem"].get("mark_rear_frac", 0.10)))
+        p_r = r_pts_list[max(1, min(len(r_pts_list) - 2, idx_r))]
+        _draw_dxf_optical_surface_mark(msp, (p_r[0] + 2.1, p_r[1] - 0.4), radius=1.22, layer="6_TEXT")
 
-        r_m2 = elements[1].get("r2", 0.0)
-        c_pts2 = all_slices[1][3]
-        mid_tip2 = c_pts2[int(len(c_pts2) * 0.75)]
-        sag_m2 = abs(_calculate_sag(r_m2, 0, half_ca))
-        r_m2_txt = f"R {r_m2:.3f}" if r_m2 != 0 and abs(r_m2) < 1e8 else "R \u221e PLANO"
-        s_m2_txt = f"(S={sag_m2:.3f})" if sag_m2 > 0.005 else None
-        _draw_dxf_leader(msp, mid_tip2, -35.0, 12.0, 12.0, r_m2_txt, s_m2_txt)
+        # Rim roughness '▽ 1.6' seated centered on the widest flat top rim in the group
+        rim_best = max(grp, key=lambda x: abs(x["z_r_nom"] - x["z_f_nom"]))
+        z_rim_mid = 0.5 * (rim_best["z_f_nom"] + rim_best["z_r_nom"])
+        _draw_dxf_roughness_symbol(
+            msp, tip=(z_rim_mid, y_rim_top), value_text="1.6", scale=1.12, layer="6_TEXT", text_layer="6_TEXT"
+        )
 
-    r2_val = elements[-1].get("r2", 0.0)
-    rear_pts = all_slices[-1][3]
-    rear_tip = rear_pts[int(len(rear_pts) * 0.25)]
-    sag2 = abs(_calculate_sag(r2_val, 0, half_ca))
-    r2_txt = f"R {r2_val:.3f}" if r2_val != 0 and abs(r2_val) < 1e8 else "R \u221e PLANO"
-    sag2_txt = f"(S={sag2:.3f})" if sag2 > 0.005 else None
-    rear_dx = max(8.0, (max_x - rear_tip[0]) + 6.0)
-    _draw_dxf_leader(msp, rear_tip, 32.0, rear_dx / 0.848, 10.0, r2_txt, sag2_txt)
+        # Reference edge thickness dimensions (ET) above each element in the group
+        if len(grp) == 1:
+            s = grp[0]
+            et_cfg = s["elem"].get("et_dim_cfg") or {}
+            et_val = s["elem"].get("display_et")
+            if et_val is None:
+                et_val = (s["z_r_nom"] - s["z_f_nom"]) / scale
+            shoulder = et_cfg.get("shoulder_side", "left" if (g_idx == 0 and len(groups) > 1) else "right")
+            if abs(s["z_r_nom"] - s["z_f_nom"]) >= 12.0 and "shoulder_side" not in et_cfg:
+                shoulder = None
+            _draw_dxf_linear_dim_gbt(
+                msp,
+                (s["z_f_nom"], y_rim_top),
+                (s["z_r_nom"], y_rim_top),
+                y_dim=y_rim_top + 7.2,
+                text=f"({float(et_val):.3f})",
+                shoulder_side=shoulder,
+                shoulder_len=float(et_cfg.get("shoulder_len", 12.0)),
+                internal_arrows=et_cfg.get("internal_arrows"),
+                draw_span_line=bool(et_cfg.get("draw_span_line", True)),
+            )
+        else:
+            # Multi-element cemented group: stagger ET reference dimensions outside group rims
+            out_side = "left" if (g_idx == 0 and len(groups) > 1) else "right"
+            for e_pos, s in enumerate(grp):
+                et_cfg = s["elem"].get("et_dim_cfg") or {}
+                et_val = s["elem"].get("display_et")
+                if et_val is None:
+                    et_val = (s["z_r_nom"] - s["z_f_nom"]) / scale
+                default_tier = 1 if (e_pos == 0 if out_side == "left" else e_pos == len(grp) - 1) else 2
+                tier = int(et_cfg.get("tier", default_tier))
+                y_tier = y_rim_top + (7.2 if tier == 1 else 13.0)
+                sh_side = et_cfg.get("shoulder_side", out_side)
+                anchor_x = g_front["z_f_nom"] if sh_side == "left" else g_rear["z_r_nom"]
+                _draw_dxf_linear_dim_gbt(
+                    msp,
+                    (s["z_f_nom"], y_rim_top),
+                    (s["z_r_nom"], y_rim_top),
+                    y_dim=y_tier,
+                    text=f"({float(et_val):.3f})",
+                    shoulder_side=sh_side,
+                    shoulder_len=float(et_cfg.get("shoulder_len", 16.5)),
+                    shoulder_anchor_x=anchor_x,
+                    internal_arrows=et_cfg.get("internal_arrows"),
+                    draw_span_line=bool(et_cfg.get("draw_span_line", True)),
+                )
 
-    chamfer_tip = (max_x, axis_y + half_od * scale)
-    _draw_dxf_leader(msp, chamfer_tip, 55.0, 7.0, 9.0, "0.3\u00d745\u00b0", None)
+        # Protective chamfer callout placed cleanly above the staggered (ET) tiers
+        chamfer_spec = next(
+            (el_s["elem"].get("chamfer_callout") for el_s in grp if el_s["elem"].get("chamfer_callout")),
+            None,
+        )
+        if chamfer_spec:
+            tip_on = str(chamfer_spec.get("tip_on", "front"))
+            tip_x = g_rear["z_r_nom"] if tip_on == "rear" else g_front["z_f_nom"]
+            c_ang = float(chamfer_spec.get("angle", 52.0 if tip_on == "rear" else 115.0))
+            _draw_dxf_chamfer_callout(
+                msp,
+                tip=(tip_x, y_rim_top),
+                angle_deg=c_ang,
+                stem_len=float(chamfer_spec.get("stem", 19.0)),
+                shoulder_len=float(chamfer_spec.get("shoulder", 18.0)),
+                prefix=str(chamfer_spec.get("prefix", "0.3")),
+                tol_upper=str(chamfer_spec.get("tol_upper", "+0.2")),
+                tol_lower=str(chamfer_spec.get("tol_lower", "0")),
+                suffix=str(chamfer_spec.get("suffix", "\u00d745\u00b0")),
+                show_arrow=bool(chamfer_spec.get("show_arrow", False)),
+            )
+        elif g_idx == len(groups) - 1:
+            bevel_count = max(2, 2 * len(groups))
+            _draw_dxf_chamfer_callout(
+                msp,
+                tip=(g_rear["z_r_nom"], y_rim_top),
+                angle_deg=82.0,
+                stem_len=21.0,
+                shoulder_len=16.5,
+                prefix=f"{bevel_count}--0.3",
+                tol_upper="+0.2",
+                tol_lower="0",
+                suffix="\u00d745\u00b0",
+                show_arrow=False,
+            )
 
-    t_rim_ra = msp.add_text("1.6 / ▽", dxfattribs={"height": 2.2, "style": "HZ_STYLE", "layer": "6_TEXT"})
-    t_rim_ra.set_placement(((all_slices[0][0] + all_slices[-1][1]) / 2.0, axis_y + half_od * scale + 1.2), align=TextEntityAlignment.BOTTOM_CENTER)
+    # Bottom Center Thickness & Air-Gap Dimensions (staggered rows from axis vertices, ZERO 'mm')
+    dim_specs: List[Tuple[float, float, str, int, Dict[str, Any]]] = []
+    for s in slices:
+        ct = s["ct"]
+        ct_tol = s["elem"].get("t_tolerance", "±0.02")
+        ct_fmt = f"{ct:.2f}" if (s["elem"].get("t_decimals", 2) == 2 and ct % 1 != 0) else f"{ct:g}"
+        dim_specs.append((
+            s["z_front"],
+            s["z_rear"],
+            f"{ct_fmt}{ct_tol}",
+            s["idx"],
+            dict(s["elem"].get("ct_dim_cfg") or {}),
+        ))
+        if s["air_after"] > 1e-4 and s["idx"] < len(slices) - 1:
+            air = s["air_after"]
+            air_tol = s["elem"].get("air_tolerance", "±0.02")
+            air_fmt = f"{air:g}"
+            dim_specs.append((
+                s["z_rear"],
+                s["z_rear"] + air * scale,
+                f"{air_fmt}{air_tol}",
+                99,
+                dict(s["elem"].get("air_dim_cfg") or {}),
+            ))
+
+    row_offsets = [7.5, 13.5, 19.5]
+    for d_i, (za, zb, d_txt, s_idx, cfg_d) in enumerate(dim_specs):
+        if s_idx == 99:
+            lvl = int(cfg_d.get("tier", 2))
+            y_d = y_rim_bot - row_offsets[max(0, min(2, lvl))]
+            sh = cfg_d.get("shoulder_side", "right")
+            sh_l = float(cfg_d.get("shoulder_len", 12.0))
+        else:
+            lvl = int(cfg_d.get("tier", d_i % 3))
+            y_d = y_rim_bot - row_offsets[max(0, min(2, lvl))]
+            default_sh = "left" if s_idx < 2 else "right"
+            if "shoulder_side" in cfg_d:
+                sh = cfg_d["shoulder_side"]
+            else:
+                sh = default_sh if abs(zb - za) < 18.0 else None
+            sh_l = float(cfg_d.get("shoulder_len", 13.0))
+        sh_anchor = slices[0]["z_front"] if cfg_d.get("anchor_first") else None
+        _draw_dxf_linear_dim_gbt(
+            msp,
+            (za, axis_y),
+            (zb, axis_y),
+            y_dim=y_d,
+            text=d_txt,
+            shoulder_side=sh,
+            shoulder_len=sh_l,
+            shoulder_anchor_x=sh_anchor,
+            internal_arrows=cfg_d.get("internal_arrows"),
+        )
+
+    # Right Vertical Outer Diameter Dimension (without 'mm')
+    max_z_nom = max(s["z_r_nom"] for s in slices)
+    max_z_all = max(pt[0] for s in slices for pt in s["rear_pts"])
+    min_z_all = min(pt[0] for s in slices for pt in s["front_pts"])
+    x_od_dim = max(max_z_nom, max_z_all) + 12.0
+    od_main_str = f"{od:g}"
+    _draw_dxf_vertical_od_dim(
+        msp,
+        x_top=slices[-1]["z_r_nom"],
+        x_bot=slices[-1]["z_r_nom"],
+        y_bot=y_rim_bot,
+        y_top=y_rim_top,
+        x_dim=x_od_dim,
+        od_main=od_main_str,
+        od_tol=od_tol,
+    )
+
+    # Radial Curvature Leaders (all unsigned R values, '+' center marks along radial ray)
+    surf_records: List[Dict[str, Any]] = []
+    for s in slices:
+        surf_records.append({
+            "z_v": s["z_front"],
+            "r_opt": s["r1"],
+            "r_draw": s["r1_draw"],
+            "pts": s["front_pts"],
+            "label": _format_gbt_radius(s["r1"], s["elem"].get("r1_label")),
+            "pos_cfg": s["elem"].get("r1_dim_cfg"),
+        })
+        if s["next_air"] or len(slices) > 1:
+            surf_records.append({
+                "z_v": s["z_rear"],
+                "r_opt": s["r2"],
+                "r_draw": s["r2_draw"],
+                "pts": list(reversed(s["rear_pts"])),
+                "label": _format_gbt_radius(s["r2"], s["elem"].get("r2_label")),
+                "pos_cfg": s["elem"].get("r2_dim_cfg"),
+            })
+
+    # Deduplicate cemented interfaces while preserving every surface once
+    unique_surfs: List[Dict[str, Any]] = []
+    for rec in surf_records:
+        if not unique_surfs or abs(rec["z_v"] - unique_surfs[-1]["z_v"]) > 1e-3:
+            unique_surfs.append(rec)
+
+    _assign_auto_radial_configs(unique_surfs, axis_y, scale)
+    default_fracs = [0.76, 0.64, 0.24, 0.72, 0.34, 0.70, 0.28]
+    for sr_idx, rec in enumerate(unique_surfs):
+        cfg = rec["pos_cfg"] or {}
+        pts = rec["pts"]
+        frac = float(cfg.get("pts_frac", default_fracs[sr_idx % len(default_fracs)]))
+        idx_hit = max(1, min(len(pts) - 2, int(round(frac * (len(pts) - 1)))))
+        p_hit = pts[idx_hit]
+
+        r_d = rec["r_draw"]
+        if abs(r_d) < 1e-6 or abs(r_d) > 1e8:
+            # Plano surface note
+            ang = 140.0 if sr_idx == 0 else 40.0
+            _draw_dxf_leader(msp, p_hit, ang, 10.0, 9.0, "R\u221e", None)
+            continue
+
+        c_paper = (rec["z_v"] + r_d * scale, axis_y)
+        vx = p_hit[0] - c_paper[0]
+        vy = p_hit[1] - c_paper[1]
+        d_c = math.hypot(vx, vy)
+        ux, uy = vx / max(d_c, 1e-6), vy / max(d_c, 1e-6)
+
+        if cfg.get("jog_spec"):
+            _draw_dxf_radial_dim_gbt(
+                msp,
+                p_hit,
+                c_paper,
+                rec["label"],
+                show_center_cross=bool(cfg.get("show_center_cross", True)),
+                jog_spec=cfg["jog_spec"],
+            )
+            continue
+
+        # Direct radial ray outward into open whitespace cleanly without back-crossing glass
+        dir_side = cfg.get("dir_side")
+        if dir_side is None:
+            on_left = sr_idx < len(unique_surfs) / 2.0
+            dir_side = "left" if on_left else "right"
+
+        want_left = (dir_side == "left")
+        plus_u_goes_to_preferred = (want_left and ux < 0) or ((not want_left) and ux > 0)
+        if plus_u_goes_to_preferred:
+            if "ext_past_surf" in cfg:
+                out_tail = float(cfg["ext_past_surf"])
+                txt_t = float(cfg.get("text_offset_t", 0.56))
+            elif (not want_left) and ux > 0.2:
+                dx_past = max(24.0, x_od_dim - p_hit[0] + 18.0)
+                out_tail = max(28.0, dx_past / ux)
+                txt_t = float(cfg.get("text_offset_t", max(0.56, min(0.80, (x_od_dim - p_hit[0] + 10.5) / (out_tail * ux)))))
+            elif want_left and (-ux) > 0.2:
+                out_tail = max(28.0, (p_hit[0] - min_z_all + 22.0) / (-ux))
+                txt_t = float(cfg.get("text_offset_t", 0.58))
+            else:
+                out_tail = 28.0
+                txt_t = float(cfg.get("text_offset_t", 0.56))
+            _draw_dxf_radial_dim_gbt(
+                msp,
+                p_hit,
+                c_paper,
+                rec["label"],
+                ext_past_surf=out_tail,
+                center_dist_cap=float(cfg.get("center_dist_cap", 0.0)),
+                show_center_cross=bool(cfg.get("show_center_cross", False)),
+                show_outer_cross=bool(cfg.get("show_outer_cross", False)),
+                arrow_from_center_side=False,
+                text_offset_t=txt_t,
+            )
+            continue
+
+        if "center_dist_cap" in cfg:
+            cap_dist = float(cfg["center_dist_cap"])
+            txt_t = float(cfg.get("text_offset_t", 0.50))
+        elif want_left and ux > 0.2:
+            cap_dist = max(26.0, (p_hit[0] - min_z_all + 22.0) / ux)
+            txt_t = float(cfg.get("text_offset_t", 0.28))
+        elif (not want_left) and (-ux) > 0.2:
+            cap_dist = max(26.0, (x_od_dim - p_hit[0] + 20.0) / (-ux))
+            txt_t = float(cfg.get("text_offset_t", 0.26))
+        else:
+            cap_dist = 26.0
+            txt_t = float(cfg.get("text_offset_t", 0.50))
+
+        _draw_dxf_radial_dim_gbt(
+            msp,
+            p_hit,
+            c_paper,
+            rec["label"],
+            ext_past_surf=float(cfg.get("ext_past_surf", 0.0)),
+            center_dist_cap=cap_dist,
+            show_center_cross=bool(cfg.get("show_center_cross", True)),
+            show_outer_cross=bool(cfg.get("show_outer_cross", False)),
+            arrow_from_center_side=bool(cfg.get("arrow_from_center_side", True)),
+            text_offset_t=txt_t,
+        )
 
     doc.saveas(filepath)
 
 
 def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
     """
-    Export optical system assembly drawing to standard GB/T 13323 DXF.
+    Export optical system assembly drawing in the primary Chinese GB/T 13323 template
+    ('单位' blank, A4 landscape with filing margin, 180mm GB/T 10609.1 title block,
+    unsigned dimensions, and sparse optical glass cross-section hatches).
     """
     doc, msp = _setup_gbt13323_dxf_document()
 
@@ -2136,122 +3206,160 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
         doc.saveas(filepath)
         return
 
-    max_od = max(e.get("od", 20.0) for e in assembly_elements)
-    total_track = sum(e.get("ct", 5.0) + e.get("air_after", 0.0) for e in assembly_elements)
+    max_od = max(float(e.get("od", 20.0)) for e in assembly_elements)
+    total_track = sum(float(e.get("ct", 5.0)) + float(e.get("air_after", 0.0)) for e in assembly_elements)
 
-    # Scale calculation
-    axis_y = 115.0
-    scale = min(150.0 / max(total_track, 20.0), 2.5)
-    if scale >= 2.0:
-        scale = 2.0
-    elif scale >= 1.5:
-        scale = 1.5
-    else:
-        scale = 1.0
+    axis_y = 132.0
+    scale = min(145.0 / max(total_track, 20.0), 82.0 / max(max_od, 10.0))
+    scale = max(1.0, min(4.0, round(scale * 4.0) / 4.0))
 
-    drawing_data["drawing_scale"] = f"{int(scale)}:1" if scale == int(scale) else f"{scale:.1f}:1"
+    # Draw Top-Left Chinese System Parameters + BOM Table
+    _draw_dxf_assembly_table(msp, drawing_data, x_start=25.0, y_top=205.0)
 
-    # Draw Top-Left BOM Table
-    _draw_dxf_assembly_table(msp, drawing_data, x_start=15.0, y_top=205.0)
-
-    # Draw Bottom-Right Title Block
+    # Draw Bottom-Right GB/T 10609.1 Title Block ('单位' blank)
     _draw_dxf_title_block(msp, drawing_data, is_assembly=True)
 
-    # Draw Bottom-Left Notes
-    notes_list = [
-        "NOTES/SPECIFICATIONS:",
-        f"1. DESIGN WAVELENGTHS: {drawing_data.get('design_wavelengths', 'Not specified')}",
-        f"2. EFFECTIVE FOCAL LENGTH (REF): {drawing_data.get('efl_str', '-')} mm",
-        f"3. OBJECT SPACE NA={drawing_data.get('na_str', '-')} (MEDIUM: {drawing_data.get('immersion_str', 'AIR')})",
-        f"4. OBJECT WORKING DISTANCE: {drawing_data.get('wd_str', '-')} mm",
-        f"5. FIELD OF VIEW: {drawing_data.get('fov_str', '-')}",
-        f"6. TOTAL OPTICAL TRACK: {drawing_data.get('totr_str', '-')} mm; REAR IMAGE GAP: {drawing_data.get('rear_gap_str', '-')} mm",
-        f"7. LENS STACK: {drawing_data.get('stack_str', '-')} mm; ASSEMBLY CENTERING \u2264 0.003 mm",
-        "8. SPACING RINGS: FLATNESS & PARALLELISM \u2264 0.002 mm",
-        "9. OPERATING TEMPERATURE: 20\u2103 \u00b1 2\u2103",
-        "",
-        "FOR INFORMATION ONLY NOT FOR MANUFACTURING PURPOSES"
+    # Draw Bottom-Left Chinese Notes positioned safely above title block (Y >= 58)
+    spec_fallback = str(drawing_data.get("design_wavelengths") or "工作波段")
+    notes_list = drawing_data.get("custom_notes") or drawing_data.get("technical_notes") or [
+        f"1、工作波段：{spec_fallback}；",
+        f"2、有效焦距 f'={drawing_data.get('efl_str', '-')}mm，后截距 BFL={drawing_data.get('bfl_str', '-')}mm；",
+        f"3、总轨长 TOTR={drawing_data.get('totr_str', '-')}mm，镜组叠层 {drawing_data.get('stack_str', '-')}mm；",
+        f"4、各镜片光轴同轴度 ≤ {drawing_data.get('coax_tol', '0.005')}，隔圈端面平行度 ≤ {drawing_data.get('para_tol', '0.003')}；",
+        "5、镜筒内壁消光发黑处理，工作环境温度：20℃±2℃。",
     ]
-    _draw_dxf_technical_notes(msp, notes_list, x=15.0, y_top=72.0)
+    n_wrapped = sum(
+        len(_wrap_cad_note_line(seg, max_units=28.5))
+        for note in notes_list
+        for seg in note.split("\n")
+    )
+    h_notes = n_wrapped * 4.4 + len(notes_list) * 1.2
+    y_notes_top = max(92.0, min(116.0, 61.0 + h_notes))
+    _draw_dxf_technical_notes(msp, notes_list, x=28.5, y_top=y_notes_top)
 
-    # Horizontal placement: centered across middle area
-    x_origin = 195.0 - (total_track * scale) / 2.0
-    axis_x0 = max(115.0, x_origin - 12.0)
-    axis_x1 = min(285.0, x_origin + total_track * scale + 15.0)
+    # Place centered assembly layout inside X: 105..282, Y: 72..195
+    center_x = 188.0
+    x_origin = center_x - 0.5 * total_track * scale
+    axis_x0 = max(100.0, x_origin - 15.0)
+    axis_x1 = min(286.0, x_origin + total_track * scale + 20.0)
     msp.add_line((axis_x0, axis_y), (axis_x1, axis_y), dxfattribs={"layer": "3_AXIS", "color": 1})
 
     cur_z = x_origin
-    hatches_angles = [45, 135, 45, 135]
-
+    comp_num = 1
     for elem_idx, elem in enumerate(assembly_elements):
         comps = elem.get("components", [])
         elem_od = float(elem.get("od", max_od))
         half_od = elem_od / 2.0
-        air_after = elem.get("air_after", 0.0)
+        air_after = float(elem.get("air_after", 0.0))
 
         comp_cur_z = cur_z
         elem_start_z = cur_z
         for c_idx, comp in enumerate(comps):
-            r1 = comp.get("r1", 0.0)
-            r2 = comp.get("r2", 0.0)
-            k1 = comp.get("k1", 0.0)
-            k2 = comp.get("k2", 0.0)
-            ct = comp.get("ct", 5.0)
-            ca = comp.get("ca", elem_od - 2.0)
-            half_ca = ca / 2.0
+            r1 = float(comp.get("r1", 0.0))
+            r2 = float(comp.get("r2", 0.0))
+            k1 = float(comp.get("k1", 0.0))
+            k2 = float(comp.get("k2", 0.0))
+            ct = float(comp.get("ct", 5.0))
 
             z_front = comp_cur_z
             z_rear = z_front + ct * scale
+            poly, _, _, _, _ = _build_lens_slice_polygon(
+                z_front=z_front,
+                z_rear=z_rear,
+                r1_draw=r1,
+                r2_draw=r2,
+                k1=k1,
+                k2=k2,
+                half_od=half_od,
+                scale=scale,
+                axis_y=axis_y,
+                chamfer_front=0.25 if c_idx == 0 else 0.0,
+                chamfer_rear=0.25 if c_idx == len(comps) - 1 else 0.0,
+                n_pts=32,
+            )
 
-            n_pts = 30
-            front_pts = []
-            for i in range(n_pts + 1):
-                y = -half_ca + (2 * half_ca * i) / n_pts
-                z = z_front + _calculate_sag(r1, k1, y) * scale
-                front_pts.append((z, axis_y + y * scale))
-
-            rear_pts = []
-            for i in range(n_pts + 1):
-                y = half_ca - (2 * half_ca * i) / n_pts
-                z = z_rear + _calculate_sag(r2, k2, y) * scale
-                rear_pts.append((z, axis_y + y * scale))
-
-            poly = []
-            poly.extend(front_pts)
-            poly.append((front_pts[-1][0], axis_y + half_od * scale))
-            poly.append((rear_pts[0][0], axis_y + half_od * scale))
-            poly.extend(rear_pts)
-            poly.append((rear_pts[-1][0], axis_y - half_od * scale))
-            poly.append((front_pts[0][0], axis_y - half_od * scale))
-
+            x_lbl = 0.5 * (z_front + z_rear)
+            y_lbl = axis_y + 0.55 * half_od * scale
             msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": "2_CONTOUR"})
-            try:
-                h = msp.add_hatch(color=4, dxfattribs={"layer": "4_HATCH"})
-                h.set_pattern_fill("ANSI31", scale=0.7, angle=hatches_angles[c_idx % len(hatches_angles)])
-                h.paths.add_polyline_path(poly, is_closed=True)
-            except Exception:
-                pass
+            _draw_dxf_glass_hatch(
+                msp,
+                poly,
+                angle_deg=45.0 if comp_num % 2 == 1 else 135.0,
+                y_axis_paper=axis_y,
+                keepout_pt=(x_lbl, y_lbl),
+            )
+            msp.add_text(
+                str(comp_num),
+                dxfattribs={"height": 2.6, "style": "GB_NUM", "layer": "6_TEXT"},
+            ).set_placement((x_lbl, y_lbl), align=TextEntityAlignment.MIDDLE_CENTER)
 
+            comp_num += 1
             comp_cur_z = z_rear
 
         elem_end_z = comp_cur_z
-
-        balloon_y = axis_y + half_od * scale + 8.0 + (elem_idx % 2) * 7.0
-        _draw_dxf_balloon(msp, ((elem_start_z + elem_end_z) / 2.0, balloon_y), elem.get("elem_index", elem_idx + 1), ((elem_start_z + elem_end_z) / 2.0, axis_y + half_od * scale))
+        balloon_y = axis_y + max_od * scale * 0.5 + 10.0 + (elem_idx % 2) * 7.5
+        _draw_dxf_balloon(
+            msp,
+            (0.5 * (elem_start_z + elem_end_z), balloon_y),
+            elem.get("elem_index", elem_idx + 1),
+            (0.5 * (elem_start_z + elem_end_z), axis_y + half_od * scale),
+        )
 
         if air_after > 0.05 and elem_idx < len(assembly_elements) - 1:
             next_z = elem_end_z + air_after * scale
-            gap_txt = f"{air_after:.2f}"
-            gap_y_offset = -half_od * scale - 6.0 - (elem_idx % 2) * 6.5
-            _draw_dxf_linear_dimension(msp, (elem_end_z, axis_y), (next_z, axis_y), gap_y_offset, gap_txt, orientation="horizontal")
+            gap_y = axis_y - max_od * scale * 0.5 - (8.0 + (elem_idx % 2) * 6.5)
+            gap_tol = str(drawing_data.get("air_gap_tol", "\u00b10.02") or "")
+            gap_txt = f"{air_after:.2f}{gap_tol}"
+            txt_need_w = _measure_dxf_text_width(gap_txt, 2.55, "GB_NUM") + 5.5
+            _draw_dxf_linear_dim_gbt(
+                msp,
+                (elem_end_z, axis_y),
+                (next_z, axis_y),
+                y_dim=gap_y,
+                text=gap_txt,
+                shoulder_side="right" if air_after * scale < txt_need_w else None,
+            )
 
         cur_z = elem_end_z + air_after * scale
 
     tot_z0 = x_origin
     tot_z1 = cur_z
-    tot_dim_y = -max_od * scale / 2.0 - 22.0
-    tot_txt = f"LENS STACK {total_track:.2f}"
-    _draw_dxf_linear_dimension(msp, (tot_z0, axis_y), (tot_z1, axis_y), tot_dim_y, tot_txt, orientation="horizontal")
+    tot_y = axis_y - max_od * scale * 0.5 - 22.0
+    _draw_dxf_linear_dim_gbt(
+        msp,
+        (tot_z0, axis_y),
+        (tot_z1, axis_y),
+        y_dim=tot_y,
+        text=f"{total_track:.2f}",
+    )
+
+    # Vertical outer-diameter dimension(s) matching eyepiece standard (reusing unified helper)
+    if assembly_elements:
+        od_tol = str(drawing_data.get("od_tolerance", "-0.05") or "")
+        last_el = assembly_elements[-1]
+        last_od = float(last_el.get("od", max_od))
+        last_comp = last_el["components"][-1]
+        last_sag = _calculate_sag(float(last_comp["r2"]), float(last_comp.get("k2", 0.0)), 0.5 * last_od)
+        z_r_rim = tot_z1 + last_sag * scale
+        x_od_r = min(281.0, max(tot_z1, z_r_rim) + 12.0)
+        _draw_dxf_vertical_od_dim(
+            msp, z_r_rim, z_r_rim,
+            axis_y - 0.5 * last_od * scale, axis_y + 0.5 * last_od * scale,
+            x_od_r, f"{last_od:g}", od_tol,
+        )
+
+        first_el = assembly_elements[0]
+        first_od = float(first_el.get("od", max_od))
+        if abs(first_od - last_od) > 0.2:
+            first_comp = first_el["components"][0]
+            first_sag = _calculate_sag(float(first_comp["r1"]), float(first_comp.get("k1", 0.0)), 0.5 * first_od)
+            z_f_rim = x_origin + first_sag * scale
+            x_od_l = max(104.5, min(x_origin, z_f_rim) - 12.0)
+            _draw_dxf_vertical_od_dim(
+                msp, z_f_rim, z_f_rim,
+                axis_y - 0.5 * first_od * scale, axis_y + 0.5 * first_od * scale,
+                x_od_l, f"{first_od:g}", od_tol,
+            )
 
     doc.saveas(filepath)
 
@@ -2272,11 +3380,11 @@ def zemax_export_optical_drawing(
     (GB/T 13323-2009, GB/T 903-2019, GB/T 2831-2009, GB/T 1185-2006) and ISO 10110.
 
     Strictly complies with the mandate:
-    1. Standard title block without company/organization name block ("去掉单位名称").
-    2. Linear dimensions without 'mm' suffix.
-    3. Multi-element cemented components with 45° alternating cross-hatching and element number balloons.
+    1. Standard Chinese GB/T 13323 / GB/T 10609.1 title block with the '单位' label preserved and its value area left completely blank.
+    2. Linear dimensions without 'mm' suffix (unsigned R values and reference (ET) at rim).
+    3. Multi-element cemented components with sparse GB/T optical glass cross-hatching and element numbers.
     4. Optical characteristics table with Δnd, Δ(nF-nC), N, ΔN, ΔR, B, χ, f, Sf, D0.
-    5. Clean leader lines for radii and reference sagitta (sag) in parentheses.
+    5. Radial curvature leaders with center marks '+' and chamfer callouts.
     6. System assembly layout drawing with overall track and air gaps.
 
     Args:
@@ -2323,6 +3431,7 @@ def zemax_export_optical_drawing(
             "iso_3": "3/ 5(2) RMS <= 0.10 um (Surface Form N=5, dN=2)",
             "iso_4": "4/ 3' (Centering Wedge Angle <= 3 arcmin)",
             "iso_5": "5/ 5x0.4; L 1x0.04 (Scratch-Dig 60-40)",
+            "scratch_dig": "60-40",
             "ct_tol": "±0.10",
             "dia_tol": "-0.10",
             "radius_tol": "±0.2%",
@@ -2337,6 +3446,7 @@ def zemax_export_optical_drawing(
             "iso_3": "3/ 3/1(0.5) RMS <= 0.05 um (Surface Form N=3, dN=1)",
             "iso_4": "4/ 1' (Centering Wedge Angle <= 1 arcmin)",
             "iso_5": "5/ 3x0.16; L 1x0.01 (Scratch-Dig 40-20)",
+            "scratch_dig": "40-20",
             "ct_tol": "±0.02",
             "dia_tol": "-0.05",
             "radius_tol": "±0.1%",
@@ -2351,6 +3461,7 @@ def zemax_export_optical_drawing(
             "iso_3": "3/ 1/0.5(0.2) RMS <= 0.02 um (Lambda/20)",
             "iso_4": "4/ 30\" (Centering Wedge Angle <= 30 arcsec)",
             "iso_5": "5/ 1x0.10; L 1x0.005 (Scratch-Dig 20-10 / 10-5)",
+            "scratch_dig": "20-10",
             "ct_tol": "±0.01",
             "dia_tol": "-0.02",
             "radius_tol": "±0.05%",
@@ -2414,10 +3525,44 @@ def zemax_export_optical_drawing(
         }
         cn_type = type_names.get(e_type, "透镜元件")
 
+        primary_wave_idx = 1
+        primary_wave_nm = ""
+        try:
+            zos_api = session.ZOSAPI
+            waves_obj = sys.SystemData.Wavelengths
+            for wi in range(1, int(waves_obj.NumberOfWavelengths) + 1):
+                if waves_obj.GetWavelength(wi).IsPrimary:
+                    primary_wave_idx = wi
+                    primary_wave_nm = f"{float(waves_obj.GetWavelength(wi).Wavelength) * 1000.0:g}"
+                    break
+            if not primary_wave_nm and int(waves_obj.NumberOfWavelengths) >= 1:
+                primary_wave_nm = f"{float(waves_obj.GetWavelength(1).Wavelength) * 1000.0:g}"
+        except Exception:
+            zos_api = None
+
+        elem_efl, elem_bfl = _compute_element_paraxial_efl_bfl(sys, zos_api, elem, primary_wave_idx)
+        efl_str_val = f"{elem_efl:.2f}" if elem_efl is not None else "-"
+        bfl_str_val = f"{elem_bfl:.2f}" if elem_bfl is not None else "-"
+
+        mat_note = (
+            "、".join(f"L{ci + 1}:{c['material']}" for ci, c in enumerate(components))
+            if len(components) > 1
+            else components[0]["material"]
+        )
+        wave_note = (
+            f"5、焦距及后截距对应波长：{primary_wave_nm}nm（设计波段：{metadata['design_wavelengths']}）。"
+            if primary_wave_nm and primary_wave_nm in metadata["design_wavelengths"]
+            else f"5、焦距及后截距对应设计波长：{metadata['design_wavelengths']}。"
+        )
+        # Keep wavelength list visible for multi-wavelength systems
+        if metadata.get("wavelengths_nm") and len(metadata["wavelengths_nm"]) > 1:
+            wave_note = f"5、焦距及后截距对应波长：{primary_wave_nm or metadata['design_wavelengths']}nm（全波段：{metadata['design_wavelengths']}）。"
+
         dwg_data = {
             **metadata,
+            "drawing_date": "",
             "element_index": e_idx,
-            "drawing_name": f"光学元件-{cn_type} {e_idx}",
+            "drawing_name": f"光学元件\n{cn_type} {e_idx}",
             "drawing_code": f"OPT-{active_proj.upper()[:6]}-E{e_idx:02d}",
             "material": mat_str,
             "od": mech_od,
@@ -2435,17 +3580,18 @@ def zemax_export_optical_drawing(
             "delta_R": tols["delta_R"],
             "B": tols["B"],
             "wedge_chi": tols["wedge_chi"],
+            "scratch_dig": tols["scratch_dig"],
             "surface_quality": tols["iso_5"],
             "coating": _element_coating(sys, elem),
-            "efl_str": "-",
-            "bfl_str": "-",
+            "efl_str": efl_str_val,
+            "bfl_str": bfl_str_val,
             "ca_str": f"{max_ca:.1f}",
             "technical_notes": [
-                f"1、材料采用指定牌号优质光学玻璃（{mat_str.replace(chr(10), '、')}）；",
-                "2、未注倒角均为 0.2~0.3×45°，棱边不得崩边；",
-                "3、胶合面胶合层厚度 0.01~0.02mm，采用光学胶；" if len(components) > 1 else "3、机械外圆磨砂加工，表面粗糙度 1.6；",
-                f"4、镀膜：{_element_coating(sys, elem)}；未指定的表面须确认。",
-                f"5、设计波长：{metadata['design_wavelengths']}。"
+                f"1、材料采用指定牌号优质光学玻璃（{mat_note}）；",
+                "2、未注倒角按图注执行，棱边不得崩边；",
+                "3、胶合采用环氧树脂或光敏胶，胶层厚度 0.01~0.02mm；" if len(components) > 1 else "3、机械外圆磨砂加工，表面粗糙度 1.6；",
+                f"4、{_format_chinese_coating_note(sys, elem, metadata['spectral_range'])}，表面光洁度 {tols['B']}（{tols['scratch_dig']}）；",
+                wave_note,
             ],
             "elements": elem_slices,
         }
@@ -2573,6 +3719,7 @@ def zemax_export_optical_drawing(
         pupil_str = "-"
         immersion_str = "空气 (n=1.000)"
         axial_color_str = "-"
+        f_num_computed = "-"
         try:
             zos = session.ZOSAPI
             waves = sys.SystemData.Wavelengths
@@ -2582,7 +3729,7 @@ def zemax_export_optical_drawing(
             if abs(efl_num) > 0.001 and abs(efl_num) < 1e5:
                 efl_str = f"{efl_num:.2f}"
         except Exception:
-            pass
+            efl_num = 0.0
 
         try:
             sd = sys.SystemData
@@ -2590,6 +3737,8 @@ def zemax_export_optical_drawing(
             ap_val = float(sd.Aperture.ApertureValue)
             if ap_type == "ObjectSpaceNA":
                 na_str = f"{ap_val:.2f}"
+            elif ap_type == "ImageSpaceFNum" and ap_val > 0:
+                f_num_computed = f"F/{ap_val:.2f}"
         except Exception:
             pass
 
@@ -2598,6 +3747,8 @@ def zemax_export_optical_drawing(
             expd = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EXPD, 0, 0, 0, 0, 0, 0, 0, 0)
             if 0.001 < abs(expd) < 1e5:
                 pupil_str = f"Φ {abs(expd):.2f} mm"
+                if f_num_computed == "-" and na_str == "-" and abs(efl_num) > 0.001:
+                    f_num_computed = f"F/{abs(efl_num / expd):.2f}"
             axcl = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.AXCL, 0, 0, 0, 0, 0, 0, 0, 0)
             if abs(axcl) < 1e3:
                 axial_color_str = f"{abs(axcl) * 1000.0:.1f} μm"
@@ -2625,31 +3776,44 @@ def zemax_export_optical_drawing(
             pass
 
         proj_clean = active_proj.replace('_', ' ').title()
-        dwg_name_title = f"{proj_clean}\n光学系统总装配合图"
+        dwg_name_title = f"{proj_clean}\n光学系统总装图"
+        bfl_val = float(metadata.get("rear_image_gap_mm") or 0.0)
+        bfl_str = f"{bfl_val:.2f}" if bfl_val > 0.001 else "-"
+        grade_l = str(iso_tolerance_grade or "precision").lower()
+        gap_tol_str = "\u00b10.01" if "high" in grade_l else ("\u00b10.05" if "comm" in grade_l else "\u00b10.02")
+        coax_tol_str = "0.002" if "high" in grade_l else ("0.010" if "comm" in grade_l else "0.005")
+        para_tol_str = "0.001" if "high" in grade_l else ("0.008" if "comm" in grade_l else "0.003")
 
         asm_dwg_data = {
             **metadata,
+            "drawing_date": "",
             "drawing_name": dwg_name_title,
             "drawing_code": f"ASM-{active_proj.upper()[:8]}-00",
             "drawing_scale": "2:1",
             "od": max(e["od"] for e in assembly_elements),
+            "od_tolerance": tols["dia_tol"],
+            "air_gap_tol": gap_tol_str,
+            "coax_tol": coax_tol_str,
+            "para_tol": para_tol_str,
             "na_str": na_str,
+            "f_num_str": f"NA {na_str}" if na_str != "-" else f_num_computed,
             "efl_str": efl_str,
+            "bfl_str": bfl_str,
             "fov_str": fov_str,
             "pupil_str": pupil_str,
             "immersion_str": immersion_str,
             "coverglass_str": "-",
             "rms_wavefront": "-",
             "axial_color": axial_color_str,
-            "concentricity": "< 0.003",
+            "concentricity": f"< {coax_tol_str}",
             "barrel_fit": "g6/H7",
             "assembly_elements": assembly_elements,
             "technical_notes": [
-                "1、本图为光学系统总装配合图，各元件具体公差见对应零件图样；",
-                "2、装配基准：以镜筒内孔定位基准面为准，各透镜同轴度允差 ≤ 0.003mm；",
-                "3、空气间隔由精密金属隔圈保证，隔圈端面平行度 ≤ 0.002mm；",
-                f"4、胶合件在装配前须进行同轴对中胶合检验，偏角差 χ ≤ {tols['wedge_chi']}；",
-                "5、全系统在参考工作温度 20℃ ± 2℃ 下总装校验。"
+                f"1、波段：{metadata['spectral_range']}，{f_num_computed}，{fov_str}；",
+                f"2、焦距 f'={efl_str}mm，后截距 BFL={bfl_str}mm；",
+                f"3、各镜片光轴同轴度 ≤ {coax_tol_str}mm，隔圈平行度 ≤ {para_tol_str}mm；",
+                f"4、胶合件须定心对中，偏角差 χ ≤ {tols['wedge_chi']}；",
+                "5、镜筒内壁消光发黑处理，工作温度：20℃±2℃。"
             ]
         }
 
@@ -2690,7 +3854,7 @@ def zemax_export_optical_drawing(
         "output_directory": output_dir,
         "standard": "GB/T 13323-2009 & ISO 10110",
         "tolerance_grade": iso_tolerance_grade,
-        "title_block_specification": "Complies strictly with GB/T 13323-2009 standard, company/unit name field removed ('去掉单位名称').",
+        "title_block_specification": "Complies strictly with GB/T 13323-2009 / GB/T 10609.1 standard; '单位' cell header preserved with value left completely empty.",
         "drawings_count": len(generated_drawings),
         "element_drawings": generated_drawings,
         "assembly_drawing": assembly_drawing_info,

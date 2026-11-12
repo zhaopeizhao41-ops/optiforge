@@ -69,6 +69,89 @@ def _is_air(surface):
     return surface["material"].strip().upper() in {"", "AIR"}
 
 
+def _aperture_epd(model):
+    """Entrance pupil diameter when the system states it, else None."""
+    settings = model.get("settings") or {}
+    try:
+        value = float(settings.get("aperture_value"))
+    except (TypeError, ValueError):
+        return None
+    if "pupil" not in str(settings.get("aperture_type", "")).lower():
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def derive_display_apertures(model):
+    """Copy the model with a display-only semi-diameter where a surface has none.
+
+    A freshly written prescription often reports SemiDiameter = 0 until the
+    designer sets apertures. The validation layout (``build_layout``) must keep
+    rejecting those surfaces, so this only feeds a clearly labelled display
+    picture: nothing here writes to the model or the native system, and every
+    derived value is tagged so the picture cannot pass for a measured aperture.
+    """
+    surfaces = [dict(surface) for surface in model.get("surfaces") or []]
+    if len(surfaces) < 3:
+        return None, []
+    interior = surfaces[1:-1]
+    valid = [float(s["semi_diameter"]) for s in interior
+             if isinstance(s.get("semi_diameter"), (int, float))
+             and math.isfinite(float(s["semi_diameter"])) and float(s["semi_diameter"]) > 0]
+    epd = _aperture_epd(model)
+    base = None
+    reason = None
+    if valid:
+        base = max(valid)
+        reason = "已设定口径的最大值"
+    if epd is not None and (base is None or epd / 2 > base):
+        base, reason = epd / 2, "入瞳直径 EPD/2"
+    if base is None:
+        radii = [abs(float(s["radius"])) for s in interior
+                 if isinstance(s.get("radius"), (int, float))
+                 and math.isfinite(float(s["radius"])) and float(s["radius"]) != 0]
+        if radii:
+            base, reason = 0.25 * max(radii), "最大曲率半径的 25%"
+    if base is None or not math.isfinite(base) or base <= 0:
+        return None, []
+    derived = []
+    for surface in interior:
+        half = surface.get("semi_diameter")
+        if isinstance(half, (int, float)) and math.isfinite(float(half)) and float(half) > 0:
+            continue
+        surface["semi_diameter"] = float(base)
+        surface["semi_diameter_derived"] = True
+        derived.append({"index": surface.get("index"), "semi_diameter": float(base)})
+    interior_valid = [s for s in interior if not s.get("semi_diameter_derived")]
+    image = surfaces[-1]
+    if not (isinstance(image.get("semi_diameter"), (int, float))
+            and math.isfinite(float(image["semi_diameter"])) and float(image["semi_diameter"]) > 0):
+        maximum = max((float(s["semi_diameter"]) for s in interior_valid), default=base)
+        image["semi_diameter"] = maximum * .6
+        image["semi_diameter_derived"] = True
+    return ({**model, "surfaces": surfaces}, derived) if derived else (None, [])
+
+
+def derived_display_layout(model, issues):
+    """Display picture built from derived apertures, or None when nothing is missing.
+
+    Returns ``(layout, derived)``. The layout is marked with its own source so the
+    UI never presents it as a measured or native section.
+    """
+    derived_model, derived = derive_display_apertures(model)
+    if derived_model is None:
+        return None, []
+    layout = build_layout(derived_model)
+    if layout.get("status") != "ready":
+        return None, derived
+    layout["source"] = "derived-display-aperture"
+    layout["aperture_basis"] = "由 " + "、".join(
+        f'S{item["index"]}={item["semi_diameter"]:.4g}' for item in derived) + " 推导"
+    layout["issues"] = [f'显示用半口径推导：S{item["index"]}（仅作图，未写入模型与光线追迹）'
+                        for item in derived]
+    layout["validation_issues"] = list(issues)
+    return layout, derived
+
+
 def _check_clearances(surfaces, contours):
     # A Standard row in air on both sides is a reference/stop plane, not a
     # glass boundary. Keep it in the drawing, but check across it so that a
@@ -213,6 +296,13 @@ def capture_snapshot():
         from core.workbench_display import native_display_layout
         display = native_display_layout(system, model)
         display["validation_issues"] = layout["issues"]
+        if display.get("status") != "ready":
+            # A fresh prescription usually reports SemiDiameter = 0 until apertures
+            # are set. Draw a clearly labelled picture from derived values instead of
+            # leaving the workbench blank until the end of the run.
+            fallback, _ = derived_display_layout(model, layout["issues"])
+            if fallback is not None:
+                display = fallback
         safe_model = json_safe(model)
         from core.workbench_trace import native_field_table
         fields, normalization = native_field_table(system)

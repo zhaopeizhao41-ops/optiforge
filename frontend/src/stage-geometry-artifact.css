@@ -1,0 +1,29 @@
+#optiforge-soft-studio .stage-geometry-artifact { min-width:0; border-top:1px solid var(--st-line); margin-top:18px; padding-top:2px; }
+#optiforge-soft-studio .stage-geometry-artifact p { font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-actions,
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-camera { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:14px 0; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-actions .studio-button { min-height:40px; max-width:100%; padding:9px 13px; border:1px solid var(--st-line); border-radius:12px; background:color-mix(in srgb,var(--st-text) 4%,transparent); font-size:14px; line-height:20px; white-space:normal; }
+#optiforge-soft-studio .stage-geometry-artifact .studio-button:focus-visible { outline:2px solid var(--st-edge); outline-offset:3px; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-figure { min-width:0; margin:16px 0 0; }
+#optiforge-soft-studio .stage-geometry-artifact figcaption { display:grid; gap:5px; font-size:14px; line-height:1.6; }
+#optiforge-soft-studio .stage-geometry-artifact figcaption strong { font-weight:500; color:var(--st-text); }
+#optiforge-soft-studio .stage-geometry-artifact figcaption span { font-size:13px; color:var(--st-muted); }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-canvas { position:relative; height:280px; min-width:0; overflow:hidden; border-radius:12px; background:color-mix(in srgb,var(--st-text) 2%,transparent); }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-canvas .studio-scene { position:relative; inset:auto; width:100%; height:100%; min-height:0; margin:0; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-camera > span { min-width:44px; text-align:center; font-size:13px; color:var(--st-muted); }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-source { display:grid; gap:9px; min-width:0; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-source > div { display:grid; grid-template-columns:minmax(70px,.65fr) minmax(0,1.5fr); gap:10px; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-source dd { min-width:0; margin:0; overflow-wrap:anywhere; }
+#optiforge-soft-studio .stage-geometry-artifact .stage-geometry-issues { margin-top:10px; }
+@media(max-width:600px) {
+  #optiforge-soft-studio .stage-geometry-artifact .stage-geometry-canvas { height:240px; }
+  #optiforge-soft-studio .stage-geometry-artifact .stage-geometry-actions .studio-button,
+  #optiforge-soft-studio .stage-geometry-artifact .stage-geometry-camera .studio-button { min-height:44px; min-width:44px; }
+}
+#optiforge-soft-studio .stage-quality-artifact h4 { display:flex; align-items:center; gap:8px; }
+#optiforge-soft-studio .stage-quality-figure { margin:14px 0 0; min-width:0; }
+#optiforge-soft-studio .stage-quality-figure figcaption { display:grid; gap:5px; font-size:14px; }
+#optiforge-soft-studio .stage-quality-figure figcaption span:not(.analysis-verdict) { font-size:12px; color:var(--st-muted); }
+#optiforge-soft-studio .stage-quality-figure .analysis-tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
+#optiforge-soft-studio .stage-quality-figure .analysis-tiles strong { font-size:18px; }
+#optiforge-soft-studio .stage-quality-verdicts > div { display:grid; grid-template-columns:auto auto 1fr; gap:8px; align-items:center; font-size:12px; padding:6px 0; border-top:1px solid var(--st-line); }

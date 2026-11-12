@@ -84,8 +84,11 @@ from tools.cad_export_tools import (
     zemax_export_prescription_for_cad,
 )
 from tools.workbench_tools import zemax_get_workbench_snapshot
+from tools.collaboration_tools import (zemax_design_workflow, zemax_list_design_tasks,
+    zemax_claim_design_task, zemax_update_design_task)
 
 __all__ = [
+    "zemax_design_workflow", "zemax_list_design_tasks", "zemax_claim_design_task", "zemax_update_design_task",
     "zemax_get_workbench_snapshot",
     "zemax_system_info",
     "zemax_new_file",

@@ -10,11 +10,12 @@ class ToolEffect:
 
     @property
     def protected(self):
-        return self.kind in {"replace", "modify", "context", "calculate", "trace"}
+        return self.kind in {"replace", "modify", "context", "calculate", "trace", "workflow"}
 
 
 # Metadata/knowledge calls must not open an optical session merely to publish a task.
-KNOWLEDGE = {"zemax_audit_requirements", "zemax_lookup_manual", "zemax_list_projects"}
+KNOWLEDGE = {"zemax_audit_requirements", "zemax_lookup_manual", "zemax_list_projects",
+             "zemax_design_workflow", "zemax_list_design_tasks", "zemax_claim_design_task", "zemax_update_design_task"}
 CONTEXT_READS = {"zemax_get_project", "get_current_design_proposal"}
 MODEL_READS = {"zemax_system_info", "zemax_get_system_data", "zemax_get_workbench_snapshot", "zemax_mce_get"}
 NATIVE_READS = {
@@ -43,7 +44,9 @@ CALCULATIONS = {
 
 TOOL_EFFECTS = {}
 for names, effect in (
-    (KNOWLEDGE, ToolEffect()), (CONTEXT_READS, ToolEffect(observes_context=True)),
+    (KNOWLEDGE - {"zemax_design_workflow", "zemax_claim_design_task", "zemax_update_design_task"}, ToolEffect()),
+    ({"zemax_design_workflow", "zemax_claim_design_task", "zemax_update_design_task"}, ToolEffect("workflow")),
+    (CONTEXT_READS, ToolEffect(observes_context=True)),
     (MODEL_READS, ToolEffect(native=True, observes_context=True)), (NATIVE_READS, ToolEffect(native=True)),
     (REPLACEMENTS, ToolEffect("replace", True)), (MUTATIONS, ToolEffect("modify", True)),
     (CONTEXT_WRITES, ToolEffect("context")), (CALCULATIONS, ToolEffect("calculate", True)),

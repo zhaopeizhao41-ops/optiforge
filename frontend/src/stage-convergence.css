@@ -1,0 +1,72 @@
+/* Field series: validated categorical slots (blue, orange, aqua) with direct labels,
+   distinct markers and a table view. Stage ramp: one-hue blue, later = stronger. */
+#optiforge-soft-studio .stage-convergence {
+  --conv-series-1:#2a78d6; --conv-series-2:#eb6834; --conv-series-3:#1baf7a;
+  --conv-stage-1:#86b6ef; --conv-stage-2:#5598e7; --conv-stage-3:#256abf; --conv-stage-4:#0d366b;
+  margin-top:24px; padding:20px; border:1px solid var(--st-line); border-radius:18px; min-width:0;
+}
+#optiforge-soft-studio[data-theme="dark"] .stage-convergence {
+  --conv-series-1:#3987e5; --conv-series-2:#d95926; --conv-series-3:#199e70;
+  --conv-stage-1:#256abf; --conv-stage-2:#3987e5; --conv-stage-3:#6da7ec; --conv-stage-4:#b7d3f6;
+}
+#optiforge-soft-studio .convergence-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+#optiforge-soft-studio .convergence-heading h3 { margin:0 0 6px; font-size:16px; font-weight:500; }
+#optiforge-soft-studio .convergence-heading p, #optiforge-soft-studio .stage-convergence > p { font-size:13px; line-height:1.7; color:var(--st-muted); margin:0; }
+#optiforge-soft-studio .convergence-heading .studio-button { min-height:40px; padding:9px 14px; border:1px solid var(--st-line); border-radius:12px; background:color-mix(in srgb,var(--st-text) 4%,transparent); font-size:14px; }
+#optiforge-soft-studio .convergence-engine { margin-top:14px !important; }
+#optiforge-soft-studio .convergence-errors { margin-top:12px; padding:10px 12px; border-radius:10px; background:color-mix(in srgb,var(--st-text) 4%,transparent); font-size:13px; }
+#optiforge-soft-studio .convergence-lens { margin:8px 0 0; min-width:0; }
+#optiforge-soft-studio .convergence-lens figcaption, #optiforge-soft-studio .convergence-chart figcaption { font-size:14px; color:var(--st-text); margin-bottom:8px; }
+#optiforge-soft-studio .convergence-chart figcaption span { color:var(--st-muted); }
+#optiforge-soft-studio .convergence-lens svg { width:100%; height:auto; display:block; border-radius:12px; background:color-mix(in srgb,var(--st-text) 2%,transparent); }
+#optiforge-soft-studio .convergence-axis-line { stroke:var(--st-line); stroke-width:1; }
+#optiforge-soft-studio .convergence-stage path { fill:none; stroke-width:1.6; stroke-linejoin:round; transition:opacity .15s; }
+#optiforge-soft-studio .convergence-stage line { stroke-width:1.6; }
+#optiforge-soft-studio .convergence-stage.is-stage-4 path, #optiforge-soft-studio .convergence-stage.is-stage-4 line { stroke-width:2.2; }
+#optiforge-soft-studio .convergence-stage.is-dimmed { opacity:.15; }
+#optiforge-soft-studio .convergence-stage.is-stage-1 { stroke:var(--conv-stage-1); }
+#optiforge-soft-studio .convergence-stage.is-stage-2 { stroke:var(--conv-stage-2); }
+#optiforge-soft-studio .convergence-stage.is-stage-3 { stroke:var(--conv-stage-3); }
+#optiforge-soft-studio .convergence-stage.is-stage-4 { stroke:var(--conv-stage-4); }
+#optiforge-soft-studio .convergence-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:8px; font-size:13px; color:var(--st-muted); }
+#optiforge-soft-studio .convergence-legend span, #optiforge-soft-studio .convergence-legend .studio-button { display:inline-flex; align-items:center; gap:6px; }
+#optiforge-soft-studio .convergence-legend .studio-button { min-height:32px; padding:4px 10px; border-radius:999px; color:var(--st-muted); }
+#optiforge-soft-studio .convergence-legend .studio-button[aria-pressed="true"] { background:var(--st-accent-soft); color:var(--st-text); }
+#optiforge-soft-studio .stage-convergence i { display:inline-block; width:14px; height:3px; border-radius:2px; }
+#optiforge-soft-studio .stage-convergence i.is-1 { background:var(--conv-series-1); }
+#optiforge-soft-studio .stage-convergence i.is-2 { background:var(--conv-series-2); }
+#optiforge-soft-studio .stage-convergence i.is-3 { background:var(--conv-series-3); }
+#optiforge-soft-studio .stage-convergence i.is-stage-1 { background:var(--conv-stage-1); }
+#optiforge-soft-studio .stage-convergence i.is-stage-2 { background:var(--conv-stage-2); }
+#optiforge-soft-studio .stage-convergence i.is-stage-3 { background:var(--conv-stage-3); }
+#optiforge-soft-studio .stage-convergence i.is-stage-4 { background:var(--conv-stage-4); }
+#optiforge-soft-studio .convergence-grid-charts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:22px; }
+#optiforge-soft-studio .convergence-chart { position:relative; margin:0; min-width:0; }
+#optiforge-soft-studio .convergence-chart svg { width:100%; height:auto; display:block; overflow:visible; touch-action:none; }
+#optiforge-soft-studio .convergence-chart.is-empty p { font-size:13px; color:var(--st-muted); }
+#optiforge-soft-studio .convergence-grid line { stroke:var(--st-line); stroke-width:1; }
+#optiforge-soft-studio .convergence-grid text, #optiforge-soft-studio .convergence-axis { fill:var(--st-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+#optiforge-soft-studio .convergence-reference line { stroke:var(--st-muted); stroke-width:1; stroke-dasharray:4 4; }
+#optiforge-soft-studio .convergence-reference text { fill:var(--st-muted); font-size:11px; }
+#optiforge-soft-studio .convergence-crosshair { stroke:var(--st-edge); stroke-width:1; }
+#optiforge-soft-studio .convergence-series path { stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+#optiforge-soft-studio .convergence-series :is(circle,rect,path:not([fill="none"])) { stroke:var(--st-panel); stroke-width:2; }
+#optiforge-soft-studio .convergence-series.is-1 path[fill="none"] { stroke:var(--conv-series-1); }
+#optiforge-soft-studio .convergence-series.is-2 path[fill="none"] { stroke:var(--conv-series-2); }
+#optiforge-soft-studio .convergence-series.is-3 path[fill="none"] { stroke:var(--conv-series-3); }
+#optiforge-soft-studio .convergence-series.is-1 :is(circle,rect,path:not([fill="none"])) { fill:var(--conv-series-1); }
+#optiforge-soft-studio .convergence-series.is-2 :is(circle,rect,path:not([fill="none"])) { fill:var(--conv-series-2); }
+#optiforge-soft-studio .convergence-series.is-3 :is(circle,rect,path:not([fill="none"])) { fill:var(--conv-series-3); }
+#optiforge-soft-studio .convergence-label { fill:var(--st-text); font-size:11px; }
+#optiforge-soft-studio .convergence-tooltip { position:absolute; top:28px; right:4px; display:grid; gap:2px; padding:8px 10px; border-radius:10px; background:var(--st-panel); box-shadow:var(--st-popover-shadow); font-size:12px; pointer-events:none; }
+#optiforge-soft-studio .convergence-tooltip.is-left { right:auto; left:56px; }
+#optiforge-soft-studio .convergence-tooltip span { display:flex; align-items:center; gap:6px; font-variant-numeric:tabular-nums; }
+#optiforge-soft-studio .convergence-note { font-size:12px !important; color:var(--st-muted); margin:6px 0 0; }
+#optiforge-soft-studio .convergence-table { margin-top:16px; font-size:13px; }
+#optiforge-soft-studio .convergence-table summary { cursor:pointer; color:var(--st-muted); min-height:32px; }
+#optiforge-soft-studio .convergence-table td, #optiforge-soft-studio .convergence-table th { font-variant-numeric:tabular-nums; white-space:nowrap; }
+@media(max-width:1000px) { #optiforge-soft-studio .convergence-grid-charts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) {
+  #optiforge-soft-studio .stage-convergence { padding:16px; }
+  #optiforge-soft-studio .convergence-grid-charts { grid-template-columns:minmax(0,1fr); }
+}

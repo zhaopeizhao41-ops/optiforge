@@ -18,6 +18,7 @@ import re
 import tempfile
 import ntpath
 from core.zos_session import synchronized
+from core.design_workflow import project_selection
 from typing import Any, Dict, List, Optional
 
 WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -129,6 +130,7 @@ def get_active_project_name() -> str:
 
 
 @synchronized
+@project_selection
 def set_active_project(
     project_name: str,
     description: Optional[str] = None,

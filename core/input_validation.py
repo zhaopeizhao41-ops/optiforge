@@ -71,7 +71,13 @@ def validate_arguments(name, args):
             raise ValueError('user_confirmed_to_simulate must be boolean.')
     elif name == "zemax_export_optical_drawing":
         _validate_path_argument(args.get("output_dir"), "output_dir", allow_none=True)
+        _validate_path_argument(args.get("overrides_file"), "overrides_file", allow_none=True)
         _validate_project_argument(args.get("project_name"))
+        if str(args.get("od_source", "standard")).lower() not in ("standard", "model"):
+            raise ValueError("od_source must be 'standard' or 'model'.")
+        for key in ("first_surface", "last_surface"):
+            if args.get(key) is not None and (isinstance(args[key], bool) or not isinstance(args[key], int) or args[key] < 0):
+                raise ValueError(f"{key} must be a non-negative surface index.")
     elif name == "zemax_export_prescription_for_cad":
         _validate_path_argument(args.get("output_filepath"), "output_filepath", allow_none=True)
         _validate_project_argument(args.get("project_name"))

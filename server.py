@@ -1588,6 +1588,11 @@ def zemax_export_optical_drawing(
     iso_tolerance_grade: str = "Precision",
     generate_2d_plot: bool = True,
     export_dxf: bool = True,
+    od_source: str = "standard",
+    first_surface: Optional[int] = None,
+    last_surface: Optional[int] = None,
+    split_cemented: bool = False,
+    overrides_file: Optional[str] = None,
 ) -> str:
     """
     Generate standard optical engineering manufacturing drawings complying with Chinese National Standards
@@ -1602,6 +1607,14 @@ def zemax_export_optical_drawing(
         iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
         generate_2d_plot: If True, renders dimensioned 2D cross-section engineering drawing via matplotlib.
         export_dxf: If True, generates standard editable AutoCAD .dxf drawings via ezdxf.
+        od_source: 'standard' (clear aperture + 2 mm rounded up to a stock diameter) or 'model' (lens outer
+            diameter = mechanical semi-diameters of the lens file; a concave face with a smaller clear
+            semi-diameter is drawn as sphere + flat land with its polished diameter).
+        first_surface / last_surface: draw only the lens group inside this surface range, e.g. a scan lens
+            in front of an intermediate image; last_surface also ends the rear gap of the assembly drawing.
+        split_cemented: also write one part drawing per lens of a cemented group (drawing_element_3a, 3b ...).
+        overrides_file: UTF-8 JSON file {"common": {...}, "elements": {"1": {...}, "3a": {...}}, "assembly": {...}}
+            that replaces generated values (real tolerances, per-surface clear apertures, notes, names).
     """
     res = _export_optical_drawing(
         element_index=element_index,
@@ -1610,6 +1623,11 @@ def zemax_export_optical_drawing(
         iso_tolerance_grade=iso_tolerance_grade,
         generate_2d_plot=generate_2d_plot,
         export_dxf=export_dxf,
+        od_source=od_source,
+        first_surface=first_surface,
+        last_surface=last_surface,
+        split_cemented=split_cemented,
+        overrides=overrides_file,
     )
     return json.dumps(res, ensure_ascii=False, indent=2)
 

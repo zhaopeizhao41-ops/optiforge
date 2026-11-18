@@ -4,6 +4,7 @@ Enables export of native 3D CAD files (STEP, IGES, SAT, STL) and ISO 10110 optic
 providing direct optomechanical linkage with SolidWorks MCP.
 """
 
+import copy
 import json
 import math
 import os
@@ -297,6 +298,17 @@ def _is_lens_medium(material: str) -> bool:
     return key not in NON_GLASS_MEDIA and key not in MIRROR_MEDIA
 
 
+def _mechanical_semi_diameter(surface) -> float:
+    """Lens-edge semi-diameter of a surface: the mechanical semi-diameter when the model
+    defines one, otherwise the clear semi-diameter (older files, mocks)."""
+    clear = float(surface.SemiDiameter)
+    try:
+        mech = float(surface.MechanicalSemiDiameter)
+    except (AttributeError, TypeError, ValueError):
+        return clear
+    return mech if math.isfinite(mech) and mech > clear else clear
+
+
 def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
     """Helper to parse sequential LDE surfaces into discrete optical elements."""
     num_surfs = sys.LDE.NumberOfSurfaces
@@ -320,6 +332,7 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
                 r_front = float(s_obj.Radius)
                 thick = float(s_obj.Thickness)
                 sd_front = float(s_obj.SemiDiameter)
+                msd_front = _mechanical_semi_diameter(s_obj)
                 conic = float(s_obj.Conic)
                 stype = str(s_obj.Type)
 
@@ -328,11 +341,13 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
                     s_rear_obj = sys.LDE.GetSurfaceAt(next_s)
                     r_rear = float(s_rear_obj.Radius)
                     sd_rear = float(s_rear_obj.SemiDiameter)
+                    msd_rear = _mechanical_semi_diameter(s_rear_obj)
                     k_rear = float(s_rear_obj.Conic)
                     m_next = str(s_rear_obj.Material).strip()
                 else:
                     r_rear = 0.0
                     sd_rear = sd_front
+                    msd_rear = msd_front
                     k_rear = 0.0
                     m_next = ""
 
@@ -345,6 +360,8 @@ def _extract_lens_elements(sys) -> List[Dict[str, Any]]:
                     "radius_rear": r_rear,
                     "semi_diameter_front": sd_front,
                     "semi_diameter_rear": sd_rear,
+                    "mech_semi_diameter_front": msd_front,
+                    "mech_semi_diameter_rear": msd_rear,
                     "conic_front": conic,
                     "conic_rear": k_rear,
                     "surface_type": stype,
@@ -499,18 +516,26 @@ def _postprocess_step(path: str, part_names: Dict[Tuple[int, int], str], base_na
     return {"solids": solids, "faces": faces, "part_names": parts}
 
 
-def _system_drawing_metadata(sys, zos, elements) -> Dict[str, Any]:
-    """Read shared optical facts once; distances are not interchangeable."""
+def _system_drawing_metadata(sys, zos, elements, image_surface: Optional[int] = None) -> Dict[str, Any]:
+    """Read shared optical facts once; distances are not interchangeable.
+
+    image_surface ends the drawn range early (a group in front of an intermediate image);
+    the rear gap is then measured to that surface instead of the final image."""
     waves = sys.SystemData.Wavelengths
     wavelengths_nm = [float(waves.GetWavelength(i).Wavelength) * 1000.0
                       for i in range(1, int(waves.NumberOfWavelengths) + 1)]
     first = elements[0]["surface_start"]
     rear = elements[-1]["surface_end"]
     image = int(sys.LDE.NumberOfSurfaces) - 1
+    if image_surface is not None:
+        image = max(rear, min(image, int(image_surface)))
 
     def thickness_sum(start, end):
         values = [float(sys.LDE.GetSurfaceAt(i).Thickness) for i in range(start, end)]
         return sum(values) if all(math.isfinite(v) and abs(v) < 1e10 for v in values) else None
+
+    track = float(sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.TOTR, 0, 0, 0, 0, 0, 0, 0, 0))
+    track = track if math.isfinite(track) else None
 
     # A thickness sum is a physical axial separation only in a centered,
     # forward-going system. Do not label folds/decenters as mechanical distances.
@@ -523,20 +548,22 @@ def _system_drawing_metadata(sys, zos, elements) -> Dict[str, Any]:
                       for kind, axes in (("Decenter", "XY"), ("Tilt", "XYZ"))
                       for axis in axes]
         thickness = float(surface.Thickness)
-        if (str(surface.Type) not in {"Standard", "EvenAspheric", "OddAspheric"}
+        if (str(surface.Type) not in {"Standard", "EvenAspheric", "OddAspheric", "Paraxial"}
                 or str(surface.Material).upper() == "MIRROR"
                 or any(v != 0 for v in transforms) or thickness < 0
                 or (i > 0 and not math.isfinite(thickness))):
             centered = False
 
+    if image_surface is not None and centered:
+        # a group drawn on its own: length from its first vertex to the end of the range
+        group_track = thickness_sum(first, image)
+        track = group_track if group_track is not None else track
     stack = thickness_sum(first, rear) if centered else None
     rear_gap = thickness_sum(rear, image) if centered else None
     object_t = float(sys.LDE.GetSurfaceAt(0).Thickness)
     infinite_object = object_t > 1e10
     wd = thickness_sum(0, first) if centered and not infinite_object else None
     wd_str = "Infinity (object at infinity)" if infinite_object else f"{wd:.4f}" if wd is not None else "Not determined"
-    track = float(sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.TOTR, 0, 0, 0, 0, 0, 0, 0, 0))
-    track = track if math.isfinite(track) else None
     return {
         "drawing_date": date.today().strftime("%Y/%m/%d"),
         "wavelengths_nm": wavelengths_nm,
@@ -1773,7 +1800,7 @@ def _draw_dxf_title_block(msp: Any, data: Dict[str, Any], is_assembly: bool = Fa
 def _wrap_cad_note_line(note: str, max_units: float = 28.5) -> List[str]:
     """Wrap a Chinese/ASCII mixed note cleanly without breaking short numbers or trailing punctuation."""
     no_line_start = set("，。；：、,.!?;:）)％%")
-    tokens = re.findall(r"[A-Za-z0-9.\-_+/~≤≥±°℃]+|.", note)
+    tokens = re.findall(r"[A-Za-z0-9.\-_+/~≤≥±°℃Φ#]+|.", note)
     lines: List[str] = []
     cur = ""
     cur_u = 0.0
@@ -1791,18 +1818,41 @@ def _wrap_cad_note_line(note: str, max_units: float = 28.5) -> List[str]:
     return lines or [""]
 
 
+def _layout_technical_notes(notes: List[str], x: float = 28.5, y_top: float = 95.0) -> Tuple[float, List[List[str]]]:
+    """Text height and wrapped lines of the notes block.
+
+    A short block keeps the template layout (2.75 mm text, wide lines above the title block).
+    A block that would run down beside the title block (its top edge is Y=54, left edge X=112)
+    is re-wrapped to stay left of X=109 and shrunk until it ends above the frame."""
+    def wrap(height: float, max_units: float) -> List[List[str]]:
+        return [[ln for seg in note.split("\n") for ln in _wrap_cad_note_line(seg, max_units=max_units)] for note in notes]
+
+    def block_height(height: float, wrapped: List[List[str]]) -> float:
+        return sum(len(lines) * 1.6 * height + (1.2 / 2.75) * height for lines in wrapped)
+
+    wide = wrap(2.75, 28.5)
+    if y_top - block_height(2.75, wide) >= 57.0:
+        return 2.75, wide
+    em_per_height = 1.47                      # paper width of one full-width character per mm of text height
+    for height in (2.75, 2.5, 2.3, 2.1, 1.9, 1.75):
+        narrow = wrap(height, (109.0 - x) / (em_per_height * height))
+        if y_top - block_height(height, narrow) >= 8.0:
+            return height, narrow
+    return 1.75, narrow
+
+
 def _draw_dxf_technical_notes(msp: Any, notes: List[str], x: float = 28.5, y_top: float = 95.0):
     """Draw Chinese GB/T 13323 numbered technical notes in the bottom-left zone."""
+    height, wrapped = _layout_technical_notes(notes, x=x, y_top=y_top)
     cur_y = y_top
-    for note in notes:
-        for seg in note.split("\n"):
-            for line in _wrap_cad_note_line(seg, max_units=28.5):
-                msp.add_text(
-                    line,
-                    dxfattribs={"height": 2.75, "style": "GB_SONG", "layer": "6_TEXT"},
-                ).set_placement((x, cur_y), align=TextEntityAlignment.TOP_LEFT)
-                cur_y -= 4.4
-        cur_y -= 1.2
+    for lines in wrapped:
+        for line in lines:
+            msp.add_text(
+                line,
+                dxfattribs={"height": height, "style": "GB_SONG", "layer": "6_TEXT"},
+            ).set_placement((x, cur_y), align=TextEntityAlignment.TOP_LEFT)
+            cur_y -= 1.6 * height
+        cur_y -= (1.2 / 2.75) * height
 
 
 
@@ -2048,7 +2098,10 @@ def _draw_dxf_optical_table(msp: Any, data: Dict[str, Any], x_start: float = 25.
                 attrs["oblique"] = 12.0
             msp.add_text(lbl, dxfattribs=attrs).set_placement((cx_c1, ym), align=TextEntityAlignment.MIDDLE_CENTER)
         if val:
-            msp.add_text(str(val), dxfattribs={"height": 2.6, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
+            v_txt = str(val)
+            v_units = sum(1.12 if ord(ch) > 127 else 0.62 for ch in v_txt)
+            v_h = max(1.5, min(2.6, (col2_w - 2.0) / max(v_units, 1e-6)))
+            msp.add_text(v_txt, dxfattribs={"height": v_h, "style": "GB_SONG", "layer": "6_TEXT"}).set_placement(
                 (cx_c2, ym), align=TextEntityAlignment.MIDDLE_CENTER
             )
 
@@ -2078,7 +2131,9 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 25
             desc = f"胶合组 G{e_idx}"
         rows_bom.append((str(e_idx), desc, mat_str, "1"))
 
-    rows_bom.append((str(len(rows_bom) + 1), "镜筒及隔圈", "6061-T6", "1"))
+    # the barrel row is a placeholder of the template; drawings of bare optics switch it off
+    if data.get("bom_show_barrel", True):
+        rows_bom.append((str(len(rows_bom) + 1), "镜筒及隔圈", "6061-T6", "1"))
 
     h_top_hdr = 8.5
     h_sub_hdr = 6.0
@@ -2117,7 +2172,7 @@ def _draw_dxf_assembly_table(msp: Any, data: Dict[str, Any], x_start: float = 25
     # Row 0: 180-deg rotated code header
     msp.add_line((x_start, y_e_tophdr), (x_end, y_e_tophdr), dxfattribs={"layer": "1_TABLE"})
     msp.add_text(
-        "(图样代号)(存储代号)",
+        str(data.get("table_header_code", "(图样代号)(存储代号)")),
         dxfattribs={"height": 2.9, "style": "GB_SONG", "layer": "6_TEXT", "rotation": 180.0},
     ).set_placement((cx_all, 0.5 * (y_top + y_e_tophdr)), align=TextEntityAlignment.MIDDLE_CENTER)
 
@@ -2466,10 +2521,14 @@ def _draw_dxf_vertical_od_dim(
             od_main,
             dxfattribs={"height": h_main, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
         ).set_placement((x_dim - 0.9, y_mid - 1.0), align=TextEntityAlignment.BOTTOM_RIGHT)
-        msp.add_text(
-            od_tol,
-            dxfattribs={"height": h_tol, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
-        ).set_placement((x_dim - 0.65, y_mid + 1.0), align=TextEntityAlignment.BOTTOM_LEFT)
+        # "upper/lower" (e.g. "0/-0.02") is drawn as two stacked limit deviations
+        devs = [d.strip() for d in str(od_tol).split("/")] if "/" in str(od_tol) else [str(od_tol)]
+        for d_i, dev in enumerate(devs[:2]):
+            x_dev = x_dim - 0.65 - (2.35 * (len(devs[:2]) - 1 - d_i))
+            msp.add_text(
+                dev,
+                dxfattribs={"height": h_tol, "style": "GB_NUM", "layer": "6_TEXT", "rotation": 90.0},
+            ).set_placement((x_dev, y_mid + 1.0), align=TextEntityAlignment.BOTTOM_LEFT)
     else:
         msp.add_text(
             od_main,
@@ -2490,23 +2549,48 @@ def _build_lens_slice_polygon(
     chamfer_front: float = 0.3,
     chamfer_rear: float = 0.3,
     n_pts: int = 44,
+    polish_half_front: Optional[float] = None,
+    polish_half_rear: Optional[float] = None,
 ) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]], List[Tuple[float, float]], float, float]:
     """
     Build closed lens slice polygon from -half_od to +half_od with safe protective
     rim chamfers (suppressing chamfer bevel on concave overhangs to avoid rim spikes).
+    A surface polished only to a diameter (polish_half_*) continues as a flat land,
+    perpendicular to the axis, from that diameter out to the rim.
     Returns (poly, front_pts, rear_pts, z_f_nom_rim, z_r_nom_rim).
     """
-    sag_f_rim = _calculate_sag(r1_draw, k1, half_od)
-    sag_r_rim = _calculate_sag(r2_draw, k2, half_od)
+    def _land(polish_half: Optional[float]) -> Optional[float]:
+        if polish_half is None or not (0.0 < polish_half < half_od - 1e-6):
+            return None
+        return float(polish_half)
+
+    land_f = _land(polish_half_front)
+    land_r = _land(polish_half_rear)
+
+    def _sag_front(y: float) -> float:
+        return _calculate_sag(r1_draw, k1, min(abs(y), land_f) if land_f else y)
+
+    def _sag_rear(y: float) -> float:
+        return _calculate_sag(r2_draw, k2, min(abs(y), land_r) if land_r else y)
+
+    def _heights(y_max: float, land: Optional[float]) -> List[float]:
+        ys = [-y_max + (2.0 * y_max * i) / n_pts for i in range(n_pts + 1)]
+        if land and land < y_max:
+            ys = sorted(set(ys) | {-land, land})
+        return ys
+
+    sag_f_rim = _sag_front(half_od)
+    sag_r_rim = _sag_rear(half_od)
     z_f_nom_rim = z_front + sag_f_rim * scale
     z_r_nom_rim = z_rear + sag_r_rim * scale
 
     cf = min(chamfer_front, half_od * 0.08) if chamfer_front > 0 else 0.0
     cr = min(chamfer_rear, half_od * 0.08) if chamfer_rear > 0 else 0.0
-    # Concave rim overhangs (r1<0 left overhang or r2>0 right overhang) keep crisp corner intersection
-    if r1_draw < -1e-6:
+    # Concave rim overhangs (r1<0 left overhang or r2>0 right overhang) keep crisp corner intersection;
+    # a flat land ends in a normal rim corner and keeps its protective chamfer.
+    if r1_draw < -1e-6 and not land_f:
         cf = 0.0
-    if r2_draw > 1e-6:
+    if r2_draw > 1e-6 and not land_r:
         cr = 0.0
     if z_r_nom_rim - z_f_nom_rim < (cf + cr + 0.15) * scale:
         cf = 0.0
@@ -2516,16 +2600,12 @@ def _build_lens_slice_polygon(
     y_r_max = half_od - cr
 
     front_pts: List[Tuple[float, float]] = []
-    for i in range(n_pts + 1):
-        y = -y_f_max + (2.0 * y_f_max * i) / n_pts
-        z = z_front + _calculate_sag(r1_draw, k1, y) * scale
-        front_pts.append((z, axis_y + y * scale))
+    for y in _heights(y_f_max, land_f):
+        front_pts.append((z_front + _sag_front(y) * scale, axis_y + y * scale))
 
     rear_pts: List[Tuple[float, float]] = []
-    for i in range(n_pts + 1):
-        y = y_r_max - (2.0 * y_r_max * i) / n_pts
-        z = z_rear + _calculate_sag(r2_draw, k2, y) * scale
-        rear_pts.append((z, axis_y + y * scale))
+    for y in reversed(_heights(y_r_max, land_r)):
+        rear_pts.append((z_rear + _sag_rear(y) * scale, axis_y + y * scale))
 
     z_f_top_rim = max(z_f_nom_rim, front_pts[-1][0] + cf * scale) if cf > 0.0 else z_f_nom_rim
     z_r_top_rim = min(z_r_nom_rim, rear_pts[0][0] - cr * scale) if cr > 0.0 else z_r_nom_rim
@@ -2542,6 +2622,24 @@ def _build_lens_slice_polygon(
     poly.append((z_f_top_rim, axis_y - half_od * scale))
 
     return poly, front_pts, rear_pts, z_f_nom_rim, z_r_nom_rim
+
+
+GBT14690_SCALES = (10.0, 5.0, 4.0, 2.5, 2.0, 1.0, 0.5, 0.4, 0.25, 0.2, 0.1)
+
+
+def _pick_standard_scale(axial_span: float, od: float, max_w: float = 105.0, max_h: float = 82.0) -> float:
+    """Largest GB/T 14690 scale at which the section fits the drawing viewport."""
+    for s in GBT14690_SCALES:
+        if axial_span * s <= max_w and od * s <= max_h:
+            return s
+    return GBT14690_SCALES[-1]
+
+
+def _format_scale_ratio(scale: float) -> str:
+    """'5:1', '2.5:1', '1:2' ... for a paper/real scale factor."""
+    if scale >= 1.0:
+        return f"{scale:g}:1"
+    return f"1:{1.0 / scale:g}"
 
 
 def _format_gbt_radius(r_val: float, custom_label: Optional[str] = None) -> str:
@@ -2750,9 +2848,15 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     scale_override = drawing_data.get("scale_override")
     if scale_override is not None:
         scale = float(scale_override)
-    else:
+    elif str(drawing_data.get("scale_policy", "standard")).lower() == "fit":
         scale = min(105.0 / max(total_axial_span, 8.0), 82.0 / max(od, 8.0))
         scale = max(1.0, min(6.0, round(scale * 4.0) / 4.0))
+    else:
+        scale = _pick_standard_scale(total_axial_span, od)
+    # The sheet states the scale that was really used (callers may blank it with title_scale_str="").
+    drawing_data["drawing_scale"] = _format_scale_ratio(scale)
+    if "title_scale_str" not in drawing_data:
+        drawing_data["title_scale_str"] = drawing_data["drawing_scale"]
 
     # Draw Top-Left 17-row Optical Requirements Table
     _draw_dxf_optical_table(msp, drawing_data, x_start=25.0, y_top=205.0)
@@ -2835,6 +2939,8 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
             axis_y=axis_y,
             chamfer_front=cf_val,
             chamfer_rear=cr_val,
+            polish_half_front=(float(elem["polish_dia_front"]) / 2.0 if elem.get("polish_dia_front") else None),
+            polish_half_rear=(float(elem["polish_dia_rear"]) / 2.0 if elem.get("polish_dia_rear") else None),
         )
 
         # Element number position near upper flat rim clear of hatches and radial rays
@@ -2877,6 +2983,8 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
             "half_od": elem_half_od,
             "prev_air": prev_air,
             "next_air": next_air,
+            "chamfer_front": cf_val,
+            "chamfer_rear": cr_val,
         })
         cur_z = z_rear + air_after * scale
 
@@ -2900,12 +3008,14 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
         f_pts_list = g_front["front_pts"]
         idx_f = int(len(f_pts_list) * float(g_front["elem"].get("mark_front_frac", 0.90)))
         p_f = f_pts_list[max(1, min(len(f_pts_list) - 2, idx_f))]
-        _draw_dxf_optical_surface_mark(msp, (p_f[0] - 2.1, p_f[1] - 0.4), radius=1.22, layer="6_TEXT")
+        if g_front["elem"].get("mark_front", True):
+            _draw_dxf_optical_surface_mark(msp, (p_f[0] - 2.1, p_f[1] - 0.4), radius=1.22, layer="6_TEXT")
 
         r_pts_list = g_rear["rear_pts"]
         idx_r = int(len(r_pts_list) * float(g_rear["elem"].get("mark_rear_frac", 0.10)))
         p_r = r_pts_list[max(1, min(len(r_pts_list) - 2, idx_r))]
-        _draw_dxf_optical_surface_mark(msp, (p_r[0] + 2.1, p_r[1] - 0.4), radius=1.22, layer="6_TEXT")
+        if g_rear["elem"].get("mark_rear", True):
+            _draw_dxf_optical_surface_mark(msp, (p_r[0] + 2.1, p_r[1] - 0.4), radius=1.22, layer="6_TEXT")
 
         # Rim roughness '▽ 1.6' seated centered on the widest flat top rim in the group
         rim_best = max(grp, key=lambda x: abs(x["z_r_nom"] - x["z_f_nom"]))
@@ -2983,14 +3093,22 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
                 show_arrow=bool(chamfer_spec.get("show_arrow", False)),
             )
         elif g_idx == len(groups) - 1:
-            bevel_count = max(2, 2 * len(groups))
+            # count the outer rims with a chamfer: a cemented face (chamfer 0) has none
+            rims = [(g["z_f_nom"], g_["chamfer_front"]) for g, g_ in ((gr[0], gr[0]) for gr in groups)]
+            rims += [(g["z_r_nom"], g["chamfer_rear"]) for g in (gr[-1] for gr in groups)]
+            sizes = [c for _, c in rims if c > 1e-9]
+            if not sizes:
+                continue
+            bevel_count = len(sizes)
+            bevel_txt = f"{max(sizes):g}"
+            rear_has = g_rear["chamfer_rear"] > 1e-9
             _draw_dxf_chamfer_callout(
                 msp,
-                tip=(g_rear["z_r_nom"], y_rim_top),
-                angle_deg=82.0,
+                tip=((g_rear["z_r_nom"] if rear_has else g_front["z_f_nom"]), y_rim_top),
+                angle_deg=82.0 if rear_has else 112.0,
                 stem_len=21.0,
                 shoulder_len=16.5,
-                prefix=f"{bevel_count}--0.3",
+                prefix=f"{bevel_count}--{bevel_txt}" if bevel_count > 1 else bevel_txt,
                 tol_upper="+0.2",
                 tol_lower="0",
                 suffix="\u00d745\u00b0",
@@ -3056,7 +3174,33 @@ def _export_gbt13323_element_dxf(drawing_data: Dict[str, Any], filepath: str):
     max_z_all = max(pt[0] for s in slices for pt in s["rear_pts"])
     min_z_all = min(pt[0] for s in slices for pt in s["front_pts"])
     x_od_dim = max(max_z_nom, max_z_all) + 12.0
-    od_main_str = f"{od:g}"
+
+    # Polished diameter of a surface that ends in a flat land (dimensioned between the land corners)
+    for s in slices:
+        for side, key, z_v, r_d, k_d in (("front", "polish_dia_front", s["z_front"], s["r1_draw"], float(s["elem"].get("k1", 0.0))),
+                                         ("rear", "polish_dia_rear", s["z_rear"], s["r2_draw"], float(s["elem"].get("k2", 0.0)))):
+            p_dia = s["elem"].get(key)
+            if not p_dia or float(p_dia) >= 2.0 * s["half_od"] - 1e-6:
+                continue
+            p_half = float(p_dia) / 2.0
+            z_land = z_v + _calculate_sag(r_d, k_d, p_half) * scale
+            if side == "rear":
+                x_p = z_land + 5.5
+                x_od_dim = max(x_od_dim, x_p + 9.5)
+            else:
+                x_p = z_land - 5.5
+            _draw_dxf_vertical_od_dim(
+                msp,
+                x_top=z_land,
+                x_bot=z_land,
+                y_bot=axis_y - p_half * scale,
+                y_top=axis_y + p_half * scale,
+                x_dim=x_p,
+                od_main="\u03a6" + f"{float(p_dia):g}",
+                od_tol=str(s["elem"].get(key + "_tolerance", "")),
+            )
+
+    od_main_str = f"{drawing_data.get('od_prefix', '')}{od:g}"
     _draw_dxf_vertical_od_dim(
         msp,
         x_top=slices[-1]["z_r_nom"],
@@ -3210,8 +3354,16 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
     total_track = sum(float(e.get("ct", 5.0)) + float(e.get("air_after", 0.0)) for e in assembly_elements)
 
     axis_y = 132.0
-    scale = min(145.0 / max(total_track, 20.0), 82.0 / max(max_od, 10.0))
-    scale = max(1.0, min(4.0, round(scale * 4.0) / 4.0))
+    if drawing_data.get("scale_override") is not None:
+        scale = float(drawing_data["scale_override"])
+    elif str(drawing_data.get("scale_policy", "standard")).lower() == "fit":
+        scale = min(145.0 / max(total_track, 20.0), 82.0 / max(max_od, 10.0))
+        scale = max(1.0, min(4.0, round(scale * 4.0) / 4.0))
+    else:
+        scale = _pick_standard_scale(total_track, max_od, max_w=145.0, max_h=82.0)
+    drawing_data["drawing_scale"] = _format_scale_ratio(scale)
+    if "title_scale_str" not in drawing_data:
+        drawing_data["title_scale_str"] = drawing_data["drawing_scale"]
 
     # Draw Top-Left Chinese System Parameters + BOM Table
     _draw_dxf_assembly_table(msp, drawing_data, x_start=25.0, y_top=205.0)
@@ -3276,6 +3428,8 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
                 chamfer_front=0.25 if c_idx == 0 else 0.0,
                 chamfer_rear=0.25 if c_idx == len(comps) - 1 else 0.0,
                 n_pts=32,
+                polish_half_front=(float(comp["polish_dia_front"]) / 2.0 if comp.get("polish_dia_front") else None),
+                polish_half_rear=(float(comp["polish_dia_rear"]) / 2.0 if comp.get("polish_dia_rear") else None),
             )
 
             x_lbl = 0.5 * (z_front + z_rear)
@@ -3339,30 +3493,101 @@ def _export_gbt13323_assembly_dxf(drawing_data: Dict[str, Any], filepath: str):
         last_el = assembly_elements[-1]
         last_od = float(last_el.get("od", max_od))
         last_comp = last_el["components"][-1]
-        last_sag = _calculate_sag(float(last_comp["r2"]), float(last_comp.get("k2", 0.0)), 0.5 * last_od)
+        od_pre = str(drawing_data.get("od_prefix", ""))
+        last_sag = _rim_sag(float(last_comp["r2"]), float(last_comp.get("k2", 0.0)), 0.5 * last_od, last_comp.get("polish_dia_rear"))
         z_r_rim = tot_z1 + last_sag * scale
         x_od_r = min(281.0, max(tot_z1, z_r_rim) + 12.0)
         _draw_dxf_vertical_od_dim(
             msp, z_r_rim, z_r_rim,
             axis_y - 0.5 * last_od * scale, axis_y + 0.5 * last_od * scale,
-            x_od_r, f"{last_od:g}", od_tol,
+            x_od_r, f"{od_pre}{last_od:g}", od_tol,
         )
 
         first_el = assembly_elements[0]
         first_od = float(first_el.get("od", max_od))
         if abs(first_od - last_od) > 0.2:
             first_comp = first_el["components"][0]
-            first_sag = _calculate_sag(float(first_comp["r1"]), float(first_comp.get("k1", 0.0)), 0.5 * first_od)
+            first_sag = _rim_sag(float(first_comp["r1"]), float(first_comp.get("k1", 0.0)), 0.5 * first_od, first_comp.get("polish_dia_front"))
             z_f_rim = x_origin + first_sag * scale
             x_od_l = max(104.5, min(x_origin, z_f_rim) - 12.0)
             _draw_dxf_vertical_od_dim(
                 msp, z_f_rim, z_f_rim,
                 axis_y - 0.5 * first_od * scale, axis_y + 0.5 * first_od * scale,
-                x_od_l, f"{first_od:g}", od_tol,
+                x_od_l, f"{od_pre}{first_od:g}", od_tol,
             )
 
     doc.saveas(filepath)
 
+
+
+def _element_outer_diameter(components: List[Dict[str, Any]], od_source: str = "standard") -> Tuple[float, float]:
+    """(lens outer diameter, largest clear diameter) of an element.
+
+    'standard': legacy rule, clear aperture + 2 mm rounded up to a stock diameter.
+    'model'   : the mechanical semi-diameters of the lens file are the lens edge."""
+    max_ca = max(max(2 * c["semi_diameter_front"], 2 * c["semi_diameter_rear"]) for c in components)
+    if str(od_source).lower() == "model":
+        mech = max(
+            max(2 * c.get("mech_semi_diameter_front", c["semi_diameter_front"]),
+                2 * c.get("mech_semi_diameter_rear", c["semi_diameter_rear"]))
+            for c in components
+        )
+        return round(mech, 4), max_ca
+    raw_od = max_ca + 2.0
+    for std in (10.0, 12.0, 12.7, 15.0, 16.0, 20.0, 25.0, 25.4, 30.0, 38.1, 50.0, 50.8):
+        if std >= raw_od:
+            return std, max_ca
+    return float(math.ceil(raw_od)), max_ca
+
+
+def _flat_land_polish_diameters(comp: Dict[str, Any]) -> Dict[str, float]:
+    """Polished diameters of concave faces whose clear semi-diameter is smaller than the
+    lens edge: the sphere stops there and a flat land runs out to the rim."""
+    out = {}
+    for side, r_key, concave in (("front", "radius_front", lambda r: r < -1e-9), ("rear", "radius_rear", lambda r: r > 1e-9)):
+        clear = float(comp[f"semi_diameter_{side}"])
+        mech = float(comp.get(f"mech_semi_diameter_{side}", clear))
+        if concave(float(comp[r_key])) and clear < mech - 0.05:
+            out[f"polish_dia_{side}"] = round(2.0 * clear, 4)
+    return out
+
+
+def _rim_sag(radius: float, conic: float, half_od: float, polish_dia: Optional[float]) -> float:
+    """Sag of a face at the lens rim; a flat land keeps the sag of its polished diameter."""
+    y = min(half_od, float(polish_dia) / 2.0) if polish_dia else half_od
+    return _calculate_sag(radius, conic, y)
+
+
+def _resolve_drawing_overrides(overrides: Optional[Union[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    """Overrides come as a dict or as the path of a UTF-8 JSON file."""
+    if overrides is None:
+        return {}
+    if isinstance(overrides, str):
+        with open(overrides, "r", encoding="utf-8") as fh:
+            overrides = json.load(fh)
+    if not isinstance(overrides, dict):
+        raise ValueError("overrides must be a dict or the path of a JSON file holding one.")
+    return overrides
+
+
+def _apply_drawing_overrides(dwg: Dict[str, Any], overrides: Dict[str, Any], key: str) -> Dict[str, Any]:
+    """Merge 'common' and then the entry of this drawing into its data.
+
+    overrides = {"common": {...}, "elements": {"1": {...}, "3a": {...}}, "assembly": {...}}
+    A list under "elements" inside an entry updates the lens slices one by one; every
+    other key replaces the generated value (tolerances, notes, names, layout hints ...)."""
+    entry = overrides.get("assembly") if key == "assembly" else (overrides.get("elements") or {}).get(str(key))
+    for src in (overrides.get("common"), entry):
+        if not src:
+            continue
+        for k, v in src.items():
+            if k == "elements" and isinstance(v, list):
+                for sl, upd in zip(dwg.get("elements", []), v):
+                    if upd:
+                        sl.update(upd)
+            else:
+                dwg[k] = copy.deepcopy(v)
+    return dwg
 
 
 def zemax_export_optical_drawing(
@@ -3374,6 +3599,11 @@ def zemax_export_optical_drawing(
     export_assembly: bool = True,
     generate_2d_plot: bool = True,
     export_dxf: bool = True,
+    od_source: str = "standard",
+    first_surface: Optional[int] = None,
+    last_surface: Optional[int] = None,
+    split_cemented: bool = False,
+    overrides: Optional[Union[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Generate manufacturing-compliant optical engineering drawings according to Chinese National Standards
@@ -3396,7 +3626,23 @@ def zemax_export_optical_drawing(
         iso_tolerance_grade: 'Commercial', 'Precision' (default), or 'High-Precision'.
         export_assembly: If True, also generates the system assembly drawing (drawing_assembly.png).
         generate_2d_plot: If True, renders dimensioned engineering drawings via matplotlib.
+        od_source: 'standard' (clear aperture + 2 mm, rounded up to a stock diameter) or 'model'
+                   (lens outer diameter = mechanical semi-diameters of the lens file; a concave face whose
+                   clear semi-diameter is smaller is drawn as sphere + flat land with its polished diameter).
+        first_surface / last_surface: draw only the lens group inside this surface range (e.g. a scan lens
+                   in front of an intermediate image); last_surface also ends the rear gap of the assembly.
+        split_cemented: also write one part drawing per lens of a cemented group (drawing_element_3a ...).
+        overrides: dict or JSON file path {"common": {...}, "elements": {"1": {...}, "3a": {...}},
+                   "assembly": {...}} replacing generated values (real tolerances, per-surface clear
+                   apertures, notes, names, layout hints) of the drawings.
     """
+    if str(od_source).lower() not in ("standard", "model"):
+        return {"status": "error", "message": "od_source must be 'standard' or 'model'."}
+    try:
+        overrides = _resolve_drawing_overrides(overrides)
+    except (OSError, ValueError) as exc:
+        return {"status": "error", "message": f"Could not read overrides: {exc}"}
+
     session = ZOSSession.get_instance()
     sys = session.system
 
@@ -3416,10 +3662,14 @@ def zemax_export_optical_drawing(
     )
 
     elements = _extract_lens_elements(sys)
+    if first_surface is not None or last_surface is not None:
+        lo = int(first_surface) if first_surface is not None else 0
+        hi = int(last_surface) if last_surface is not None else int(num_surfs)
+        elements = [e for e in elements if e["surface_start"] >= lo and e["surface_end"] <= hi]
     if not elements:
-        return {"status": "error", "message": "No optical lens elements found in the current system."}
+        return {"status": "error", "message": "No optical lens elements found in the current system (or in the given surface range)."}
 
-    metadata = _system_drawing_metadata(sys, session.ZOSAPI, elements)
+    metadata = _system_drawing_metadata(sys, session.ZOSAPI, elements, image_surface=last_surface)
     if metadata["lens_stack_length_mm"] is None:
         return {"status": "error", "message": "Axial drawings require a centered, forward-going sequential system; this geometry needs a separate mechanical layout."}
 
@@ -3486,22 +3736,36 @@ def zemax_export_optical_drawing(
 
     generated_drawings = []
 
+    def _emit_element_drawing(dwg: Dict[str, Any], tag: str):
+        """Write DXF / PNG / GB/T markdown of one element (or one lens of a cemented group)."""
+        png_path = os.path.join(output_dir, f"drawing_element_{tag}.png")
+        dxf_path = os.path.join(output_dir, f"drawing_element_{tag}.dxf")
+        md_path = os.path.join(output_dir, f"gbt13323_drawing_element_{tag}.md")
+        png_rendered = False
+        if export_dxf and EZDXF_AVAILABLE:
+            try:
+                _export_gbt13323_element_dxf(dwg, dxf_path)
+                dwg["dxf_drawing_file"] = dxf_path
+                if generate_2d_plot:
+                    png_rendered = _render_dxf_to_png(dxf_path, png_path)
+            except Exception as e:
+                dwg["dxf_error"] = str(e)
+        if generate_2d_plot and not png_rendered:
+            _render_gbt13323_element_drawing(dwg, png_path)
+        # DXF export sets the actual drawing scale; keep the specification in sync.
+        _write_gbt13323_element_markdown(dwg, md_path)
+        dwg["gbt_markdown_file"] = md_path
+        dwg["drawing_image_file"] = png_path
+        generated_drawings.append(dwg)
+
     # 1. Process Individual Elements
     for elem in target_elements:
         e_idx = elem["element_index"]
         e_type = elem["element_type"]
         components = elem["components"]
 
-        max_ca = max(max(2 * c["semi_diameter_front"], 2 * c["semi_diameter_rear"]) for c in components)
-        raw_od = max_ca + 2.0
-        std_ods = [10.0, 12.0, 12.7, 15.0, 16.0, 20.0, 25.0, 25.4, 30.0, 38.1, 50.0, 50.8]
-        mech_od = raw_od
-        for std in std_ods:
-            if std >= raw_od:
-                mech_od = std
-                break
-        if mech_od == raw_od:
-            mech_od = math.ceil(raw_od)
+        mech_od, max_ca = _element_outer_diameter(components, od_source)
+        model_od = str(od_source).lower() == "model"
 
         elem_slices = []
         for c_i, comp in enumerate(components):
@@ -3514,6 +3778,7 @@ def zemax_export_optical_drawing(
                 "t": round(comp["thickness"], 4),
                 "t_tolerance": tols["ct_tol"],
                 "material": comp["material"],
+                **(_flat_land_polish_diameters(comp) if model_od else {}),
             })
 
         mat_str = "\n".join(c["material"] for c in components)
@@ -3596,9 +3861,8 @@ def zemax_export_optical_drawing(
             "elements": elem_slices,
         }
 
-        png_filename = f"drawing_element_{e_idx}.png"
-        png_filepath = os.path.join(output_dir, png_filename)
-        gbt_md_filepath = os.path.join(output_dir, f"gbt13323_drawing_element_{e_idx}.md")
+        base_dwg_data = copy.deepcopy(dwg_data)          # before overrides: source of the split part drawings
+        _apply_drawing_overrides(dwg_data, overrides, str(e_idx))
         iso_md_filepath = os.path.join(output_dir, f"iso10110_drawing_element_{e_idx}.md")
 
         # Also write ISO 10110 spec for compatibility
@@ -3614,7 +3878,9 @@ def zemax_export_optical_drawing(
             "diameter_tolerance": tols["dia_tol"],
             "center_thickness_ct_mm": round(elem["total_center_thickness"], 4),
             "center_thickness_tolerance": tols["ct_tol"],
-            "edge_thickness_et_mm": round(elem["total_center_thickness"] - _calculate_sag(c0["radius_front"], c0["conic_front"], mech_od/2.0) + _calculate_sag(c_last["radius_rear"], c_last["conic_rear"], mech_od/2.0), 4),
+            "edge_thickness_et_mm": round(elem["total_center_thickness"]
+                                          - _rim_sag(c0["radius_front"], c0["conic_front"], mech_od / 2.0, elem_slices[0].get("polish_dia_front"))
+                                          + _rim_sag(c_last["radius_rear"], c_last["conic_rear"], mech_od / 2.0, elem_slices[-1].get("polish_dia_rear")), 4),
             "flat_land_width_mm": round((mech_od - max_ca) / 2.0, 3),
             "protective_chamfer_mm": "0.3 x 45°",
             "surface_1": {
@@ -3643,29 +3909,40 @@ def zemax_export_optical_drawing(
             "coating": dwg_data["coating"],
         }
         _write_element_markdown_drawing(iso_spec, iso_md_filepath)
-
-        dxf_filename = f"drawing_element_{e_idx}.dxf"
-        dxf_filepath = os.path.join(output_dir, dxf_filename)
-        png_rendered = False
-
-        if export_dxf and EZDXF_AVAILABLE:
-            try:
-                _export_gbt13323_element_dxf(dwg_data, dxf_filepath)
-                dwg_data["dxf_drawing_file"] = dxf_filepath
-                if generate_2d_plot:
-                    png_rendered = _render_dxf_to_png(dxf_filepath, png_filepath)
-            except Exception as e:
-                dwg_data["dxf_error"] = str(e)
-
-        if generate_2d_plot and not png_rendered:
-            _render_gbt13323_element_drawing(dwg_data, png_filepath)
-
-        # DXF export sets the actual drawing scale; keep the specification in sync.
-        _write_gbt13323_element_markdown(dwg_data, gbt_md_filepath)
-        dwg_data["gbt_markdown_file"] = gbt_md_filepath
         dwg_data["iso_markdown_file"] = iso_md_filepath
-        dwg_data["drawing_image_file"] = png_filepath
-        generated_drawings.append(dwg_data)
+        _emit_element_drawing(dwg_data, str(e_idx))
+
+        # One part drawing per lens of a cemented group (each lens is polished on its own)
+        if split_cemented and len(components) > 1:
+            for c_i, comp in enumerate(components):
+                tag = f"{e_idx}{chr(ord('a') + c_i)}"
+                part = copy.deepcopy(base_dwg_data)
+                sl = dict(part["elements"][c_i])
+                sl.update({"index": 1, "mark_front": c_i == 0, "mark_rear": c_i == len(components) - 1})
+                if c_i > 0:
+                    sl["chamfer_front"] = 0.0                     # cemented faces are not chamfered
+                if c_i < len(components) - 1:
+                    sl["chamfer_rear"] = 0.0
+                part_elem = {"components": [comp]}
+                p_efl, p_bfl = _compute_element_paraxial_efl_bfl(sys, zos_api, part_elem, primary_wave_idx)
+                part_ca = max(2 * comp["semi_diameter_front"], 2 * comp["semi_diameter_rear"])
+                part_notes = list(part["technical_notes"])
+                part_notes[0] = f"1、材料采用指定牌号优质光学玻璃（{comp['material']}）；"
+                part_notes[2] = f"3、本件为胶合件 {e_idx} 的第 {c_i + 1} 片，无 ⊕ 标记的面为胶合面，不镀膜；"
+                part.update({
+                    "element_index": tag,
+                    "drawing_name": f"光学元件\n单透镜 {tag}",
+                    "drawing_code": f"OPT-{active_proj.upper()[:6]}-E{e_idx:02d}{chr(ord('A') + c_i)}",
+                    "material": comp["material"],
+                    "ca": round(part_ca, 2),
+                    "ca_str": f"{part_ca:.1f}",
+                    "efl_str": f"{p_efl:.2f}" if p_efl is not None else "-",
+                    "bfl_str": f"{p_bfl:.2f}" if p_bfl is not None else "-",
+                    "technical_notes": part_notes,
+                    "elements": [sl],
+                })
+                _apply_drawing_overrides(part, overrides, tag)
+                _emit_element_drawing(part, tag)
 
     # 2. Process System Assembly Drawing
     assembly_drawing_info = None
@@ -3690,19 +3967,11 @@ def zemax_export_optical_drawing(
                     "k2": comp["conic_rear"],
                     "ct": round(comp["thickness"], 4),
                     "ca": round(max(2 * comp["semi_diameter_front"], 2 * comp["semi_diameter_rear"]), 2),
-                    "material": comp["material"]
+                    "material": comp["material"],
+                    **(_flat_land_polish_diameters(comp) if str(od_source).lower() == "model" else {}),
                 })
 
-            max_ca = max(c["ca"] for c in comps)
-            raw_od = max_ca + 2.0
-            std_ods = [10.0, 12.0, 12.7, 15.0, 16.0, 20.0, 25.0, 25.4, 30.0, 38.1, 50.0, 50.8]
-            mech_od = raw_od
-            for std in std_ods:
-                if std >= raw_od:
-                    mech_od = std
-                    break
-            if mech_od == raw_od:
-                mech_od = math.ceil(raw_od)
+            mech_od = _element_outer_diameter(elem["components"], od_source)[0]
 
             assembly_elements.append({
                 "elem_index": elem["element_index"],
@@ -3725,7 +3994,12 @@ def zemax_export_optical_drawing(
             waves = sys.SystemData.Wavelengths
             primary_wave = next((i for i in range(1, int(waves.NumberOfWavelengths) + 1)
                                  if waves.GetWavelength(i).IsPrimary), 1)
-            efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 0, primary_wave, 0, 0, 0, 0, 0, 0)
+            if first_surface is not None or last_surface is not None:
+                # focal length of the drawn group, not of the whole system
+                efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFLY,
+                                                  elements[0]["surface_start"], elements[-1]["surface_end"], 0, 0, 0, 0, 0, 0)
+            else:
+                efl_num = sys.MFE.GetOperandValue(zos.Editors.MFE.MeritOperandType.EFFL, 0, primary_wave, 0, 0, 0, 0, 0, 0)
             if abs(efl_num) > 0.001 and abs(efl_num) < 1e5:
                 efl_str = f"{efl_num:.2f}"
         except Exception:
@@ -3735,7 +4009,10 @@ def zemax_export_optical_drawing(
             sd = sys.SystemData
             ap_type = str(sd.Aperture.ApertureType)
             ap_val = float(sd.Aperture.ApertureValue)
-            if ap_type == "ObjectSpaceNA":
+            if ((first_surface is not None or last_surface is not None) and "EntrancePupil" in ap_type
+                    and ap_val > 0 and abs(efl_num) > 0.001):
+                f_num_computed = f"F/{abs(efl_num) / ap_val:.2f}"       # the group alone, same entrance beam
+            elif ap_type == "ObjectSpaceNA":
                 na_str = f"{ap_val:.2f}"
             elif ap_type == "ImageSpaceFNum" and ap_val > 0:
                 f_num_computed = f"F/{ap_val:.2f}"
@@ -3817,6 +4094,7 @@ def zemax_export_optical_drawing(
             ]
         }
 
+        _apply_drawing_overrides(asm_dwg_data, overrides, "assembly")
         asm_png_path = os.path.join(output_dir, "drawing_assembly.png")
         asm_md_path = os.path.join(output_dir, "drawing_assembly.md")
 

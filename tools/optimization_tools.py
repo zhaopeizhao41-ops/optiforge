@@ -221,6 +221,13 @@ def zemax_setup_merit_function(
             mat = surf.Material.strip()
             # If this surface is an air space inside the lens group
             if not mat or mat.upper() == "AIR":
+                if surf.Thickness > 3.0 * float(max_internal_air):
+                    # Inter-group space without a RELAY/INTERMEDIATE comment (e.g. scan lens ->
+                    # tube lens via an intermediate image): not an element-to-element gap.
+                    added_operands.append(
+                        f"Surface {s_idx} air space {surf.Thickness:.2f} mm treated as inter-group space: "
+                        "internal-air MXCA not applied")
+                    continue
                 op_air = mfe.InsertNewOperandAt(1)
                 op_air.ChangeType(zos.Editors.MFE.MeritOperandType.MXCA)
                 op_air.GetCellAt(2).IntegerValue = s_idx
@@ -265,9 +272,15 @@ def zemax_setup_merit_function(
     if max_totr is not None:
         add_upper_bound("TOTR", max_totr, totr_weight)
 
+    n_cfg = int(sys.MCE.NumberOfConfigurations)
+    if n_cfg > 1:
+        added_operands.append(
+            f"WARNING: {n_cfg} configurations present; the wizard merit function spans all of them and rows "
+            "appended later belong to the last configuration unless a CONF row precedes them.")
     return {
         "status": "success",
         "message": "Merit Function created with strict internal air spacing and compactness controls.",
+        "configurations": n_cfg,
         "criterion": criterion,
         "reference": reference,
         "max_internal_air_mm": max_internal_air,

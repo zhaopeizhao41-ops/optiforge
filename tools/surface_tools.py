@@ -187,6 +187,18 @@ def zemax_set_solve(
         solve = target_cell.CreateSolveType(zos.Editors.SolveType.MarginalRayHeight)
         solve._S_MarginalRayHeight.Height = float(p.get("height", 0.0))
         target_cell.SetSolveData(solve)
+    elif st_clean in ("chiefrayheight", "chiefrayangle"):
+        enum_name = "ChiefRayHeight" if st_clean == "chiefrayheight" else "ChiefRayAngle"
+        solve = target_cell.CreateSolveType(getattr(zos.Editors.SolveType, enum_name))
+        if solve is None:
+            return {"status": "error",
+                    "message": f"Solve '{enum_name}' is not available on the {cell} cell of surface {surface_index}."}
+        sub = getattr(solve, "_S_" + enum_name)
+        if enum_name == "ChiefRayHeight":
+            sub.Height = float(p.get("height", 0.0))
+        else:
+            sub.Angle = float(p.get("angle", 0.0))
+        target_cell.SetSolveData(solve)
     elif st_clean == "edgethickness":
         solve = target_cell.CreateSolveType(zos.Editors.SolveType.EdgeThickness)
         solve._S_EdgeThickness.Thickness = float(p.get("thickness", 1.0))
@@ -195,14 +207,28 @@ def zemax_set_solve(
     else:
         return {
             "status": "error",
-            "message": f"Unsupported solve type '{solve_type}'. Supported: 'variable', 'fixed', 'fnumber', 'pickup', 'marginal_ray_angle', 'marginal_ray_height', 'edgethickness'.",
+            "message": f"Unsupported solve type '{solve_type}'. Supported: 'variable', 'fixed', 'fnumber', 'pickup', "
+                       "'marginal_ray_angle', 'marginal_ray_height', 'chief_ray_height', 'chief_ray_angle', 'edgethickness'.",
         }
+
+    expected = {"variable": "Variable", "fixed": "Fixed", "fnumber": "FNumber", "pickup": "SurfacePickup",
+                "surfacepickup": "SurfacePickup", "marginalrayangle": "MarginalRayAngle",
+                "marginalrayheight": "MarginalRayHeight", "chiefrayheight": "ChiefRayHeight",
+                "chiefrayangle": "ChiefRayAngle", "edgethickness": "EdgeThickness"}[st_clean]
+    actual = str(target_cell.GetSolveData().Type)
+    if actual != expected:
+        hint = ""
+        if cell_clean == "thickness" and session.system.MCE.NumberOfConfigurations > 1:
+            hint = (" This thickness may be controlled by a multi-configuration (MCE) operand; "
+                    "edit the MCE row instead.")
+        return {"status": "error", "surface": surface_index, "cell": cell, "solve_type": actual,
+                "message": f"Requested solve '{expected}' was not applied (cell reports '{actual}').{hint}"}
 
     return {
         "status": "success",
         "surface": surface_index,
         "cell": cell,
-        "solve_type": str(target_cell.GetSolveData().Type),
+        "solve_type": actual,
     }
 
 

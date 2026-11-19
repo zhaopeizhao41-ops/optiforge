@@ -62,6 +62,92 @@ def counter(value):
     return value
 
 
+# A question may carry several context anchors (surfaces, one analysis view, an
+# optimization stage), each with an optional comment -- the multi-anchor context
+# pattern of Agentero (poco-ai/Agentero, MIT): ephemeral marks collected in the
+# UI and sent with the question. Limits follow its draft limits.
+MAX_QUESTION_ANCHORS = 12
+MAX_ANCHOR_COMMENT = 2000
+# Tabs that show one field at a time; overview and field curvature span all fields.
+FIELD_TABS = frozenset({"mtf", "wavefront", "spot", "ray_fan"})
+
+
+def _anchor_key(anchor):
+    """Identity of an anchor without its comment: two anchors at one place are duplicates."""
+    return tuple(sorted((k, v) for k, v in anchor.items() if k != "comment"))
+
+
+def _question_anchor(anchor, position):
+    from core.workbench_ui import ANALYSIS_TABS, STAGES
+
+    name = f"锚点 {position}"
+    require(isinstance(anchor, dict), "WORKFLOW_TARGET_INVALID", f"{name} 必须是对象")
+    kind = anchor.get("kind")
+    allowed = {
+        "surface": {"kind", "index", "comment"},
+        "analysis": {"kind", "tab", "result_id", "field", "comment"},
+        "stage": {"kind", "stage", "comment"},
+    }
+    require(kind in allowed, "WORKFLOW_TARGET_INVALID", f"{name} 类型未知")
+    require(set(anchor) <= allowed[kind], "WORKFLOW_TARGET_INVALID", f"{name} 含未知字段")
+    if "comment" in anchor:
+        comment = anchor["comment"]
+        require(
+            isinstance(comment, str) and comment.strip() and len(comment) <= MAX_ANCHOR_COMMENT,
+            "WORKFLOW_TARGET_INVALID",
+            f"{name} 的批注为空或超过 {MAX_ANCHOR_COMMENT} 字",
+        )
+    if kind == "surface":
+        require(
+            type(anchor.get("index")) is int and anchor["index"] >= 0,
+            "WORKFLOW_TARGET_INVALID",
+            f"{name} 的表面序号无效",
+        )
+    elif kind == "analysis":
+        from core.milestone_quality_artifacts import valid_result_id
+
+        require(anchor.get("tab") in ANALYSIS_TABS, "WORKFLOW_TARGET_INVALID", f"{name} 的分析页签无效")
+        require(valid_result_id(anchor.get("result_id")), "WORKFLOW_TARGET_INVALID", f"{name} 缺少有效的分析结果 ID")
+        if "field" in anchor:
+            require(
+                anchor["tab"] in FIELD_TABS and type(anchor["field"]) is int and anchor["field"] >= 1,
+                "WORKFLOW_TARGET_INVALID",
+                f"{name} 的视场无效或该页签不按视场显示",
+            )
+    else:
+        require(anchor.get("stage") in STAGES, "WORKFLOW_TARGET_INVALID", f"{name} 的阶段无效")
+    return anchor
+
+
+def validate_question_target(target):
+    """Return the anchors of a question target; never rewrites the stored target.
+
+    Accepts the original single-surface shape {kind:"surface", index} (kept as is,
+    so retries of older request IDs stay idempotent) or
+    {kind:"context", anchors:[1..12]} where each anchor is a surface, an analysis
+    view or an optimization stage with an optional comment.
+    """
+    require(isinstance(target, dict), "WORKFLOW_TARGET_INVALID", "请选中真实模型表面或添加提问上下文")
+    if target.get("kind") == "surface":
+        require(set(target) == {"kind", "index"}, "WORKFLOW_TARGET_INVALID", "表面目标含未知字段")
+        return [_question_anchor(target, 1)]
+    require(
+        target.get("kind") == "context" and set(target) == {"kind", "anchors"},
+        "WORKFLOW_TARGET_INVALID",
+        "提问目标必须是表面或上下文锚点",
+    )
+    anchors = target["anchors"]
+    require(
+        isinstance(anchors, list) and 1 <= len(anchors) <= MAX_QUESTION_ANCHORS,
+        "WORKFLOW_TARGET_INVALID",
+        f"提问上下文需 1–{MAX_QUESTION_ANCHORS} 个锚点",
+    )
+    checked = [_question_anchor(anchor, i) for i, anchor in enumerate(anchors, start=1)]
+    keys = [_anchor_key(anchor) for anchor in checked]
+    require(len(set(keys)) == len(keys), "WORKFLOW_TARGET_INVALID", "提问上下文含重复锚点")
+    return checked
+
+
 def project_name(name):
     from tools.project_manager import sanitize_project_name
 
@@ -684,14 +770,11 @@ def submit_intent(
             d["authorization_revision"] = d.get("authorization_revision", 0) + 1
             _save(db, project, d)
         elif kind == "surface_question":
+            validate_question_target(target)
             require(
-                isinstance(model, dict)
-                and isinstance(target, dict)
-                and target.get("kind") == "surface"
-                and type(target.get("index")) is int
-                and target["index"] >= 0,
+                isinstance(model, dict),
                 "WORKFLOW_TARGET_INVALID",
-                "请选中真实模型表面",
+                "请先载入模型再提问",
             )
             require(
                 model.get("model_project") == project,
@@ -796,7 +879,9 @@ def claim(project, request_id, version, worker_id, lease_seconds, model=None):
                 "领取后重新核对版本、当前共享授权和模型归属，再按既有五步流程执行；领取本身不增加授权。"
                 if task["kind"] == "model_handoff"
                 else (
-                    "重新核对模型身份、修订及目标，仅解释或建议，不自动修改参数。"
+                    "重新核对模型身份、修订与配置，再逐项核对 task.target：单表面目标为 {kind:surface,index}；"
+                    "上下文目标为 {kind:context,anchors}，锚点含表面、分析视图（tab/field/result_id）与优化阶段，批注为用户原话。"
+                    "result_id 可能已被会话缓存淘汰，此时说明情况并按记录的页签和视场重新读取。仅解释或建议，不自动修改参数。"
                     if task["kind"] == "surface_question"
                     else "仅研究并提交提案；领取不授权仿真。提案登记需传 workflow_context、task_claim；完成需本任务提案hash。"
                 )

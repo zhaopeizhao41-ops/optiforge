@@ -300,6 +300,10 @@ class WaiterTests(unittest.TestCase):
         self.control.view = workflow([task(kind="surface_question", model_reference=reference)])
         self.control.view["model_reference"] = reference
         self.assertEqual(self.wait(timeout_ms=0)["status"], "ready")
+        context = {"kind": "context", "anchors": [{"kind": "surface", "index": 2}, {"kind": "stage", "stage": "stage_1"}]}
+        self.control.view = workflow([task(kind="surface_question", model_reference=reference, target=context)])
+        self.control.view["model_reference"] = reference
+        self.assertEqual(self.wait(timeout_ms=0)["status"], "ready")
         self.control.view["model_reference"] = {**reference, "model_revision": 4}
         self.assertEqual(self.wait(timeout_ms=0)["status"], "idle")
 

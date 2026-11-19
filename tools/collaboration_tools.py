@@ -20,7 +20,7 @@ def zemax_design_workflow(
 
     Always view first and pass its exact context as expected_workflow on writes.
     select: {create}; save: {system_type,specs,sources,user_prompt,constraints};
-    audit: {}; submit: {request_id,kind,user_text,target?};
+    audit: {}; submit: {request_id,kind,user_text,target?,expected_model?};
     confirm: {request_id} explicitly approves this version AND queues model handoff;
     retry: {request_id,version}. Confirm ONLY after explicit human approval.
     milestone_start: {request_id,version,lease_token,stage_id,attempt_id,note};
@@ -35,6 +35,9 @@ def zemax_design_workflow(
     no proposal authorization or model is required.
     Milestone status is needs_review/failed, never optical acceptance or execution.
     submit kinds: initial_proposal, proposal_revision, surface_question.
+    surface_question target: {kind:"surface",index} or {kind:"context",anchors:[1..12]};
+    anchor = {kind:"surface",index} | {kind:"analysis",tab,result_id,field?} |
+    {kind:"stage",stage}, each with an optional comment (<=2000 chars).
     A pending task has not been delivered to or accepted by any Agent host.
     """
     flow.require(

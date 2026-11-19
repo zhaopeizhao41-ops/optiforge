@@ -771,6 +771,146 @@ print(json.dumps(zemax_claim_design_task('test_a','race',1,sys.argv[2],30)))
         self.assertTrue(v["tasks"][0]["stale"])
         self.native.assert_not_called()
 
+    def test_question_target_shapes_limits_and_duplicates(self):
+        validate = f.validate_question_target
+        legacy = {"kind": "surface", "index": 1}
+        self.assertEqual(validate(legacy), [legacy])
+        surface = {"kind": "surface", "index": 2, "comment": "边缘光线偏折大"}
+        analysis = {"kind": "analysis", "tab": "mtf", "result_id": "r-1", "field": 2}
+        stage = {"kind": "stage", "stage": "stage_2"}
+        anchors = [surface, analysis, stage, {"kind": "analysis", "tab": "overview", "result_id": "r-1"}]
+        self.assertEqual(validate({"kind": "context", "anchors": anchors}), anchors)
+        self.assertEqual(
+            validate({"kind": "context", "anchors": [{**surface, "comment": "x" * f.MAX_ANCHOR_COMMENT}]})[0]["index"], 2
+        )
+        twelve = [{"kind": "surface", "index": i} for i in range(f.MAX_QUESTION_ANCHORS)]
+        self.assertEqual(len(validate({"kind": "context", "anchors": twelve})), 12)
+        bad = [
+            None, [], {"kind": "surface", "index": 1, "comment": "legacy shape takes no comment"},
+            {"kind": "surface", "index": True}, {"kind": "surface", "index": -1},
+            {"kind": "context", "anchors": []},
+            {"kind": "context", "anchors": twelve + [{"kind": "surface", "index": 99}]},
+            {"kind": "context", "anchors": [surface, {**surface, "comment": "只有批注不同"}]},
+            {"kind": "context", "anchors": [{**surface, "extra": 1}]},
+            {"kind": "context", "anchors": [{"kind": "surface", "index": True}]},
+            {"kind": "context", "anchors": [{**surface, "comment": "x" * (f.MAX_ANCHOR_COMMENT + 1)}]},
+            {"kind": "context", "anchors": [{**surface, "comment": "   "}]},
+            {"kind": "context", "anchors": [{**analysis, "tab": "psf"}]},
+            {"kind": "context", "anchors": [{**analysis, "result_id": ""}]},
+            {"kind": "context", "anchors": [{"kind": "analysis", "tab": "mtf"}]},
+            {"kind": "context", "anchors": [{**analysis, "tab": "overview"}]},
+            {"kind": "context", "anchors": [{**analysis, "field": 0}]},
+            {"kind": "context", "anchors": [{"kind": "stage", "stage": "stage_5"}]},
+            {"kind": "context", "anchors": [{"kind": "lens"}]},
+            {"kind": "context", "anchors": [surface], "extra": True},
+        ]
+        for target in bad:
+            with self.subTest(target=target), self.assertRaises(f.WorkflowError) as caught:
+                validate(target)
+            self.assertEqual(caught.exception.code, "WORKFLOW_TARGET_INVALID")
+
+    def test_context_question_is_idempotent_and_archived_with_its_model(self):
+        model = {
+            "model_project": "test_a",
+            "model_id": "id",
+            "model_revision": 1,
+            "service_instance_id": "s",
+            "configuration": 1,
+        }
+        target = {"kind": "context", "anchors": [
+            {"kind": "surface", "index": 3, "comment": "这里的入射角最大"},
+            {"kind": "analysis", "tab": "mtf", "result_id": "r-1", "field": 2},
+            {"kind": "stage", "stage": "stage_2"},
+        ]}
+
+        def submit(request_id, value):
+            return f.submit_intent("test_a", self.view()["context"], request_id, "surface_question",
+                                   "这几处一起看", model, value, model)
+
+        view = submit("ctx", target)
+        self.assertEqual(view["tasks"][0]["target"], target)
+        self.assertEqual(len(submit("ctx", deepcopy(target))["tasks"]), 1)
+        with self.assertRaises(f.WorkflowError) as caught:
+            submit("ctx", {"kind": "context", "anchors": list(reversed(target["anchors"]))})
+        self.assertEqual(caught.exception.code, "WORKFLOW_ID_CONFLICT")
+        with self.assertRaises(f.WorkflowError) as caught:
+            submit("bad", {"kind": "context", "anchors": [{"kind": "stage", "stage": "stage_9"}]})
+        self.assertEqual(caught.exception.code, "WORKFLOW_TARGET_INVALID")
+        claimed = f.claim("test_a", "ctx", 1, "worker", 30, model)
+        self.assertEqual(claimed["task"]["target"], target)
+        self.assertIn("anchors", claimed["instruction"])
+        listed = f.task_list("test_a", {**model, "model_revision": 2})["tasks"]
+        self.assertEqual(listed[0]["status"], "superseded")
+
+    def test_engine_checks_question_anchors_against_model_and_cached_results(self):
+        from core.analysis_data import validate_settings
+
+        def forbidden():
+            raise AssertionError("workflow observed the native model")
+
+        registry = {n: getattr(tools, n) for n in KNOWLEDGE | CONTEXT_READS | CONTEXT_WRITES}
+        engine = EngineWorker(registry, capture=forbidden, metadata=forbidden)
+        self.addCleanup(engine.close)
+        engine.state.publish(
+            metadata={"active_project": "test_a", "model_project": "test_a", "proposal_confirmed": False},
+            snapshot={"model": {"configuration": 1, "surfaces": [{"index": 0}, {"index": 1}, {"index": 2}]}},
+            validity="valid",
+            replace=True,
+        )
+
+        def result(identifier, **source_changes):
+            current = engine.state.read()
+            source = {key: current[key] for key in
+                      ("service_instance_id", "model_id", "model_revision", "active_project", "model_project")}
+            source.update(configuration=1, source_state_version=current["state_version"], **source_changes)
+            return {"analysis_schema_version": 1, "status": "success", "result_id": identifier,
+                    "key": "cache-key-" + identifier, "engine": "SIMULATED adapter, not an optical result",
+                    "source": source, "started_at": "2026-11-19T00:00:00+00:00",
+                    "finished_at": "2026-11-19T00:00:01+00:00", "elapsed_ms": 1,
+                    "settings": validate_settings({"fields": [1, 2], "analyses": ["mtf", "spot"]}),
+                    "items": {"mtf": {"status": "success", "curves": []}, "spot": {"status": "success", "fields": []}},
+                    "overall": "INFO", "verdicts": []}
+
+        engine.state.store_analysis(result("current"))
+        engine.state.store_analysis(result("older", model_revision=99))
+
+        def ask(request_id, target):
+            v = engine.call("zemax_design_workflow", {}, expected_context=engine.state.context())
+            return engine.call("zemax_design_workflow", {
+                "action": "submit", "project_name": "test_a", "expected_workflow": v["context"],
+                "payload": {"request_id": request_id, "kind": "surface_question", "user_text": "explain",
+                            "target": target, "expected_model": v["model_reference"]},
+            }, expected_context=engine.state.context())
+
+        good = {"kind": "context", "anchors": [
+            {"kind": "surface", "index": 2, "comment": "看这里"},
+            {"kind": "analysis", "tab": "mtf", "result_id": "current", "field": 2},
+            {"kind": "analysis", "tab": "overview", "result_id": "current"},
+            {"kind": "stage", "stage": "stage_1"},
+        ]}
+        v = ask("good", good)
+        self.assertNotEqual(v.get("status"), "error", v)
+        self.assertEqual(v["tasks"][0]["target"], good)
+        self.assertEqual(ask("legacy", {"kind": "surface", "index": 1}).get("status"), "success")
+        for request_id, target, code in [
+            ("missing-surface", {"kind": "context", "anchors": [{"kind": "surface", "index": 9}]}, "WORKFLOW_TARGET_STALE"),
+            ("missing-legacy", {"kind": "surface", "index": 9}, "WORKFLOW_TARGET_STALE"),
+            ("other-revision", {"kind": "context", "anchors": [
+                {"kind": "analysis", "tab": "mtf", "result_id": "older"}]}, "WORKFLOW_TARGET_STALE"),
+            ("evicted", {"kind": "context", "anchors": [
+                {"kind": "analysis", "tab": "mtf", "result_id": "gone"}]}, "WORKFLOW_TARGET_STALE"),
+            ("other-tab", {"kind": "context", "anchors": [
+                {"kind": "analysis", "tab": "wavefront", "result_id": "current"}]}, "WORKFLOW_TARGET_INVALID"),
+            ("other-field", {"kind": "context", "anchors": [
+                {"kind": "analysis", "tab": "spot", "result_id": "current", "field": 3}]}, "WORKFLOW_TARGET_INVALID"),
+            ("not-object", "S1", "WORKFLOW_TARGET_INVALID"),
+        ]:
+            with self.subTest(request_id=request_id):
+                failed = ask(request_id, target)
+                self.assertEqual(failed.get("status"), "error", failed)
+                self.assertEqual(failed.get("code"), code, failed)
+        self.native.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

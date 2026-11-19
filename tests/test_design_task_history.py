@@ -120,6 +120,14 @@ class TaskHistoryTests(unittest.TestCase):
         self.assertFalse(second["has_more"])
         self.assertIsNone(second["next_cursor"])
 
+    def test_context_question_target_reads_back_verbatim(self):
+        target = {"kind": "context", "anchors": [
+            {"kind": "surface", "index": 3, "comment": "边缘光线偏折大"},
+            {"kind": "analysis", "tab": "mtf", "result_id": "r-1", "field": 2},
+            {"kind": "stage", "stage": "stage_2"}]}
+        self.seed(101, extra=lambda index: {"target": target} if index == 1 else {})
+        self.assertEqual([t["target"] for t in self.read()["tasks"]], [target])
+
     def test_fewer_than_101_rows_are_empty_and_count_all_statuses(self):
         self.seed(100)
         self.assertEqual(self.read()["tasks"], [])

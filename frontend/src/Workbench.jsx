@@ -16,13 +16,16 @@ import { useWorkbenchUI } from './use-workbench-ui.js';
 import HistoryWorkspace from './HistoryWorkspace.jsx';
 import { resolveFocus } from './workbench-ui.js';
 import { taskProgressLabel } from './task-progress.js';
+import QuestionContextTray, { AddToQuestion } from './QuestionContextTray.jsx';
+import { useQuestionContext } from './use-question-context.js';
+import { observedReference } from './task-provenance.js';
 
 const format = (value) => value === 'Infinity' ? '∞' : value === '-Infinity' ? '−∞'
   : typeof value === 'number' ? value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 }) : '—';
 const surfaceName = (surface, last) => surface.index === 0 ? '物面' : surface.index === last ? '像面'
   : surface.comment || (surface.is_stop ? '光阑' : '表面');
 
-function NativeInspector({ model, selected, onSelect, onDetails }) {
+function NativeInspector({ model, selected, onSelect, onDetails, questionContext }) {
   const position = model.surfaces.findIndex((surface) => surface.index === selected);
   const surface = model.surfaces[position];
   if (!surface) return null;
@@ -44,7 +47,10 @@ function NativeInspector({ model, selected, onSelect, onDetails }) {
         </AnimatePresence>{unit && <span className="studio-unit">{unit}</span>}</dd>
       </div>)}
     </dl>
-    <Button className="studio-details-button" onClick={onDetails}>更多属性<ArrowRight size={16} /></Button>
+    <div className="studio-inspector-actions">
+      <Button className="studio-details-button" onClick={onDetails}>更多属性<ArrowRight size={16} /></Button>
+      {questionContext && <AddToQuestion context={questionContext} anchor={{ kind: 'surface', index: surface.index }} />}
+    </div>
   </aside>;
 }
 
@@ -90,6 +96,10 @@ export default function Workbench() {
   useEffect(() => { try { localStorage.setItem('optiforge-follow-agent', followAgent ? 'on' : 'off'); } catch { /* Local storage may be disabled. */ } }, [followAgent]);
   const uiLink = useWorkbenchUI(sync.api, sync.engine?.service_instance_id ?? null, page, setPage,
     { canWorkflow: sync.canCollaborate === true, canAnalyze: sync.canAnalyze === true }, setFocusRequest, followAgent);
+  // Marks for one Agent question, collected across pages; bound to the observed model.
+  const questionContext = useQuestionContext(sync.canCollaborate === true ? observedReference(sync) : null);
+  const [questionRequest, setQuestionRequest] = useState(null);
+  const askAgent = () => { setPage('workflow'); setQuestionRequest({ id: crypto.randomUUID() }); };
   const handledFocus = useRef(null);
   const openedInitialPage=useRef(false);
   useEffect(()=>{
@@ -177,8 +187,10 @@ export default function Workbench() {
           <Button className="studio-icon-button" aria-label="外观与动效设置" onClick={() => setModal('appearance')}><SlidersHorizontal size={18} /></Button></div>
       </header>
       {sync.canCollaborate && <WorkflowStrip flow={flow} sync={sync} onOpen={()=>setPage('workflow')}/>}
+      {sync.canCollaborate && <QuestionContextTray context={questionContext} canAsk={questionContext.canAdd} onAsk={askAgent}/>}
       {sync.canCollaborate && <div hidden={page!=='workflow'}><DesignWorkflow flow={flow} sync={sync} selected={selected} onBack={()=>setPage('design')}
-        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus}/></div>}
+        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus} visible={page==='workflow'}
+        questionContext={questionContext} questionRequest={questionRequest}/></div>}
       <input type="file" ref={file} accept=".zmx,.zos" hidden aria-label="选择光学模型文件" onChange={(event) => {
         const chosen = event.target.files[0]; event.target.value = ''; if (chosen) { setPage('design'); sync.importModel(chosen); }
       }} />
@@ -202,13 +214,14 @@ export default function Workbench() {
               <span className="studio-tool-divider" /><Button className="studio-icon-button" aria-label="一键复位" title="一键复位" disabled={!model} onClick={() => setCamera(homeCamera())}><Focus size={17} /></Button>
             </div><Button className="studio-icon-button" aria-label={focus ? '恢复表面属性' : '聚焦光路'} aria-pressed={focus} onClick={() => setFocus(!focus)}><Maximize2 size={16} /></Button></div>
           </div>
-          {!focus && (model ? <NativeInspector model={model} selected={selected} onSelect={setSelected} onDetails={() => setModal('details')} /> : <aside className="studio-inspector" aria-label="表面属性"><div className="studio-section-title">表面属性</div></aside>)}
+          {!focus && (model ? <NativeInspector model={model} selected={selected} onSelect={setSelected} onDetails={() => setModal('details')}
+            questionContext={sync.canCollaborate ? questionContext : null} /> : <aside className="studio-inspector" aria-label="表面属性"><div className="studio-section-title">表面属性</div></aside>)}
           <div className="studio-sync-aura" aria-hidden="true" />
         </div>
         <div className="studio-workspace-footer"><Button className="studio-agent-pill" onClick={sync.refresh} disabled={sync.canRefreshNative===false || busy || sync.phase === 'reconnecting'} aria-label="刷新真实模型" data-sync-state={sync.phase} data-stale={sync.stale}><RefreshCw size={16} className={busy ? 'studio-refresh-active' : ''} /><span role="status" aria-live="polite">{sync.canImportModel ? '工作台模型' : sync.canCollaborate?'协作模式':'只读验收'} · {syncLabel}</span></Button>
           <Button className="studio-icon-button studio-about" aria-label="关于工作台" onClick={() => setModal('about')}><CircleHelp size={17} /></Button></div>
       </motion.main> : <AnalysisWorkspace key="analysis" sync={sync} analysis={analysis} onBack={()=>setPage('design')}
-        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus}/>}</>
+        focusRequest={focusRequest} onFocusReport={uiLink.reportFocus} questionContext={sync.canCollaborate ? questionContext : null}/>}</>
       {modal === 'appearance' && <Modal title="外观与动效" onClose={() => setModal(null)}><div className="studio-modal-label">界面主题</div><div className="studio-theme-options">{[['light', '浅色', Sun], ['dark', '深色', Moon], ['system', '跟随系统', Focus]].map(([value, label, Icon]) => <Button key={value} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={19} /><span>{label}</span>{theme === value && <Check size={14} />}</Button>)}</div><label className="studio-motion-option"><span>减少动态效果</span><input type="checkbox" checked={reduceMotion} onChange={(event) => setReduceMotion(event.target.checked)} /></label></Modal>}
       {modal === 'details' && model?.surfaces.some((surface) => surface.index === selected) && <Modal className="studio-model-dialog" title={`S${selected} · ${surfaceName(model.surfaces.find((surface) => surface.index === selected), last)}`} onClose={() => setModal(null)}><ModelDetails snapshot={snapshot} selected={selected} /></Modal>}
       {modal === 'history' && <Modal className="history-dialog" title="操作历史" onClose={()=>setModal(null)}><HistoryWorkspace sync={sync}/></Modal>}

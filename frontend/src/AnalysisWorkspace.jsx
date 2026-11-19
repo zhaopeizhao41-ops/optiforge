@@ -8,6 +8,8 @@ import './workbench-analysis.css';
 import AnalysisHistory from './AnalysisHistory.jsx';
 import { qualityMetrics } from './stage-quality-artifact.js';
 import { resolveFocus } from './workbench-ui.js';
+import { AddToQuestion } from './QuestionContextTray.jsx';
+import { FIELD_TABS } from './question-context.js';
 
 const colors=['#cc4e4e','#279478','#d1902e','#35949b','#a76841','#b75c70','#7a8e31','#545454'];
 const fmt=v=>v===null || v===undefined?'—':Number(v).toLocaleString(undefined,{maximumSignificantDigits:5});
@@ -142,7 +144,7 @@ function AnalysisSettings({model,settings,onChange,onClose}) {
   </Modal>;
 }
 
-export default function AnalysisWorkspace({sync,analysis,onBack,focusRequest,onFocusReport}) {
+export default function AnalysisWorkspace({sync,analysis,onBack,focusRequest,onFocusReport,questionContext=null}) {
   const model=sync.engine?.snapshot?.model;
   const identity=`${sync.engine?.service_instance_id}:${sync.engine?.model_id}`;
   const [draft,setDraft]=useState(null),[tab,setTab]=useState('overview'),[settingsOpen,setSettingsOpen]=useState(false),[sourceOpen,setSourceOpen]=useState(false),[field,setField]=useState(null);
@@ -167,9 +169,12 @@ export default function AnalysisWorkspace({sync,analysis,onBack,focusRequest,onF
     if(result.actual){setTab(result.actual.tab);if(result.actual.field)setField(result.actual.field);}
     onFocusReport?.(focusRequest.id,result.actual,result.reason);
   },[focusRequest,r]);
+  // Only a current result can be named in a question; a historical one may be from another model.
+  const questionAnchor=r && analysis.current && (tab==='overview' || item?.status==='success')
+    ? {kind:'analysis',tab,result_id:r.result_id,...(FIELD_TABS.includes(tab) && currentField?{field:currentField}:{})} : null;
   return <motion.section className="studio-analysis-page analysis-workspace" initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0}}>
     <div className="studio-analysis-title"><Button className="studio-icon-button studio-back" aria-label="返回光路" onClick={onBack}><ArrowLeft size={19}/></Button><h1>像质分析</h1>
-      <div className="analysis-actions"><Button onClick={()=>setHistoryOpen(true)}>分析历史</Button><Button aria-label="分析设置" className="studio-icon-button" disabled={!model || busy} onClick={()=>setSettingsOpen(true)}><Settings2 size={19}/></Button>
+      <div className="analysis-actions">{questionContext && <AddToQuestion context={questionContext} anchor={questionAnchor}/>}<Button onClick={()=>setHistoryOpen(true)}>分析历史</Button><Button aria-label="分析设置" className="studio-icon-button" disabled={!model || busy} onClick={()=>setSettingsOpen(true)}><Settings2 size={19}/></Button>
         <Button className="analysis-run" disabled={!settings || Boolean(analysis.blocked) || busy} onClick={()=>analysis.run(settings)}>{r?<RefreshCw size={17}/>:<Play size={17}/>}<span>{busy?'计算中':r?'重新分析':'运行分析'}</span></Button></div></div>
     <div className="analysis-summary"><span>{model?.name || '未连接模型'}</span><span>配置 {model?.configuration??'—'}</span>
       <span role="status">{statusText[analysis.status]}{busy && analysis.summary?.current_item && ` · ${analysisNames[analysis.summary.current_item]}${analysis.summary.current_field?` F${analysis.summary.current_field}`:''}`}</span>

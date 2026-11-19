@@ -3,6 +3,7 @@ import { MILESTONE_REASONS, MILESTONE_STATUS, milestonePane, milestoneStatusLabe
 import StageGeometryArtifact from './StageGeometryArtifact.jsx';
 import StageQualityArtifact from './StageQualityArtifact.jsx';
 import StageConvergence from './StageConvergence.jsx';
+import { AddToQuestion } from './QuestionContextTray.jsx';
 import './stage-milestones.css';
 
 const time = value => value ? new Date(value).toLocaleString() : '未报告';
@@ -58,7 +59,7 @@ function MilestoneAttempt({ attempt, sync, scope, historical = false }) {
   </article>;
 }
 
-export default function StageMilestones({ flow, sync, focusStage = null }) {
+export default function StageMilestones({ flow, sync, focusStage = null, questionContext = null }) {
   const pane = milestonePane(flow, sync);
   const scope = { service_instance_id: sync?.engine?.service_instance_id, project_name: sync?.engine?.active_project };
   return <section className="workflow-card stage-milestones" aria-label="四阶段记录">
@@ -79,6 +80,7 @@ export default function StageMilestones({ flow, sync, focusStage = null }) {
             {stage.attempts.slice(1).map(attempt => <MilestoneAttempt key={keyFor(attempt)} attempt={attempt} sync={sync} scope={scope} historical/>)}
           </details>}
         </> : <p className="milestone-empty">尚无显式执行记录</p>}
+        {questionContext && <AddToQuestion context={questionContext} anchor={{ kind: 'stage', stage: stage.id }}/>}
       </article>)}</div>}
     {pane.status === 'ready' && <StageConvergence stages={pane.stages} sync={sync} scope={scope}/>}
   </section>;

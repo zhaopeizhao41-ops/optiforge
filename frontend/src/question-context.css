@@ -1,0 +1,27 @@
+/* Button rules carry .studio-button so they outrank the shared button style in styles.css,
+   which the bundle places after component styles. */
+#optiforge-soft-studio .question-tray { margin: 0 38px 18px; padding: 12px 14px; border: 1px solid var(--st-line); border-radius: 16px; background: var(--st-panel); display: grid; gap: 10px; min-width: 0; }
+#optiforge-soft-studio .question-tray-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+#optiforge-soft-studio .question-tray-title { font-size: 14px; font-weight: 500; white-space: nowrap; }
+#optiforge-soft-studio .question-tray-title > span { color: var(--st-muted); font-weight: 400; margin-left: 4px; }
+#optiforge-soft-studio .question-tray-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 240px; min-width: 0; }
+#optiforge-soft-studio .question-chip { display: inline-flex; align-items: center; border-radius: 12px; background: var(--st-soft); border: 1px solid var(--st-line); }
+#optiforge-soft-studio .studio-button.question-chip-label { min-height: 32px; padding: 5px 4px 5px 12px; gap: 6px; border-radius: 12px 0 0 12px; }
+#optiforge-soft-studio .studio-button.question-chip-label[aria-pressed="true"] { background: var(--st-tint); }
+#optiforge-soft-studio .studio-button.question-chip-remove { min-height: 32px; width: 30px; padding: 0; border-radius: 0 12px 12px 0; color: var(--st-muted); }
+#optiforge-soft-studio .studio-button.question-tray-ask { background: var(--st-nav); color: var(--st-nav-text); border-radius: 20px; padding: 8px 16px; min-height: 36px; }
+#optiforge-soft-studio .studio-button.question-tray-ask:hover { background: var(--st-nav); opacity: .9; }
+#optiforge-soft-studio .question-tray-comment { display: grid; gap: 6px; font-size: 13px; color: var(--st-muted); }
+#optiforge-soft-studio .question-tray-comment textarea { min-height: 72px; resize: vertical; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--st-line); background: var(--st-soft); color: var(--st-text); }
+#optiforge-soft-studio .question-tray-notice { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--st-muted); }
+#optiforge-soft-studio .question-tray-notice .studio-button.question-chip-remove { border-radius: 10px; }
+#optiforge-soft-studio .studio-button.question-add { min-height: 34px; padding: 6px 12px; border-radius: 12px; border: 1px solid var(--st-line); font-size: 13px; gap: 6px; }
+#optiforge-soft-studio .question-dialog-anchors { margin: 4px 0 12px; padding-left: 22px; display: grid; gap: 8px; font-size: 14px; }
+#optiforge-soft-studio .question-dialog-anchors p { margin: 2px 0 0; color: var(--st-muted); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#optiforge-soft-studio .studio-inspector-actions { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+#optiforge-soft-studio .studio-inspector-actions .studio-details-button { margin-top: 0; }
+#optiforge-soft-studio .milestone-card .studio-button.question-add { margin-top: 12px; }
+@media (max-width: 640px) {
+  #optiforge-soft-studio .question-tray { margin: 0 16px 14px; }
+  #optiforge-soft-studio .studio-inspector-actions { margin-top: 20px; }
+}

@@ -6,7 +6,7 @@ import { createDesignTaskHistoryController } from './design-task-history.js';
 
 const statusNames = { completed: '已完成', failed: '失败', superseded: '已归档 · 引用过期' };
 const intentNames = { initial_proposal: '请求初始方案', proposal_revision: '请求修改方案',
-  surface_question: '表面问题', model_handoff: '建模 / 仿真交接' };
+  surface_question: 'Agent 提问', model_handoff: '建模 / 仿真交接' };
 
 function HistoryPages({ scope, api, sync }) {
   const controller = useRef(null);

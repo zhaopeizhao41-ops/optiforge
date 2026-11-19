@@ -28,6 +28,7 @@ import TaskProvenance from "./TaskProvenance.jsx";
 import { taskPane } from "./task-provenance.js";
 import { TASK_FILTERS, taskFilterView } from "./task-filters.js";
 import TerminalTaskHistory from "./TerminalTaskHistory.jsx";
+import { anchorLabel, anchorsLabel, buildTarget, draftsFor } from "./question-context.js";
 
 export const stageNames = {
   draft: "需求草稿",
@@ -51,7 +52,7 @@ const taskNames = {
 const intentNames = {
   initial_proposal: "请求初始方案",
   proposal_revision: "请求修改方案",
-  surface_question: "表面问题",
+  surface_question: "Agent 提问",
   model_handoff: "建模 / 仿真交接",
 };
 const newId = () => crypto.randomUUID();
@@ -129,7 +130,8 @@ export function WorkflowStrip({ flow, sync, onOpen }) {
   );
 }
 
-export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequest, onFocusReport }) {
+export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequest, onFocusReport,
+  visible = true, questionContext = null, questionRequest = null }) {
   const { view: v, busy, error } = flow;
   const unsavedGuard = useRef(null);
   const observedProject = useRef(null);
@@ -215,6 +217,45 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
       return null;
     }
   };
+  // The question dialog freezes the current context drafts; they are sent with the
+  // question and removed only once the task exists.
+  const handledQuestion = useRef(null);
+  const submittedQuestion = useRef(null);
+  const openQuestion = () => {
+    setMessage("");
+    setLocalError("");
+    setReview({ ...v, selected, anchors: questionContext?.drafts ?? [] });
+    setModal("question");
+  };
+  const questionDone = (ids) => {
+    submittedQuestion.current = null;
+    questionContext?.consume(ids);
+    setRequestId(newId());
+    setModal(null);
+    setTab("tasks");
+  };
+  // "Ask" from the tray switches here first: a dialog cannot open inside a hidden page.
+  useEffect(() => {
+    if (!questionRequest || !visible || !v || handledQuestion.current === questionRequest.id) return;
+    handledQuestion.current = questionRequest.id;
+    if (v.model_reference?.model_project !== v.project_name) {
+      setLocalError("当前模型不属于活动工程，暂不能提问");
+      return;
+    }
+    if (dirty) {
+      setLocalError("请先保存需求编辑，再向 Agent 提问");
+      return;
+    }
+    openQuestion();
+  }, [questionRequest, visible, v]);
+  // A lost response still created the task: once it is listed, treat the question as sent.
+  useEffect(() => {
+    const sent = submittedQuestion.current;
+    if (sent && modal === "question" && v?.tasks?.some((task) => task.request_id === sent.requestId)) {
+      setLocalError("");
+      questionDone(sent.ids);
+    }
+  }, [v, modal]);
   if (!v || !draft || (projectChanged && !dirty))
     return (
       <section className="design-workflow">
@@ -322,8 +363,23 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
     }
   };
   const submit = async (kind) => {
+    let target = null;
+    if (kind === "surface_question") {
+      const anchors = review.anchors ?? [];
+      if (draftsFor({ drafts: anchors }, review.model_reference).length !== anchors.length) {
+        setLocalError("提问上下文所属的模型已变化，请移除后重新加入");
+        return;
+      }
+      target = buildTarget(anchors, review.selected);
+      if (!target) {
+        setLocalError("请先选中表面或加入提问上下文");
+        return;
+      }
+    }
     const current = await save();
     if (!current) return;
+    if (kind === "surface_question")
+      submittedQuestion.current = { requestId, ids: (review.anchors ?? []).map((draft) => draft.id) };
     const next = await perform(
       "submit",
       {
@@ -336,7 +392,7 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
         request_id: requestId,
         ...(kind === "surface_question"
           ? {
-              target: { kind: "surface", index: review.selected },
+              target,
               expected_model: review.model_reference,
             }
           : {}),
@@ -344,6 +400,10 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
       kind === "initial_proposal" ? undefined : review.project_name,
       kind === "initial_proposal" ? null : review,
     );
+    if (next && kind === "surface_question") {
+      questionDone(submittedQuestion.current?.ids ?? []);
+      return;
+    }
     if (next) {
       setRequestId(newId());
       if (kind !== "initial_proposal" || next.draft.audit?.result.is_complete) {
@@ -405,7 +465,7 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
           </Button>
         ))}
       </nav>
-      {tab === "milestones" && <StageMilestones flow={flow} sync={sync} focusStage={stageFocus} />}
+      {tab === "milestones" && <StageMilestones flow={flow} sync={sync} focusStage={stageFocus} questionContext={questionContext} />}
       {tab === "requirements" && (
         <section className="workflow-card">
           <div className="workflow-card-title">
@@ -751,13 +811,10 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
         <Button
           className="workflow-question"
           disabled={dirty}
-          onClick={() => {
-            setMessage("");
-            setReview({ ...v, selected });
-            setModal("question");
-          }}
+          onClick={openQuestion}
         >
-          <MessageSquare size={16} />向 Agent 提问 · S{selected}
+          <MessageSquare size={16} />向 Agent 提问 ·{" "}
+          {questionContext?.drafts.length ? `${questionContext.drafts.length} 处上下文` : `S${selected}`}
         </Button>
       )}
       {modal === "project" && (
@@ -811,16 +868,28 @@ export default function DesignWorkflow({ flow, sync, selected, onBack, focusRequ
           className="workflow-dialog"
           title={
             modal === "question"
-              ? `向 Agent 提问 · S${review.selected}`
+              ? `向 Agent 提问 · ${review.anchors?.length ? anchorsLabel(review.anchors.map((d) => d.anchor)) : `S${review.selected}`}`
               : "请求修改方案"
           }
           onClose={() => setModal(null)}
         >
           <p>
             {modal === "question"
-              ? "任务绑定当前模型及修订，仅分析解释或建议，不自动修改参数。"
+              ? review.anchors?.length
+                ? `任务绑定当前模型及修订，以下 ${review.anchors.length} 处上下文随问题一起发送；Agent 仅分析解释或建议，不自动修改参数。`
+                : "任务绑定当前模型及修订，仅分析解释或建议，不自动修改参数。"
               : "提交后撤销本版审批，等待 Agent 返回新提案。"}
           </p>
+          {modal === "question" && review.anchors?.length > 0 && (
+            <ol className="question-dialog-anchors" aria-label="随问题发送的上下文">
+              {review.anchors.map((d) => (
+                <li key={d.id}>
+                  {anchorLabel(d.anchor)}
+                  {d.comment.trim() && <p>{d.comment.trim()}</p>}
+                </li>
+              ))}
+            </ol>
+          )}
           {issue && <p role="alert">{issue}</p>}
           <textarea
             aria-label="任务内容"

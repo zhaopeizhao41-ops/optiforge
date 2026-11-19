@@ -118,6 +118,22 @@ test('source projection retains recorded S0 revision configuration and only five
   }
 });
 
+test('context targets show every anchor label and comment while malformed context stays unknown', () => {
+  const target = { kind: 'context', anchors: [{ kind: 'surface', index: 3, comment: '入射角最大' },
+    { kind: 'analysis', tab: 'mtf', result_id: 'r-1', field: 2 }, { kind: 'stage', stage: 'stage_2' }, { kind: 'surface', index: 5 }] };
+  const result = provenance(task({ target }));
+  assert.equal(result.target, 'S3 · MTF · F2 · 阶段 2 等 4 处');
+  assert.equal(result.relation.status, 'matching');
+  assert.deepEqual(result.anchors, [{ label: 'S3', comment: '入射角最大', result_id: null },
+    { label: 'MTF · F2', comment: null, result_id: 'r-1' }, { label: '阶段 2', comment: null, result_id: null },
+    { label: 'S5', comment: null, result_id: null }]);
+  assert.deepEqual(provenance(task()).anchors, []);
+  for (const bad of [{ kind: 'context', anchors: [] }, { kind: 'context', anchors: [{ kind: 'stage', stage: 'stage_9' }] }]) {
+    assert.equal(provenance(task({ target: bad })).target, '目标表面未记录或无效');
+    assert.equal(provenance(task({ target: bad })).relation.status, 'unknown');
+  }
+});
+
 test('research and pre-model handoff intentionally unbound references are valid while surface gaps remain unknown', () => {
   for (const kind of ['initial_proposal', 'proposal_revision', 'model_handoff']) {
     const t = task({ kind, model_reference: null, target: null }); const result = provenance(t);

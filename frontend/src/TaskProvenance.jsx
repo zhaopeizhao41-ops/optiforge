@@ -19,6 +19,14 @@ export default function TaskProvenance({ task, sync, project }) {
       {relation.status === 'unbound' && <p className="task-provenance-note">此任务未绑定具体模型，按任务内容交接。</p>}
       {relation.status === 'unknown' && <p className="task-provenance-note">来源未完整记录或当前模型观察不可用。</p>}
       {provenance.validity && <p className="task-provenance-note">{provenance.validity} · 任务有效性与模型引用关系分别记录。</p>}
+      {provenance.anchors.length > 0 && <details className="task-provenance-details task-anchors">
+        <summary>提问上下文（{provenance.anchors.length} 处）</summary>
+        <ol aria-label="已记录提问上下文">{provenance.anchors.map((anchor, index) => <li key={index}>
+          <span className="task-anchor-label">{anchor.label}</span>
+          {anchor.result_id && <span className="task-anchor-source">分析结果 {anchor.result_id}</span>}
+          {anchor.comment && <p className="task-anchor-comment">{anchor.comment}</p>}
+        </li>)}</ol>
+      </details>}
       <details className="task-provenance-details"><summary>完整模型引用</summary>
         <dl aria-label="已记录模型引用">{[['服务实例', provenance.source.service_instance_id], ['模型身份', provenance.source.model_id],
           ['模型工程', provenance.source.model_project], ['模型修订', provenance.revision], ['配置', provenance.configuration]].map(([key, value]) =>

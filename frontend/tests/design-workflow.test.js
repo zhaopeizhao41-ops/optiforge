@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DesignWorkflowClient,
+  taskInstruction,
   reconcileDraft,
   fieldsFor,
   isDraftDirty,
@@ -30,6 +31,14 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
+
+test("question instructions ask the Agent to check every context anchor without changing parameters", () => {
+  const text = taskInstruction({ request_id: "q-1", version: 1, kind: "surface_question" }, "project-a");
+  assert.match(text, /逐项核对 target/);
+  assert.match(text, /上下文锚点/);
+  assert.match(text, /不修改光学参数/);
+  assert.match(text, /缓存淘汰/);
+});
 
 test("late polling cannot replace an explicit saved draft", async () => {
   const old = deferred();

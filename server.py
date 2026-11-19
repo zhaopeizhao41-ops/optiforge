@@ -503,8 +503,12 @@ def zemax_design_workflow(action: str = 'view', project_name: Optional[str] = No
 
     View first; use returned context as expected_workflow on writes.
     Actions: view, select ({create}), save ({system_type,specs,sources,user_prompt,constraints}),
-    audit, submit ({request_id,kind,user_text,target?}), confirm ({request_id}), retry ({request_id,version}).
+    audit, submit ({request_id,kind,user_text,target?,expected_model?}), confirm ({request_id}), retry ({request_id,version}).
     Sources are user/recommended. Submit kinds: initial_proposal, proposal_revision, surface_question.
+    surface_question needs expected_model (view's model_reference) and target: {kind:"surface",index}
+    or {kind:"context",anchors:[1..12]}; anchor = {kind:"surface",index} | {kind:"analysis",tab,
+    result_id,field?} (field only for mtf/wavefront/spot/ray_fan) | {kind:"stage",stage}, each with an
+    optional comment (<=2000 chars, the user's own words). Each anchor must exist in the shown model.
     confirm explicitly authorizes this exact proposal and queues a model handoff;
     invoke ONLY after explicit human approval. Pending != delivered to any host.
     milestone_start: {request_id,version,lease_token,stage_id,attempt_id,note};

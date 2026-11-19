@@ -393,6 +393,35 @@ class EngineWorker:
         if self.trace_blocked:
             raise NativeOwnershipError(self.trace_blocked)
 
+    def _check_question_anchors(self, target, cached, model_ref):
+        """Check every anchor of an Agent question against the model the workbench shows.
+
+        The shape check is the workflow's own; this adds what only the service knows:
+        the surface exists, and an analysis anchor names a cached result of this very
+        model (identity, revision and configuration) that contains the tab and field.
+        """
+        from core.design_workflow import FIELD_TABS, require, validate_question_target
+        from core.workbench_analysis_history import summary
+        anchors = validate_question_target(target)
+        snapshot = cached.get("snapshot")
+        require(bool(model_ref) and isinstance(snapshot, dict), "WORKFLOW_TARGET_STALE", "当前没有可提问的模型，请先载入或刷新模型")
+        surfaces = {surface["index"] for surface in snapshot["model"]["surfaces"]}
+        identity = ("service_instance_id", "model_id", "model_revision", "model_project", "configuration")
+        for position, anchor in enumerate(anchors, start=1):
+            if anchor["kind"] == "surface":
+                require(anchor["index"] in surfaces, "WORKFLOW_TARGET_STALE", f"锚点 {position}：S{anchor['index']} 不属于当前模型")
+            elif anchor["kind"] == "analysis":
+                result = self.state.get_analysis(anchor["result_id"])
+                entry = summary(result, model_ref["service_instance_id"], model_ref["model_project"], anchor["result_id"]) if result else None
+                require(entry is not None, "WORKFLOW_TARGET_STALE", f"锚点 {position}：分析结果已淘汰或不属于当前工程，请重新分析后再加入")
+                require(all(entry["source"].get(key) == model_ref[key] for key in identity),
+                        "WORKFLOW_TARGET_STALE", f"锚点 {position}：分析结果来自另一模型修订或配置，请重新分析后再加入")
+                settings = entry["settings"]
+                require(anchor["tab"] == "overview" or anchor["tab"] in settings["analyses"],
+                        "WORKFLOW_TARGET_INVALID", f"锚点 {position}：该分析结果不含 {anchor['tab']}")
+                require("field" not in anchor or anchor["tab"] in FIELD_TABS and anchor["field"] in settings["fields"],
+                        "WORKFLOW_TARGET_INVALID", f"锚点 {position}：该分析结果不含视场 F{anchor.get('field')}")
+
     def _capture(self):
         self._require_native_ownership()
         if self.capture:
@@ -535,9 +564,7 @@ class EngineWorker:
                             model_ref=({k:cached[k] for k in ("service_instance_id","model_id","model_revision","model_project")}
                                        | {"configuration":cached["snapshot"]["model"].get("configuration")}) if cached.get("snapshot") and cached.get("context_valid") else None
                             if name=="zemax_design_workflow" and arguments.get("action")=="submit" and arguments.get("payload",{}).get("kind")=="surface_question":
-                                index=arguments["payload"].get("target",{}).get("index")
-                                if not model_ref or not any(s["index"]==index for s in cached["snapshot"]["model"]["surfaces"]):
-                                    raise ValueError("目标表面不属于当前可用模型")
+                                self._check_question_anchors(arguments["payload"].get("target"), cached, model_ref)
                             token=MODEL_REFERENCE.set(model_ref)
                             from core.design_milestones import OBSERVATION
                             observation_token = OBSERVATION.set(self.state.workflow_observation())

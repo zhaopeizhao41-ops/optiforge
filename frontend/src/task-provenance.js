@@ -1,3 +1,5 @@
+import { anchorLabel, anchorsLabel, parseTarget } from './question-context.js';
+
 const object = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const count = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
@@ -38,7 +40,7 @@ function recordedReference(value) {
   return Object.fromEntries(referenceKeys.map(key => [key, stringKeys.includes(key)
     ? text(value?.[key]) ? value[key] : null : count(value?.[key], 1) ? value[key] : null]));
 }
-function observedReference(sync) {
+export function observedReference(sync) {
   const engine = sync?.engine, snapshot = engine?.snapshot, model = snapshot?.model;
   if (!scopeConnected(sync) || engine.validity !== 'valid' || engine.context_valid !== true
       || snapshot?.status !== 'success' || snapshot.schema_version !== 1 || !object(model)
@@ -52,8 +54,8 @@ function observedReference(sync) {
 }
 
 export function taskProvenance(task, sync, project) {
-  const source = recordedReference(task?.model_reference), target = task?.target;
-  const recordedTarget = object(target) && target.kind === 'surface' && count(target.index);
+  const source = recordedReference(task?.model_reference), parsed = parseTarget(task?.target);
+  const recordedTarget = parsed !== null;
   const noReference = task?.model_reference == null && ['initial_proposal', 'proposal_revision', 'model_handoff'].includes(task?.kind);
   const reasons = [], original = task?.model_reference;
   let status = 'unknown', label = '当前无法核对模型引用';
@@ -78,7 +80,10 @@ export function taskProvenance(task, sync, project) {
   }
   const validity = task?.status === 'superseded' ? '任务已归档' : task?.stale === true ? '任务引用已过期' : null;
   return {
-    target: recordedTarget ? `S${target.index}` : task?.kind === 'surface_question' ? '目标表面未记录或无效' : '未绑定具体表面',
+    target: recordedTarget ? anchorsLabel(parsed.anchors) : task?.kind === 'surface_question' ? '目标表面未记录或无效' : '未绑定具体表面',
+    anchors: recordedTarget && parsed.kind === 'context'
+      ? parsed.anchors.map(anchor => ({ label: anchorLabel(anchor), comment: anchor.comment ?? null,
+        result_id: anchor.kind === 'analysis' ? anchor.result_id : null })) : [],
     project: text(task?.project_name) ? task.project_name : '工程未记录',
     revision: source.model_revision, configuration: source.configuration, source,
     relation: { status, label, reasons }, validity,

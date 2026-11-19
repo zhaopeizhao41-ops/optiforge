@@ -10,6 +10,11 @@
 #optiforge-soft-studio .task-provenance-details summary:focus-visible { outline:none; border-radius:6px; box-shadow:0 0 0 3px var(--st-accent-soft); }
 #optiforge-soft-studio .task-provenance-details dl { display:grid; gap:10px; margin:12px 0; }
 #optiforge-soft-studio .task-provenance-details dl>div { display:grid; grid-template-columns:80px minmax(0,1fr); gap:14px; }
+#optiforge-soft-studio .task-anchors ol { margin:10px 0; padding-left:22px; display:grid; gap:10px; }
+#optiforge-soft-studio .task-anchors li { min-width:0; }
+#optiforge-soft-studio .task-anchor-label { font-weight:500; }
+#optiforge-soft-studio .task-anchor-source { margin-left:10px; color:var(--st-muted); overflow-wrap:anywhere; }
+#optiforge-soft-studio .task-anchor-comment { margin:4px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
 #optiforge-soft-studio .task-message { border-top:1px solid var(--st-line); padding-top:16px; margin-top:16px; min-width:0; }
 #optiforge-soft-studio .task-message h4 { font-size:14px; font-weight:500; line-height:1.7; margin:0 0 8px; }
 #optiforge-soft-studio .task-message>p { font-size:14px; line-height:1.7; margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; }

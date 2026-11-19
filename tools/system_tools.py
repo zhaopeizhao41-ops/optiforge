@@ -85,6 +85,7 @@ def zemax_system_info() -> Dict[str, Any]:
             "value": aperture_val,
         },
         "fields_count": num_fields,
+        "configurations": int(sys.MCE.NumberOfConfigurations),
         "field_type": field_type,
         "wavelengths_count": num_waves,
         "first_order_properties": {
